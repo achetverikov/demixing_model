@@ -1,0 +1,812 @@
+"""Shared utility helpers for checkpoints, surfaces, and data handling."""
+
+import json
+import random
+import re
+from datetime import datetime
+from pathlib import Path
+from typing import Dict
+import itertools
+from flax.training import train_state
+import inspect, pickle
+from shared.surface_folder_parsing import load_surface
+from shared.config import config
+from shared.plotting import plot_surface_comparison
+from jax.scipy.special import logsumexp
+
+from shared.surface_functions import compute_expectation
+import jax.numpy as jnp
+import jax
+
+
+def resolve_results_path(path: str, results_dir: str = "results") -> Path:
+    """Place relative outputs under results_dir while preserving folder name."""
+    candidate = Path(path)
+    if candidate.is_absolute() or not results_dir:
+        return candidate
+    if candidate.parts and candidate.parts[0] == results_dir:
+        return candidate
+    return Path(results_dir) / candidate
+
+
+def resolve_input_path(path: str, results_dir: str = "results") -> Path:
+    """Resolve inputs, checking results_dir fallback for relative paths."""
+    candidate = Path(path)
+    if candidate.is_absolute() or candidate.exists():
+        return candidate
+    resolved = resolve_results_path(path, results_dir)
+    return resolved if resolved.exists() else candidate
+
+
+def save_checkpoint(state, epoch, loss, save_dir="checkpoints", prefix="model"):
+    """
+    Save model checkpoint.
+
+    Parameters:
+    -----------
+    state : TrainState
+        The training state to save
+    epoch : int
+        Current epoch number
+    loss : float
+        Current loss value
+    save_dir : str
+        Directory to save checkpoints
+    prefix : str
+        Prefix for checkpoint filenames
+    """
+    # Create save directory if it doesn't exist
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+
+    # Create checkpoint filename
+    checkpoint_path = Path(save_dir) / f"{prefix}_epoch_{epoch:04d}.pkl"
+
+    # Prepare checkpoint data
+    checkpoint_data = {
+        'params': state.params,
+        'opt_state': state.opt_state,
+        'step': state.step,
+        'epoch': epoch,
+        'loss': loss,
+        'timestamp': datetime.now().isoformat(),
+        'apply_fn': state.apply_fn,  # Keep reference to model
+    }
+
+    # Save checkpoint
+    with open(checkpoint_path, 'wb') as f:
+        pickle.dump(checkpoint_data, f)
+
+    print(f"Checkpoint saved: {checkpoint_path}")
+    return checkpoint_path
+
+
+def load_checkpoint(checkpoint_path):
+    """
+    Load model checkpoint.
+
+    Parameters:
+    -----------
+    checkpoint_path : str
+        Path to checkpoint file
+    create_state_fn : callable, optional
+        Function to create initial state if needed
+
+    Returns:
+    --------
+    state : TrainState
+        Loaded training state
+    checkpoint_info : dict
+        Additional checkpoint information
+    """
+    with open(checkpoint_path, 'rb') as f:
+        checkpoint_data = pickle.load(f)
+
+    # Reconstruct training state
+    state = train_state.TrainState(
+        step=checkpoint_data['step'],
+        apply_fn=checkpoint_data['apply_fn'],
+        params=checkpoint_data['params'],
+        tx=None,  # Will need to be set separately
+        opt_state=checkpoint_data['opt_state']
+    )
+
+    checkpoint_info = {
+        'epoch': checkpoint_data['epoch'],
+        'loss': checkpoint_data['loss'],
+        'timestamp': checkpoint_data['timestamp']
+    }
+
+    print(f"Checkpoint loaded from epoch {checkpoint_data['epoch']}, loss: {checkpoint_data['loss']:.4f}")
+    return state, checkpoint_info
+
+
+def cleanup_old_checkpoints(save_dir="checkpoints", keep_last_n=5, prefix="model"):
+    """
+    Remove old checkpoints, keeping only the last N.
+
+    Parameters:
+    -----------
+    save_dir : str
+        Directory containing checkpoints
+    keep_last_n : int
+        Number of recent checkpoints to keep
+    prefix : str
+        Prefix of checkpoint filenames to consider
+    """
+    checkpoint_dir = Path(save_dir)
+    if not checkpoint_dir.exists():
+        return
+
+    # Find all checkpoint files
+    pattern = f"{prefix}_epoch_*.pkl"
+    checkpoints = list(checkpoint_dir.glob(pattern))
+
+    if len(checkpoints) <= keep_last_n:
+        return
+
+    # Sort by epoch number (extracted from filename)
+    def extract_epoch(path):
+        """Extract the epoch number from a checkpoint filename."""
+        stem = path.stem
+        epoch_part = stem.split('_epoch_')[1]
+        return int(epoch_part)
+
+    checkpoints.sort(key=extract_epoch)
+
+    # Remove old checkpoints
+    to_remove = checkpoints[:-keep_last_n]
+    for checkpoint in to_remove:
+        checkpoint.unlink()
+        print(f"Removed old checkpoint: {checkpoint}")
+
+
+def save_training_log_smart(save_dir="checkpoints", **kwargs):
+    """
+    Smart training log that automatically categorizes and saves all provided metrics.
+
+    Automatically determines what goes in training_history vs hyperparameters based on:
+    - Training history: epoch, any *_loss fields, learning_rate, accuracy, etc.
+    - Hyperparameters: static config like batch_size, model_type, optimizer settings
+
+    Parameters:
+    -----------
+    save_dir : str
+        Directory to save log
+    **kwargs : dict
+        Any training information - will be automatically categorized
+    """
+    log_path = Path(save_dir) / "training_log.json"
+
+    # Load existing log or create new
+    if log_path.exists():
+        with open(log_path, 'r') as f:
+            log_data = json.load(f)
+    else:
+        log_data = {
+            'training_history': [],
+            'hyperparameters': {},
+            'start_time': datetime.now().isoformat()
+        }
+
+    # Smart categorization logic
+    training_fields = set()  # Fields that go in training history
+    hyperparam_fields = set()  # Fields that go in hyperparameters
+
+    # Define patterns for training metrics (things that change each epoch)
+    training_patterns = [
+        'epoch', 'loss', 'accuracy', 'error', 'rate', 'score', 'metric',
+        'correlation', 'divergence', 'mse', 'mae', 'rmse', 'r2'
+    ]
+
+    # Define patterns for hyperparameters (static config)
+    hyperparam_patterns = [
+        'batch_size', 'learning_rate', 'weight_decay', 'n_epochs', 'total_steps',
+        'warmup_steps', 'model_type', 'optimizer', 'architecture', 'config',
+        'data_range', 'smoothing', 'use_', 'n_samples', 'seed', 'dropout'
+    ]
+
+    for key, value in kwargs.items():
+        key_lower = key.lower()
+
+        # Check if it's clearly a training metric
+        is_training_metric = (
+                key == 'epoch' or  # Always training metric
+                any(pattern in key_lower for pattern in training_patterns) or
+                key_lower.endswith('_loss') or
+                key_lower.endswith('_score') or
+                key_lower.endswith('_metric') or
+                key_lower.endswith('_accuracy') or
+                key_lower.startswith('current_') or
+                key_lower.startswith('val_') or
+                key_lower.startswith('test_') or
+                key_lower.startswith('train_')
+        )
+
+        # Check if it's clearly a hyperparameter
+        is_hyperparameter = (
+                any(pattern in key_lower for pattern in hyperparam_patterns) or
+                key_lower.startswith('use_') or
+                key_lower.startswith('enable_') or
+                key_lower.startswith('n_') or
+                key_lower.endswith('_dir') or
+                key_lower.endswith('_path') or
+                key_lower.endswith('_type') or
+                key_lower.endswith('_method') or
+                key_lower.startswith('final_')  # Final evaluation metrics
+        )
+
+        if is_training_metric and not is_hyperparameter:
+            training_fields.add(key)
+        elif is_hyperparameter:
+            hyperparam_fields.add(key)
+        else:
+            # Default: if we have an epoch, assume it's training data
+            if 'epoch' in kwargs:
+                training_fields.add(key)
+            else:
+                hyperparam_fields.add(key)
+
+    # Update training history if we have epoch data
+    if 'epoch' in kwargs:
+        entry = {'timestamp': datetime.now().isoformat()}
+
+        # Add all training fields to this entry
+        for field in training_fields:
+            if field in kwargs:
+                entry[field] = kwargs[field]
+
+        log_data['training_history'].append(entry)
+
+    # Update hyperparameters
+    for field in hyperparam_fields:
+        if field in kwargs:
+            log_data['hyperparameters'][field] = kwargs[field]
+
+    # Save log
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+    with open(log_path, 'w') as f:
+        json.dump(log_data, f, indent=2)
+
+
+def load_surface_by_params(params: Dict, surfaces_folder: str = config.surfaces_folder, smooth: bool = False) -> Dict:
+    """Load a surface matching the given parameter set.
+
+    Args:
+        params: Parameter dict with `sd_feat1`, `sd_feat2`, and `sd_spat`.
+        surfaces_folder: Folder containing surface pickle files.
+        smooth: Whether to apply entropy-based smoothing.
+
+    Returns:
+        Loaded surface data dict.
+
+    Raises:
+        FileNotFoundError: If no matching surface is found or multiple matches exist.
+    """
+    regex = rf"surface_sf1_{params['sd_feat1']:.1f}_sf2_{params['sd_feat2']:.1f}_sp_{params['sd_spat']:.1f}_\w+\.pkl"
+    pattern = re.compile(regex)
+    # print(f'Using regex {regex}')
+    matching_files = [f for f in Path(surfaces_folder).glob("surface_*.pkl") if pattern.match(f.name)]
+    if len(matching_files) == 1:
+        return load_surface(matching_files[0], smooth = smooth)
+    elif len(matching_files) == 0:
+        raise FileNotFoundError(f"Surface not found, no files matching regex '{regex}' in this folder: '{surfaces_folder}'")
+    else:
+        raise FileNotFoundError(
+            f"Surface not found, too many files matching the pattern '{regex}' in this folder: '{surfaces_folder}")
+
+
+
+def plot_model_preds(checkpoint_file: str = None, params=None, n_points: int = 10):
+    """Plot model predictions against original surfaces for sampled parameters.
+
+    Args:
+        checkpoint_file: Optional checkpoint path; uses latest if None.
+        params: Optional parameter tuple to plot; if None, samples random points.
+        n_points: Number of random points to evaluate when params is None.
+    """
+    if checkpoint_file is None:
+        all_checkpoints = [f for f in Path('checkpoints').glob("model_epoch_*.pkl")]
+        checkpoint_file = max(all_checkpoints, key=lambda p: int(re.search(r'epoch_(\d+)', p.name).group(1)))
+    model,_ = load_checkpoint(checkpoint_file)
+
+    param_range = np.arange(config.param_range_low, config.param_range_high, config.param_step)
+    all_points = list(itertools.product(param_range, repeat=3))
+    if n_points:
+        all_points = random.sample(all_points, n_points)
+    correlations = []
+    for point in all_points:
+        orig_surface = load_surface_by_params({'sd_feat1':point[0], 'sd_feat2':point[1], 'sd_spat':point[2]}, smooth=True)
+        test_param = jnp.array(point)
+
+        pred_log_likelihood = model.apply_fn(model.params, test_param)[0]
+        pred_likelihood = jnp.exp(pred_log_likelihood -
+                                  logsumexp(pred_log_likelihood, axis=0, keepdims=True))
+        pred_surface = orig_surface.copy()
+        pred_surface['surface_data'] = (pred_surface['surface_data'][0], pred_surface['surface_data'][1],
+                                        pred_log_likelihood, pred_likelihood)
+        #
+        # # Show plots
+        plot_surface_comparison(pred_surface['surface_data'], orig_surface['surface_data'],
+                                ('Predicted', 'Original'), same_color_axis=False)
+
+        plot_surface_comparison(pred_surface['surface_data'], orig_surface['surface_data'],
+                                ('Predicted', 'Original'), do_exp=False)
+
+        # Compute correlation
+        _, mu1_pred = compute_expectation(pred_surface['surface_data'])
+        _, mu1_orig = compute_expectation(orig_surface['surface_data'])
+        corr = np.corrcoef(mu1_pred, mu1_orig)[0, 1]
+        correlations.append(corr)
+        print(f"Correlation at {orig_surface['parameters']['param_name']}: {corr:.3f}")
+    print(f'Average correlation: {np.mean(np.array(correlations))}')
+def save_variables(filename, *variables):
+    """
+    Save variables as a pickle file containing a dictionary.
+    Automatically extracts variable names from the calling scope.
+
+    Usage: save_variables(temp_file, sim_surf_true, sim_surf_alt, sim_data)
+    """
+    frame = inspect.currentframe().f_back
+    all_vars = {**frame.f_locals, **frame.f_globals}
+
+    var_dict = {}
+    for var in variables:
+        for name, value in all_vars.items():
+            if value is var:
+                var_dict[name] = var
+                break
+
+    with open(filename, 'wb') as f:
+        pickle.dump(var_dict, f)
+
+
+def load_variables(filename):
+    """
+    Load variables from a pickle file directly into the calling scope.
+
+    Usage: load_variables(temp_file)
+           # Now sim_surf_true, sim_surf_alt, sim_data are available
+    """
+    frame = inspect.currentframe().f_back
+
+    with open(filename, 'rb') as f:
+        var_dict = pickle.load(f)
+
+    frame.f_globals.update(var_dict)
+
+
+import jax.numpy as jnp
+import numpy as np
+from typing import Tuple, List, Dict
+from dataclasses import dataclass
+
+
+@dataclass
+class Surface:
+    """
+    Surface class for storing multi-component bias likelihood surfaces.
+
+    Parameters:
+    -----------
+    feat_diff_grid : jnp.ndarray - 1D array of feature difference values
+    mu1_bias_grid : jnp.ndarray - 1D array of mu1 bias values
+    mu2_bias_grid : jnp.ndarray - 1D array of mu2 bias values
+    mu1_comp1_surface : jnp.ndarray - Log-likelihood surface for mu1 bias, component 1
+    mu1_comp2_surface : jnp.ndarray - Log-likelihood surface for mu1 bias, component 2
+    mu2_comp1_surface : jnp.ndarray - Log-likelihood surface for mu2 bias, component 1
+    mu2_comp2_surface : jnp.ndarray - Log-likelihood surface for mu2 bias, component 2
+    """
+
+    feat_diff_grid: jnp.ndarray
+    mu1_bias_grid: jnp.ndarray
+    mu2_bias_grid: jnp.ndarray
+    mu1_comp1_surface: jnp.ndarray
+    mu1_comp2_surface: jnp.ndarray
+    mu2_comp1_surface: jnp.ndarray
+    mu2_comp2_surface: jnp.ndarray
+
+    def __post_init__(self):
+        """Validate surface dimensions after initialization."""
+        expected_mu1 = (len(self.mu1_bias_grid), len(self.feat_diff_grid))
+        expected_mu2 = (len(self.mu2_bias_grid), len(self.feat_diff_grid))
+
+        if self.mu1_comp1_surface.shape != expected_mu1:
+            raise ValueError(f"mu1_comp1_surface shape {self.mu1_comp1_surface.shape} != {expected_mu1}")
+        if self.mu1_comp2_surface.shape != expected_mu1:
+            raise ValueError(f"mu1_comp2_surface shape {self.mu1_comp2_surface.shape} != {expected_mu1}")
+        if self.mu2_comp1_surface.shape != expected_mu2:
+            raise ValueError(f"mu2_comp1_surface shape {self.mu2_comp1_surface.shape} != {expected_mu2}")
+        if self.mu2_comp2_surface.shape != expected_mu2:
+            raise ValueError(f"mu2_comp2_surface shape {self.mu2_comp2_surface.shape} != {expected_mu2}")
+
+    def get_surf(self, dimension: int, component: int, log: bool = True) -> jnp.ndarray:
+        """
+        Get likelihood surface for specified dimension and component.
+
+        Parameters:
+        -----------
+        dimension : int - 1 (mu1) or 2 (mu2)
+        component : int - 1 or 2
+        log : bool - True for log-likelihood, False for probability surface
+
+        Returns: jnp.ndarray - Requested likelihood surface
+        """
+        if dimension not in [1, 2]: raise ValueError(f"dimension must be 1 or 2, got {dimension}")
+        if component not in [1, 2]: raise ValueError(f"component must be 1 or 2, got {component}")
+
+        # Select surface
+        surface_map = {
+            (1, 1): self.mu1_comp1_surface,
+            (1, 2): self.mu1_comp2_surface,
+            (2, 1): self.mu2_comp1_surface,
+            (2, 2): self.mu2_comp2_surface
+        }
+        surface = surface_map[(dimension, component)]
+
+        return surface if log else jnp.exp(surface)
+
+    def get_bias_grid(self, dimension: int) -> jnp.ndarray:
+        """Get bias grid for specified dimension."""
+        if dimension == 1: return self.mu1_bias_grid
+        if dimension == 2: return self.mu2_bias_grid
+        raise ValueError(f"dimension must be 1 or 2, got {dimension}")
+
+    def summary(self) -> str:
+        """Generate summary string of surface properties."""
+        return "\n".join([
+            "Surface Summary:",
+            f"  Feature difference: {len(self.feat_diff_grid)} points [{self.feat_diff_grid.min():.1f}, {self.feat_diff_grid.max():.1f}]",
+            f"  Mu1 bias: {len(self.mu1_bias_grid)} points [{self.mu1_bias_grid.min():.1f}, {self.mu1_bias_grid.max():.1f}]",
+            f"  Mu2 bias: {len(self.mu2_bias_grid)} points [{self.mu2_bias_grid.min():.1f}, {self.mu2_bias_grid.max():.1f}]",
+            f"  Mu1 surfaces: {self.mu1_comp1_surface.shape} each (comp1, comp2)",
+            f"  Mu2 surfaces: {self.mu2_comp1_surface.shape} each (comp1, comp2)"
+        ])
+
+@dataclass
+class AveragedSurface(Surface):
+    """
+    Subclass of Surface for averaged mirrored surfaces.
+    Contains higher-quality surfaces created by averaging log-likelihoods.
+    """
+    
+    # Additional metadata for averaged surfaces
+    n_surfaces_averaged: int = 0
+    averaged_from_params: List[Tuple[float, float, float]] = None
+    
+    def __post_init__(self):
+        """Initialize averaged_from_params if not provided."""
+        if self.averaged_from_params is None:
+            self.averaged_from_params = []
+        super().__post_init__()
+
+def compute_single_bias_curve(log_surfaces: jnp.ndarray, target_feat_indices: jnp.ndarray, mu1_bias_grid: jnp.ndarray) -> jnp.ndarray:
+    """
+    Compute bias curve from log probability surface for given feature indices.
+    
+    Args:
+        log_surfaces: Log probability surface with shape (n_mu1_bias, n_feat_diff)
+        target_feat_indices: Indices of feature difference values to compute bias for
+        mu1_bias_grid: Grid of mu1 bias values
+        
+    Returns:
+        Circular means (bias values) for the target feature indices
+    """
+    # Convert log probabilities to probabilities
+    mu1_prob_surface = jnp.exp(log_surfaces)
+    target_prob_profiles = mu1_prob_surface[:, target_feat_indices]
+
+    # Vectorized circular mean computation for all target indices
+    cos_vals = jnp.cos(jnp.radians(mu1_bias_grid)).reshape(-1, 1)
+    sin_vals = jnp.sin(jnp.radians(mu1_bias_grid)).reshape(-1, 1)
+
+    cos_expectations = jnp.trapezoid(cos_vals * target_prob_profiles, x=mu1_bias_grid, axis=0)
+    sin_expectations = jnp.trapezoid(sin_vals * target_prob_profiles, x=mu1_bias_grid, axis=0)
+
+    circular_means = jnp.degrees(jnp.arctan2(sin_expectations, cos_expectations))
+    return circular_means
+
+
+def compute_single_density_asymmetry(log_surfaces: jnp.ndarray, target_feat_indices: jnp.ndarray, mu1_bias_grid: jnp.ndarray, 
+                                   apply_smoothing: bool = True, smoothing_sigma: float = 5.0) -> jnp.ndarray:
+    """
+    Compute density asymmetry for a single log probability surface with optional Gaussian smoothing.
+    
+    Args:
+        log_surfaces: Log probability surface with shape (n_mu1_bias, n_feat_diff)
+        target_feat_indices: Indices of feature difference values to compute asymmetry for
+        mu1_bias_grid: Grid of mu1 bias values
+        apply_smoothing: Whether to apply Gaussian smoothing to the asymmetry curve
+        smoothing_sigma: Standard deviation for Gaussian smoothing kernel
+        
+    Returns:
+        Asymmetry values for the target feature indices
+    """
+    # Convert to probabilities
+    probs = jnp.exp(log_surfaces)
+    
+    # Extract probabilities for target feature indices
+    target_probs = probs[:, target_feat_indices]
+    
+    # Compute asymmetry for each target feature difference
+    positive_mask = mu1_bias_grid > 0
+    negative_mask = mu1_bias_grid < 0
+    
+    # Vectorized computation across all target indices with proper discretization
+    dx = config.mu1_bias_step  # Grid spacing for numerical integration
+    
+    # Use jnp.where instead of boolean indexing to avoid concreteness issues
+    positive_probs = jnp.where(positive_mask[:, None], target_probs, 0.0)
+    negative_probs = jnp.where(negative_mask[:, None], target_probs, 0.0)
+    
+    p_positive = jnp.sum(positive_probs, axis=0) * dx
+    p_negative = jnp.sum(negative_probs, axis=0) * dx
+    
+    asymmetry = p_positive - p_negative
+    
+    # Apply Gaussian smoothing if requested using JAX operations
+    if apply_smoothing:
+        # Create Gaussian kernel
+        kernel_size = int(4 * smoothing_sigma + 1)  # Kernel size based on sigma
+        if kernel_size % 2 == 0:
+            kernel_size += 1  # Ensure odd size
+        
+        # Create 1D Gaussian kernel
+        x = jnp.arange(kernel_size) - kernel_size // 2
+        kernel = jnp.exp(-0.5 * (x / smoothing_sigma) ** 2)
+        kernel = kernel / jnp.sum(kernel)  # Normalize
+        
+        # Apply convolution using JAX
+        # Pad the asymmetry array to handle edges
+        pad_width = kernel_size // 2
+        asymmetry_padded = jnp.pad(asymmetry, pad_width, mode='edge')
+        
+        # Convolve
+        asymmetry_smoothed = jnp.convolve(asymmetry_padded, kernel, mode='valid')
+        asymmetry = asymmetry_smoothed
+    
+    return asymmetry
+
+
+def _compute_empirical_density_asymmetry_core(real_feat_diff, real_bias, feat_diff_grid, weights_sd=20, circ_space=360):
+    """
+    Core computation for empirical density asymmetry with all matrix operations.
+    
+    Args:
+        real_feat_diff: Array of feature difference values, shape (n_trials,)
+        real_bias: Array of bias values, shape (n_trials,)
+        feat_diff_grid: Grid of feature difference values to compute asymmetry at
+        weights_sd: Standard deviation for Gaussian weights in feat_diff dimension
+        circ_space: Circular space size (360 for full circle)
+        
+    Returns:
+        distances: feat_diff_grid values
+        asymmetry_values: Asymmetry values at each grid point
+    """
+    max_diss = circ_space / 2
+    
+    # Auto bandwidth using Silverman's rule  
+    bias_std = jnp.std(real_bias)
+    n = len(real_bias)
+    kernel_bw = 0.9 * jnp.minimum(bias_std, (jnp.quantile(real_bias, 0.75) - jnp.quantile(real_bias, 0.25)) / 1.34) * (n ** (-1/5))
+    
+    # Use provided feat_diff_grid or create default distances
+    if feat_diff_grid is not None:
+        distances = feat_diff_grid
+    else:
+        distances = jnp.arange(4, int(max_diss * 2) + 1, 4)  # [4, 8, 12, ..., 180]
+    bias_range = jnp.linspace(-max_diss, max_diss, 181)  # [-90, -89, ..., 90]
+    
+    # Vectorized weight matrix computation with logsumexp for numerical stability
+    dist_matrix = distances[:, None] - real_feat_diff[None, :]  # Broadcasting
+    log_weights = -0.5 * (dist_matrix / weights_sd) ** 2
+    log_weights_normalized = log_weights - jax.scipy.special.logsumexp(log_weights, axis=1, keepdims=True)
+    weight_matrix = jnp.exp(log_weights_normalized)
+    
+    # Vectorized kernel matrix computation: (n_bias_points, n_datapoints)
+    bias_matrix = bias_range[:, None] - real_bias[None, :]  # Broadcasting
+    kernel_matrix = jnp.exp(-0.5 * (bias_matrix / kernel_bw) ** 2)
+    kernel_matrix = kernel_matrix / (kernel_bw * jnp.sqrt(2 * jnp.pi))  # Normalize kernel
+    
+    # Matrix multiplication: (n_distances, n_bias_points)
+    # weight_matrix @ kernel_matrix.T gives density for each (distance, bias_point) combination
+    density_matrix = weight_matrix @ kernel_matrix.T
+    
+    # Split into positive and negative regions for asymmetry computation
+    pos_mask = bias_range > 0
+    neg_mask = bias_range < 0
+    
+    # Sum densities in positive and negative regions for each distance
+    # Account for grid spacing in numerical integration
+    dx_empirical = bias_range[1] - bias_range[0]  # Grid spacing = 1.0 degree
+    
+    # Use jnp.where instead of boolean indexing to avoid concreteness issues
+    pos_densities_matrix = jnp.where(pos_mask[None, :], density_matrix, 0.0)
+    neg_densities_matrix = jnp.where(neg_mask[None, :], density_matrix, 0.0)
+    
+    pos_densities = jnp.sum(pos_densities_matrix, axis=1) * dx_empirical  # Shape: (n_distances,)
+    neg_densities = jnp.sum(neg_densities_matrix, axis=1) * dx_empirical  # Shape: (n_distances,)
+    
+    asymmetry_values = pos_densities - neg_densities
+    return distances, asymmetry_values
+
+
+
+def filter_data_for_fitting(data, feat_diff_col=None, bias_col=None, verbose=True):
+    """
+    Filter and clean data for GMM fitting by removing invalid values and applying range constraints.
+    
+    Handles both numpy arrays and pandas DataFrames:
+    - For 2-column arrays: assumes first column is feat_diff, second is bias
+    - For DataFrames: uses specified column names
+    
+    Args:
+        data: Either a 2-column numpy array or pandas DataFrame
+        feat_diff_col: Column name for feature differences (required for DataFrame)
+        bias_col: Column name for bias values (required for DataFrame)
+        verbose: Whether to print filtering statistics
+        
+    Returns:
+        Cleaned data in the same format as input
+    """
+    import pandas as pd
+    
+    is_dataframe = isinstance(data, pd.DataFrame)
+    
+    if is_dataframe:
+        if feat_diff_col is None or bias_col is None:
+            raise ValueError("feat_diff_col and bias_col must be specified for DataFrames")
+        original_len = len(data)
+        clean_data = data.copy()
+        feat_diff_vals = clean_data[feat_diff_col]
+        bias_vals = clean_data[bias_col]
+    else:
+        # Assume 2-column array: first column feat_diff, second bias
+        if data.shape[1] != 2:
+            raise ValueError("Array must have exactly 2 columns")
+        original_len = len(data)
+        clean_data = data.copy()
+        feat_diff_vals = clean_data[:, 0]
+        bias_vals = clean_data[:, 1]
+    
+    # Check for NaN values
+    nan_mask = np.isnan(feat_diff_vals) | np.isnan(bias_vals)
+    nan_count = nan_mask.sum()
+    
+    if nan_count > 0 and verbose:
+        print(f"Found {nan_count} NaN values")
+        
+    # Remove NaN values
+    if is_dataframe:
+        clean_data = clean_data[~nan_mask].copy().reset_index(drop=True)
+        feat_diff_vals = clean_data[feat_diff_col]
+        bias_vals = clean_data[bias_col]
+    else:
+        clean_data = clean_data[~nan_mask]
+        feat_diff_vals = clean_data[:, 0]
+        bias_vals = clean_data[:, 1]
+    
+    # Check for infinite values
+    inf_mask = ~(np.isfinite(feat_diff_vals) & np.isfinite(bias_vals))
+    inf_count = inf_mask.sum()
+    
+    if inf_count > 0 and verbose:
+        print(f"Found {inf_count} infinite values")
+        
+    # Remove infinite values
+    if is_dataframe:
+        clean_data = clean_data[~inf_mask].copy().reset_index(drop=True)
+        feat_diff_vals = clean_data[feat_diff_col]
+        bias_vals = clean_data[bias_col]
+    else:
+        clean_data = clean_data[~inf_mask]
+        feat_diff_vals = clean_data[:, 0]
+        bias_vals = clean_data[:, 1]
+    
+    # Save original values before any modifications (after all row filtering)
+    if is_dataframe:
+        original_feat_diff = clean_data[feat_diff_col].copy()
+    else:
+        original_feat_diff = clean_data[:, 0].copy()
+    
+    # Check feat_diff range constraints
+    feat_below_min = feat_diff_vals < 4
+    feat_above_max = feat_diff_vals > 180
+    feat_below_count = feat_below_min.sum()
+    feat_above_count = feat_above_max.sum()
+    
+    if feat_below_count > 0 and verbose:
+        print(f"Found {feat_below_count} feat_diff values < 4 - will clamp to 4")
+        below_vals = feat_diff_vals[feat_below_min]
+        print(f"  Values < 4: min={below_vals.min():.2f}, examples={list(below_vals.head(3) if hasattr(below_vals, 'head') else below_vals[:3].round(2))}")
+    
+    if feat_above_count > 0 and verbose:
+        print(f"Found {feat_above_count} feat_diff values > 180 - will remove")
+        above_vals = feat_diff_vals[feat_above_max]
+        print(f"  Values > 180: max={above_vals.max():.2f}, examples={list(above_vals.head(3) if hasattr(above_vals, 'head') else above_vals[:3].round(2))}")
+        
+    # Save clamping examples before filtering removes them
+    clamp_examples_orig = None
+    clamp_examples_new = None
+    if feat_below_count > 0 and verbose:
+        below_vals = feat_diff_vals[feat_below_min]
+        orig_below_vals = original_feat_diff[feat_below_min]
+        
+        if hasattr(below_vals, 'head'):
+            clamp_examples_new = below_vals.head(3).round(2)
+            clamp_examples_orig = orig_below_vals.head(3).round(2)
+        else:
+            clamp_examples_new = below_vals[:3].round(2)
+            clamp_examples_orig = orig_below_vals[:3].round(2)
+    
+    # Apply feat_diff constraints
+    if is_dataframe:
+        clean_data[feat_diff_col] = np.clip(clean_data[feat_diff_col], 4, None)  # Clamp minimum to 4
+        clean_data = clean_data[clean_data[feat_diff_col] <= 180].copy().reset_index(drop=True)  # Remove values > 180
+        feat_diff_vals = clean_data[feat_diff_col]
+        bias_vals = clean_data[bias_col]
+    else:
+        clean_data[:, 0] = np.clip(clean_data[:, 0], 4, None)  # Clamp minimum to 4
+        clean_data = clean_data[clean_data[:, 0] <= 180]  # Remove values > 180
+        feat_diff_vals = clean_data[:, 0]
+        bias_vals = clean_data[:, 1]
+    
+    # Show clamping examples
+    if feat_below_count > 0 and verbose and clamp_examples_orig is not None:
+        print(f"  Clamp examples: {list(zip(clamp_examples_orig, clamp_examples_new))}")
+    
+    # Check bias range and apply circular wrapping
+    bias_out_of_range = (bias_vals < -180) | (bias_vals > 180)
+    bias_out_count = bias_out_of_range.sum()
+    
+    if bias_out_count > 0 and verbose:
+        print(f"Found {bias_out_count} bias values outside [-180, 180] - will wrap")
+        bias_out_rows = bias_vals[bias_out_of_range]
+        print(f"  Out-of-range bias: min={bias_out_rows.min():.1f}, max={bias_out_rows.max():.1f}")
+    
+    # Apply circular wrapping for bias
+    if is_dataframe:
+        original_bias = clean_data[bias_col].copy()
+        clean_data[bias_col] = ((clean_data[bias_col] + 180) % 360) - 180
+        bias_vals = clean_data[bias_col]
+    else:
+        original_bias = clean_data[:, 1].copy()
+        clean_data[:, 1] = ((clean_data[:, 1] + 180) % 360) - 180
+        bias_vals = clean_data[:, 1]
+    
+    # Show wrapping examples
+    if bias_out_count > 0 and verbose:
+        # Find positions of out-of-range values and take first 5
+        if hasattr(bias_out_of_range, 'to_numpy'):
+            out_of_range_positions = np.where(bias_out_of_range.to_numpy())[0][:5]
+        else:
+            out_of_range_positions = np.where(bias_out_of_range)[0][:5]
+            
+        if len(out_of_range_positions) > 0:
+            if hasattr(original_bias, 'iloc'):
+                orig_vals = original_bias.iloc[out_of_range_positions].round(1)
+                new_vals = bias_vals.iloc[out_of_range_positions].round(1)
+            else:
+                orig_vals = original_bias[out_of_range_positions].round(1)
+                new_vals = bias_vals[out_of_range_positions].round(1)
+            print(f"  Wrap examples: {list(zip(orig_vals, new_vals))}")
+    
+    filtered_count = original_len - len(clean_data)
+    if filtered_count > 0 and verbose:
+        print(f"Filtered out {filtered_count}/{original_len} invalid data points")
+    
+    # Final statistics
+    if verbose:
+        if is_dataframe:
+            feat_range = f"[{clean_data[feat_diff_col].min():.1f}, {clean_data[feat_diff_col].max():.1f}]"
+            bias_range = f"[{clean_data[bias_col].min():.1f}, {clean_data[bias_col].max():.1f}]"
+        else:
+            feat_range = f"[{clean_data[:, 0].min():.1f}, {clean_data[:, 0].max():.1f}]"
+            bias_range = f"[{clean_data[:, 1].min():.1f}, {clean_data[:, 1].max():.1f}]"
+        
+        print(f"Final: {len(clean_data)} trials, feat_diff range {feat_range}, bias range {bias_range}")
+    
+    return clean_data
+
+
+if __name__=='__main__':
+    plot_model_preds('checkpoints_probabilistic_full/model_epoch_0250.pkl')
