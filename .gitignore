@@ -16,7 +16,6 @@ __pycache__/
 *.png
 *.pkl
 *.arrow
-*.csv
 *.json
 *.backup
 *.gz
