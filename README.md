@@ -10,6 +10,18 @@ This repo implements the modeling pipeline for the Demixing Model (Chetverikov, 
 4) Fit model parameters to behavioral data with grid-based optimization (`model_fit_to_data/`).
 5) Optional: generate plots/exports or run the Python/R prediction simulator (`model_fit_to_data/`, `surface_simulator_for_predictions/`).
 
+## Requirements
+
+- Python 3 environment with the ability to install packages (virtualenv or conda recommended).
+- NVIDIA GPU with a CUDA-enabled JAX build (`jax`/`jaxlib`; see JAX and CUDA docs for instructions); CPU runs are likely possible but extremely slow.
+- Core Python packages used across the pipeline: `flax`, `optax`, `numpy`, `pandas`, `matplotlib`, `seaborn`, `pyarrow`.
+- Surface browser dependencies: `streamlit` and `plotly` (see browser requirement below).
+- Optional R interface: `arrow`, `stringr`, and `data.table` for `surface_simulator_for_predictions/surface_simulator.R`.
+
+## Browser Requirement
+
+- To explore surfaces interactively, install `streamlit` and `plotly`, then launch `streamlit run surface_browser/main_app.py` in a modern desktop browser (Chrome/Edge/Firefox). The app expects averaged surfaces (e.g., `averaged_surfaces_10k_20samples` by default but the folder can be selected in the app) to be present.
+
 ## Repo Map
 
 - `surface_computation/`: Simulation and likelihood surface generation.
@@ -43,6 +55,10 @@ Run the smoke pipeline from the repo root:
 ```bash
 bash tests/run_smoke_pipeline.sh
 ```
+
+## Disclaimer
+
+The documentation for the project was generated using AI and may contain errors. This code is provided as-is without warranty of any kind. The author assumes no liability for any damages or consequences arising from its use. 
 
 ## References
 

@@ -1,0 +1,25 @@
+[project]
+name = "demixing-model"
+version = "0.0.0"
+description = "Demixing Model pipelines (simulation, NN training, fitting, browser)."
+requires-python = ">=3.10"
+dependencies = [
+  "jax==0.7.0",            # core compute
+  "jaxlib==0.7.0",         # device runtime (install GPU build if available)
+  "flax==0.10.7",
+  "optax==0.2.5",
+  "numpy==2.1.3",
+  "pandas==2.3.1",
+  "matplotlib==3.10.3",
+  "seaborn==0.13.2",
+  "pyarrow==21.0.0",
+  "streamlit==1.47.0",
+  "plotly==6.2.0",
+]
+
+[project.optional-dependencies]
+dev = []
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
