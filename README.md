@@ -32,6 +32,33 @@ This repo implements the modeling pipeline for the Demixing Model (Chetverikov, 
 - `tests/`: Smoke pipeline and test instructions.
 - `example_data/`: Sample input data.
 
+## Installation
+
+1) **Clone or download**  
+   ```bash
+   git clone https://github.com/<your-org>/demixing_model.git
+   cd demixing_model
+   ```
+   (Alternatively download the ZIP and unzip to a folder, then `cd` there.)
+
+2) **Create and activate a Python env (3.10+)**  
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   ```
+
+3) **Install dependencies (reads `pyproject.toml` with a list of dependencies automatically when you are in the repo folder)**  
+   ```bash
+   pip install --upgrade pip
+   pip install .
+   ```
+   If you have a CUDA GPU, install a CUDA-enabled `jaxlib` wheel that matches your CUDA version (see https://github.com/google/jax#installation) so JAX runs on GPU instead of CPU.
+
+4) **Verify with the smoke pipeline** (optional but recommended)  
+   ```bash
+   bash tests/run_smoke_pipeline.sh
+   ```
+
 ## Pipeline Docs
 
 - `surface_computation/Likelihood_Surface_Pipeline_Documentation.md`
