@@ -523,7 +523,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--checkpoint-path",
-        default=None,
+        default="pretrained/model_epoch_1500.pkl",
         help="Checkpoint path for extended mode.",
     )
     parser.add_argument(

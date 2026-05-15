@@ -1,8 +1,13 @@
-# Batch Fit Analysis Pipeline (V2)
+# Batch Fit Analysis Pipeline
 
 ## Overview
 
-This document describes the model fitting pipeline driven by `model_fit_to_data_analysis.py`. It runs grid-based multi-condition optimization across subjects and noise conditions, saving extended fit results per method (default: density only).
+This document describes the model fitting pipeline. There are two entry-point scripts in `model_fit_to_data/`:
+
+- **`fit_model_to_data.py`** — general-purpose fitting script. Use this for any dataset (including Fritsche, Fischer-Whitney, Moors, or your own data). Accepts a CSV via `--data-path` and writes results to `--output-dir`.
+- **`model_fit_to_CSH2026_data.py`** — fitting script written specifically for the Chetverikov & Hansmann-Roth (2026) dataset. It handles the multi-experiment, multi-noise-condition structure of that dataset (including the `color_2` first/second-report split) and is not intended for general use.
+
+Both scripts use the same underlying `GridBasedMultiConditionOptimizer` and produce compatible output formats.
 
 ---
 
@@ -10,16 +15,15 @@ This document describes the model fitting pipeline driven by `model_fit_to_data_
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│ START: model_fit_to_data_analysis.py                             │
-│ Command: python model_fit_to_data_analysis.py                    │
-│ Defaults: 20 samples, no outliers, density method                │
+│ START: fit_model_to_data.py  (general)                           │
+│        model_fit_to_CSH2026_data.py  (CSH 2026 data only)        │
 └───────────────┬──────────────────────────────────────────────────┘
                 │
                 ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │ 1. Load & Filter Data                                            │
 │                                                                  │
-│    - CSV: data_color_comb.csv                                    │
+│    - CSV specified via --data-path                               │
 │    - Optional outlier removal (outlier_col='is_outlier')         │
 │                                                                  │
 │    Function: load_data()                                         │
@@ -42,7 +46,7 @@ This document describes the model fitting pipeline driven by `model_fit_to_data_
 │    Class: GridBasedMultiConditionOptimizer                       │
 │    File: grid_based_multi_condition_optimizer_jax_loops.py       │
 │                                                                  │
-│    - Loads checkpoint: neural_net_checkpoints_{n}samples/...     │
+│    - Loads checkpoint (default: pretrained/model_epoch_1500.pkl) │
 │    - Uses dummy data for initial setup                           │
 └───────────────┬──────────────────────────────────────────────────┘
                 │
@@ -53,7 +57,7 @@ This document describes the model fitting pipeline driven by `model_fit_to_data_
 │    For each subject group:                                       │
 │    - Filter data for fitting                                     │
 │    - Run hierarchical grid search                                │
-│    - Methods: density (default)                                  │
+│    - Methods: density (default), expectation, likelihood         │
 │                                                                  │
 │    Function: process_single_subject_multi_condition()            │
 └───────────────┬──────────────────────────────────────────────────┘
@@ -62,7 +66,7 @@ This document describes the model fitting pipeline driven by `model_fit_to_data_
 ┌──────────────────────────────────────────────────────────────────┐
 │ 5. Save Extended Results                                         │
 │                                                                  │
-│    Output: model_fit_to_data_results_v2_.../                      │
+│    Output: <output-dir>/                                         │
 │    Files:                                                        │
 │    - extended_fit_results.pkl                                    │
 │    - extended_progress.json                                      │
@@ -73,12 +77,12 @@ This document describes the model fitting pipeline driven by `model_fit_to_data_
 
 ---
 
-## Default Settings
+## Default Settings (`fit_model_to_data.py`)
 
-Defaults configured in `model_fit_to_data_analysis.py`:
-- `nsamples_list=[20]`
-- `include_outliers_list=[False]`
-- `include_methods=['density']`
+- `--include-methods density`
+- `--checkpoint-path pretrained/model_epoch_1500.pkl`
+- `--min-trials 30`
+- Outliers excluded by default
 
 ---
 
@@ -98,8 +102,8 @@ Use `create_unified_subject_plots.py` to generate unified subject plots and CSV 
 Example:
 ```bash
 python model_fit_to_data/create_unified_subject_plots.py \
-  --results-path model_fit_to_data_results_v2_no_motor_noise/20samples/no_outliers/extended_fit_results.pkl \
-  --checkpoint-path neural_net_checkpoints_20samples/model_epoch_1500.pkl \
+  --results-path <output-dir>/extended_fit_results.pkl \
+  --checkpoint-path pretrained/model_epoch_1500.pkl \
   --summary-plots --csv-exports --no-individual-plots
 ```
 
@@ -107,27 +111,33 @@ python model_fit_to_data/create_unified_subject_plots.py \
 
 ## How To Run
 
-From the repo root:
+### General use (`fit_model_to_data.py`)
+
 ```bash
-python model_fit_to_data_analysis.py
+python model_fit_to_data/fit_model_to_data.py \
+  --data-path example_data/fritsche_prepared.csv \
+  --output-dir results/fritsche
 ```
 
-Outputs will be written under:
+### CSH 2026 data (`model_fit_to_CSH2026_data.py`)
+
+```bash
+python model_fit_to_data/model_fit_to_CSH2026_data.py \
+  --data-path data_color_comb.csv \
+  --output-dir results/csh2026
 ```
-model_fit_to_data_results_v2_no_motor_noise/20samples/no_outliers/
+
+Or via its loop mode (iterates over sample counts and outlier settings):
+
+```bash
+python model_fit_to_data/model_fit_to_CSH2026_data.py --mode loop
 ```
 
 ---
 
-## Related Files (Copied for Standalone Use)
+## Related Files
 
-The standalone folder `model_fit_to_data/` includes:
-- `model_fit_to_data_analysis.py`
-- `create_unified_subject_plots.py` (post-fit plots/exports)
-- `grid_based_multi_condition_optimizer_jax_loops.py`
-- `config.py`
-- `utils.py`
-- `seed_manager.py`
-- `surface_folder_parsing.py`
-- `surface_functions.py`
-- `plotting.py`
+- `fit_model_to_data.py` — general fitting entry point
+- `model_fit_to_CSH2026_data.py` — CSH 2026 specific entry point
+- `create_unified_subject_plots.py` — post-fit plots and CSV exports
+- `grid_based_multi_condition_optimizer_jax_loops.py` — optimizer core
