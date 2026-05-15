@@ -158,16 +158,25 @@ def create_shared_parameter_grid(grid_size: int = 20,
 @partial(jax.jit, static_argnums=(1, 2))
 def generate_nn_density_asymmetry_batch(log_surfaces_batch: jnp.ndarray,
                                         feat_diff_grid=config.create_grid('feat_diff'),
-                                        mu1_bias_grid=config.create_grid('mu1_bias')
+                                        mu1_bias_grid=config.create_grid('mu1_bias'),
+                                        weights_sd: float = 20.0,
+                                        smoothing_sigma: float = None
                                         ) -> jnp.ndarray:
-    """Generate density asymmetry curves for batch of surfaces using NN surface with smoothing."""
+    """Generate density asymmetry curves for batch of surfaces using NN surface with smoothing.
 
-    # Use all feature indices for full asymmetry curve
+    Args:
+        weights_sd: Gaussian SD (degrees) used to weight empirical trials in feat_diff space.
+            Used to derive smoothing_sigma when smoothing_sigma is not explicitly provided:
+            smoothing_sigma = weights_sd / feat_diff_step.
+        smoothing_sigma: Override for the Gaussian smoothing kernel size (grid steps).
+            If None, derived from weights_sd.
+    """
     target_feat_indices = jnp.arange(len(feat_diff_grid))
+    if smoothing_sigma is None:
+        smoothing_sigma = weights_sd / config.feat_diff_step
 
-    # Apply to entire batch using vmap with smoothing enabled (sigma=5)
     vectorized_compute = jax.vmap(lambda log_surf: compute_single_density_asymmetry(
-        log_surf, target_feat_indices, mu1_bias_grid, apply_smoothing=True, smoothing_sigma=5.0
+        log_surf, target_feat_indices, mu1_bias_grid, apply_smoothing=True, smoothing_sigma=smoothing_sigma
     ))
     return vectorized_compute(log_surfaces_batch)
 
@@ -362,7 +371,7 @@ def _compute_curve_losses(predicted_curves: jnp.ndarray, target_curves: jnp.ndar
 class GridBasedMultiConditionOptimizer:
     """Simplified grid-based multi-condition optimizer with direct NN loading."""
 
-    def __init__(self, checkpoint_path: str, condition_datasets: Optional[Dict[str, jax.Array]] = None, corr_weight = 0.25, skip_motor_noise: bool = False):
+    def __init__(self, checkpoint_path: str, condition_datasets: Optional[Dict[str, jax.Array]] = None, corr_weight = 0.25, skip_motor_noise: bool = False, emp_density_weights_sd: float = 20.0, density_smoothing_sigma: float = None):
         """Initialize the grid-based multi-condition optimizer.
 
         Args:
@@ -377,6 +386,8 @@ class GridBasedMultiConditionOptimizer:
         self.n_conditions = len(self.condition_names)
         self.corr_weight = corr_weight
         self.skip_motor_noise = skip_motor_noise
+        self.emp_density_weights_sd = emp_density_weights_sd
+        self.density_smoothing_sigma = density_smoothing_sigma  # None → derived from emp_density_weights_sd
 
         if condition_datasets:
             print(f"Initializing GridBasedMultiConditionOptimizer with {self.n_conditions} conditions:")
@@ -731,7 +742,7 @@ class GridBasedMultiConditionOptimizer:
 
         def density_curve_wrapper(feat_diff_vals, bias_vals, grid):
             """Wrapper to extract only asymmetry values from density computation."""
-            distances, asymmetry_values = _compute_empirical_density_asymmetry_core(feat_diff_vals, bias_vals, grid)
+            distances, asymmetry_values = _compute_empirical_density_asymmetry_core(feat_diff_vals, bias_vals, grid, weights_sd=self.emp_density_weights_sd)
             return asymmetry_values
 
         vectorized_density_compute = jax.vmap(density_curve_wrapper, in_axes=(0, 0, None))
@@ -804,7 +815,7 @@ class GridBasedMultiConditionOptimizer:
         elif fitting_method == "density":
             # Use precomputed target density curves (no function calls inside JIT)
             # Generate density asymmetry for ALL surfaces at once: shape (n_surfaces, n_feat_points)
-            all_predicted_asymmetry = generate_nn_density_asymmetry_batch(surfaces)
+            all_predicted_asymmetry = generate_nn_density_asymmetry_batch(surfaces, weights_sd=self.emp_density_weights_sd, smoothing_sigma=self.density_smoothing_sigma)
 
             # Get predicted and target asymmetry for each parameter combination
             predicted_asymmetry_per_combo = all_predicted_asymmetry[surface_indices]  # Shape: (n_combos, n_feat_points)
