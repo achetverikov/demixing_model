@@ -320,7 +320,7 @@ if __name__ == '__main__':
     parser.add_argument('--include-outliers', action='store_true',
                         help='Skip outlier filtering.')
     parser.add_argument('--include-methods', nargs='+', default=['density'],
-                        choices=['density', 'expectation', 'likelihood'],
+                        choices=['density', 'expectation', 'likelihood', 'crps'],
                         help='Optimisation method(s) to run.')
     parser.add_argument('--min-trials', type=int, default=30,
                         help='Minimum trials per condition to include.')

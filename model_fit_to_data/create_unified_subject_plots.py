@@ -7,7 +7,7 @@ in a single plot with parameter information displayed.
 
 For each subject, it creates a plot showing:
 - All conditions (noise levels) in subplots
-- Different optimizers (likelihood, expectation, density) as different colors
+- Different optimizers (likelihood, expectation, density, CRPS) as different colors
 - Parameter values displayed for each optimizer
 - Both bias curves and density asymmetry
 """
@@ -45,6 +45,21 @@ RESULTS_DIR = "results"
 MODEL_FIT_RESULTS_PREFIX = "model_fit_to_data_results_v2"
 CHECKPOINT_PREFIX = "neural_net_checkpoints"
 CHECKPOINT_EPOCH = 1500
+
+# Colorblind-friendly method palette. Keep likelihood and CRPS visually separated
+# because they are often compared directly in the summary plots.
+OPTIMIZER_COLORS = {
+    'likelihood': '#0072B2',   # blue
+    'crps': '#E69F00',         # orange
+    'expectation': '#CC79A7',  # reddish purple
+    'density': '#009E73',      # green
+}
+OPTIMIZER_LABELS = {
+    'likelihood': 'Likelihood',
+    'crps': 'CRPS',
+    'expectation': 'Expectation',
+    'density': 'Density',
+}
 
 
 def compute_empirical_sd_curve(feat_diff_values, bias_values, n_bins=18):
@@ -504,8 +519,8 @@ def create_unified_subject_plot(
         fig.suptitle(f'Subject {subject_id} - Experiment {experiment}', fontsize=16, y=0.98)
         
         # Define colors for optimizers
-        opt_colors = {'likelihood': 'blue', 'expectation': 'red', 'density': 'green'}
-        opt_labels = {'likelihood': 'Likelihood', 'expectation': 'Expectation', 'density': 'Density'}
+        opt_colors = OPTIMIZER_COLORS
+        opt_labels = OPTIMIZER_LABELS
         
         # NOW JUST PLOT THE PRECOMPUTED RESULTS
         for col, noise_cond in enumerate(sorted(noise_conditions)):
@@ -927,14 +942,14 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
             ax1 = axes[0, col]
             
             # Plot optimizer bias curves
-            opt_colors = {'likelihood': 'blue', 'expectation': 'red', 'density': 'green'}
-            opt_labels = {'likelihood': 'Likelihood', 'expectation': 'Expectation', 'density': 'Density'}
+            opt_colors = OPTIMIZER_COLORS
+            opt_labels = OPTIMIZER_LABELS
             
             for opt in available_optimizers:
                 color = opt_colors.get(opt, 'black')
                 label = opt_labels.get(opt, opt.capitalize())
                 
-                ax1.plot(feat_vals, avg_stage_bias[opt], f'{color[0]}-', linewidth=2, 
+                ax1.plot(feat_vals, avg_stage_bias[opt], color=color, linestyle='-', linewidth=2,
                         label=f'{label} n={len(stage_bias_curves[opt])}')
                 ax1.fill_between(feat_vals, avg_stage_bias[opt] - sem_stage_bias[opt], 
                                avg_stage_bias[opt] + sem_stage_bias[opt], alpha=0.3, color=color)
@@ -957,7 +972,7 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                 color = opt_colors.get(opt, 'black')
                 label = opt_labels.get(opt, opt.capitalize())
                 
-                ax2.plot(feat_vals, avg_stage_asymm[opt], f'{color[0]}-', linewidth=2, label=label)
+                ax2.plot(feat_vals, avg_stage_asymm[opt], color=color, linestyle='-', linewidth=2, label=label)
                 ax2.fill_between(feat_vals, avg_stage_asymm[opt] - sem_stage_asymm[opt], 
                                avg_stage_asymm[opt] + sem_stage_asymm[opt], alpha=0.3, color=color)
             

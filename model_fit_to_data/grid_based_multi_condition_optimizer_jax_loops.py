@@ -91,14 +91,25 @@ Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         nearest_bin_indices,
         num_segments=n_bins
     )
-    bin_sums = jax.ops.segment_sum(
-        jnp.where(valid_mask, valid_bias, 0.0),
+    bias_rad = jnp.radians(valid_bias)
+    bin_cos_sums = jax.ops.segment_sum(
+        jnp.where(valid_mask, jnp.cos(bias_rad), 0.0),
+        nearest_bin_indices,
+        num_segments=n_bins
+    )
+    bin_sin_sums = jax.ops.segment_sum(
+        jnp.where(valid_mask, jnp.sin(bias_rad), 0.0),
         nearest_bin_indices,
         num_segments=n_bins
     )
 
-    # Compute mean bias per bin (handle division by zero)
-    target_bias = jnp.where(bin_counts > 0, bin_sums / bin_counts, 0.0)
+    # Circular mean per bin (handle empty bins)
+    target_bias = jnp.where(
+        bin_counts > 0,
+        jnp.degrees(jnp.arctan2(bin_sin_sums / jnp.maximum(bin_counts, 1),
+                                 bin_cos_sums / jnp.maximum(bin_counts, 1))),
+        0.0
+    )
     weights = bin_counts.astype(jnp.float32)
 
     # Map bin centers to NN grid indices
@@ -552,6 +563,10 @@ class GridBasedMultiConditionOptimizer:
         self.n_feat_diff = len(self.feat_diff_grid)
         self.n_mu1_bias = len(self.mu1_bias_grid)
 
+        # Circular distance matrix for CRPS: D[k, l] = min(|grid[k]-grid[l]|, 360-|grid[k]-grid[l]|)
+        diff = jnp.abs(self.mu1_bias_grid[:, None] - self.mu1_bias_grid[None, :])
+        self.D_circ_matrix = jnp.minimum(diff, 360.0 - diff)
+
         print(
             f"Grid setup: {self.n_feat_diff} feat_diff × {self.n_mu1_bias} mu1_bias = {self.n_feat_diff * self.n_mu1_bias} points per surface")
 
@@ -826,9 +841,38 @@ class GridBasedMultiConditionOptimizer:
             losses = _compute_curve_losses(predicted_asymmetry_per_combo, target_asymmetry_per_combo,
                                            loss_type="combined", is_angular=False, corr_weight=self.corr_weight)
 
+        elif fitting_method == "crps":
+            # Energy score CRPS with circular distance.
+            # crps_surface[u, k, j] = E_X[d_circ(X, mu1_grid[k]) | feat_diff[j]] - 0.5 * E_{X,X'}[d_circ | feat_diff[j]]
+            # Indexed with all_trial_indices exactly like likelihood.
+            log_prob_norm = surfaces - jax.scipy.special.logsumexp(surfaces, axis=1, keepdims=True)
+            prob_surfaces = jnp.exp(log_prob_norm)  # (n_unique, n_mu1, n_feat), sums to 1 per column
+
+            # Reshape for batch matmul: (n_unique * n_feat, n_mu1)
+            prob_flat = prob_surfaces.transpose(0, 2, 1).reshape(-1, n_bias)
+            Dp = prob_flat @ self.D_circ_matrix          # (n_unique * n_feat, n_mu1)
+
+            # E2: quadratic form prob^T D_circ prob per (surface, feat_diff)
+            E2 = (prob_flat * Dp).sum(axis=1).reshape(n_unique_surfaces, n_feat)
+
+            # E1 surface: (D_circ @ prob)^T at each (k, j) = Dp reshaped back
+            E1 = Dp.reshape(n_unique_surfaces, n_feat, n_bias).transpose(0, 2, 1)  # (n_unique, n_mu1, n_feat)
+
+            crps_surface = E1 - 0.5 * E2[:, None, :]    # (n_unique, n_mu1, n_feat)
+            crps_flat = crps_surface.reshape(n_unique_surfaces, -1)
+
+            all_crps_vals = crps_flat[:, self.all_trial_indices]  # (n_unique, total_trials)
+
+            def sum_crps_by_condition(surface_crps):
+                return jax.ops.segment_sum(surface_crps, self.trial_to_condition, num_segments=self.n_conditions)
+
+            surface_condition_crps = jax.vmap(sum_crps_by_condition)(all_crps_vals)
+            param_crps = surface_condition_crps[surface_indices, condition_indices]
+            losses = param_crps
+
         else:
             raise ValueError(
-                f"Unknown fitting method: {fitting_method}. Must be one of 'likelihood', 'expectation', 'density'")
+                f"Unknown fitting method: {fitting_method}. Must be one of 'likelihood', 'expectation', 'density', 'crps'")
 
         # Find best parameter for each condition
         min_losses = jax.ops.segment_min(losses, condition_indices, num_segments=self.n_conditions)

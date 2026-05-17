@@ -155,7 +155,7 @@ if __name__ == "__main__":
         "--data-path",       str(csv_path),
         "--checkpoint-path", CHECKPOINT,
         "--output-dir",      RESULTS_DIR,
-        "--include-methods", "density", "expectation", "likelihood",
+        "--include-methods", "density", "expectation", "likelihood", "crps",
     ])
 
     print("\n" + "=" * 60)
