@@ -28,8 +28,15 @@ import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 
-from grid_based_multi_condition_optimizer_jax_loops import GridBasedMultiConditionOptimizer
+from grid_based_multi_condition_optimizer_jax_loops import (
+    GridBasedMultiConditionOptimizer,
+    apply_motor_noise_with_precomputed_kernel,
+    create_motor_noise_kernel_fft,
+)
 from shared.utils import filter_data_for_fitting, resolve_input_path, resolve_results_path
+
+
+LOSS_EVALUATION_METHODS = ['density', 'expectation', 'likelihood', 'crps', 'balanced_crps']
 
 try:
     from rich.console import Console
@@ -160,6 +167,51 @@ def group_conditions(
     return groups
 
 
+def evaluate_parameter_losses(
+    optimizer: GridBasedMultiConditionOptimizer,
+    params_by_condition: jnp.ndarray,
+    fitting_methods: List[str],
+) -> Dict[str, jnp.ndarray]:
+    """Evaluate one fixed parameter set per current condition under each objective."""
+    params_by_condition = jnp.asarray(params_by_condition)
+    if params_by_condition.ndim != 2 or params_by_condition.shape[0] != optimizer.n_conditions:
+        raise ValueError(
+            "params_by_condition must have shape (n_conditions, 3 or 4); "
+            f"got {params_by_condition.shape} for {optimizer.n_conditions} conditions"
+        )
+
+    log_surfaces = optimizer._predict_batch_fixed_size(params_by_condition[:, :3], verbosity=0)
+
+    if params_by_condition.shape[1] >= 4:
+        sd_motors = np.array(params_by_condition[:, 3])
+        if np.any(sd_motors > 0):
+            noisy_surfaces = []
+            for surface, sd_motor in zip(log_surfaces, sd_motors):
+                if sd_motor > 0:
+                    kernel_fft = create_motor_noise_kernel_fft(float(sd_motor), optimizer.n_mu1_bias)
+                    surface = apply_motor_noise_with_precomputed_kernel(surface[None], kernel_fft)[0]
+                noisy_surfaces.append(surface)
+            log_surfaces = jnp.stack(noisy_surfaces)
+
+    cond_params_with_idx = jnp.column_stack([
+        jnp.arange(optimizer.n_conditions),
+        params_by_condition[:, 0],
+        params_by_condition[:, 1],
+    ])
+    surface_indices = jnp.arange(optimizer.n_conditions)
+
+    losses = {}
+    for method in fitting_methods:
+        evaluated = optimizer._optimize_conditions_jit(
+            log_surfaces,
+            cond_params_with_idx,
+            surface_indices,
+            fitting_method=method,
+        )
+        losses[method] = evaluated[:, 2]
+    return losses
+
+
 def process_subject(
     subject_id: str,
     subject_conditions: Dict[str, pd.DataFrame],
@@ -232,6 +284,8 @@ def process_subject(
             f"sd_spat={shared['sd_spat']:.1f}, sd_motor={shared['sd_motor']:.1f}", "green")
         if progress is not None and method_task is not None:
             progress.advance(method_task)
+    if progress is not None and method_task is not None:
+        progress.remove_task(method_task)
 
     condition_results = {}
     for cond_key in condition_datasets:
@@ -258,6 +312,42 @@ def process_subject(
                 f'{method}_loss': cond_res['loss'],
             })
         condition_results[cond_key] = entry
+
+    fitted_methods = sorted({
+        key[:-len('_fitted_params')]
+        for entry in condition_results.values()
+        for key in entry
+        if key.endswith('_fitted_params')
+    })
+    if fitted_methods:
+        eval_task = None
+        if progress is not None:
+            eval_task = progress.add_task(f"[blue]Evaluating losses for {subject_id}", total=len(fitted_methods))
+        for fitted_method in fitted_methods:
+            param_key = f'{fitted_method}_fitted_params'
+            if not all(param_key in condition_results[cond_key] for cond_key in condition_datasets):
+                continue
+            params_by_condition = jnp.stack([
+                jnp.asarray(condition_results[cond_key][param_key])
+                for cond_key in condition_datasets
+            ])
+            losses_by_objective = evaluate_parameter_losses(
+                optimizer,
+                params_by_condition,
+                fitting_methods=LOSS_EVALUATION_METHODS,
+            )
+            for cond_idx, cond_key in enumerate(condition_datasets):
+                eval_losses = {
+                    objective: float(losses[cond_idx])
+                    for objective, losses in losses_by_objective.items()
+                }
+                condition_results[cond_key][f'{fitted_method}_evaluation_losses'] = eval_losses
+                for objective, loss in eval_losses.items():
+                    condition_results[cond_key][f'{fitted_method}_eval_{objective}_loss'] = loss
+            if progress is not None and eval_task is not None:
+                progress.advance(eval_task)
+        if progress is not None and eval_task is not None:
+            progress.remove_task(eval_task)
 
     return condition_results
 
@@ -383,15 +473,25 @@ def run_fitting(
                     log(f"Re-fitting {subject_id}: existing results use a different circular-space transform.", "yellow")
                     missing, subject_existing = None, None
                 else:
+                    subject_existing = {k: v for k, v in existing_results.items()
+                                         if k.startswith(f"{subject_id}#")}
                     missing = [m for m in methods
                                if sample is None or f'{m}_fitted_params' not in sample]
-                    if not missing:
+                    missing_evaluations = [
+                        m for m in methods
+                        if sample is not None
+                        and f'{m}_fitted_params' in sample
+                        and any(f'{m}_evaluation_losses' not in entry
+                                for entry in subject_existing.values()
+                                if f'{m}_fitted_params' in entry)
+                    ]
+                    if not missing and not missing_evaluations:
                         log(f"Skipping {subject_id}: already complete.", "yellow")
                         if active_progress is not None and subject_task is not None:
                             active_progress.advance(subject_task)
                         continue
-                    subject_existing = {k: v for k, v in existing_results.items()
-                                         if k.startswith(f"{subject_id}#")}
+                    if missing_evaluations and not missing:
+                        log(f"Evaluating saved losses for {subject_id}.", "cyan")
             else:
                 missing, subject_existing = None, None
 
