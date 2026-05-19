@@ -15,8 +15,10 @@ Column name defaults match the example data in example_data/.
 """
 import argparse
 import json
+import os
 import pickle
 import re
+import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -29,6 +31,50 @@ import pandas as pd
 from grid_based_multi_condition_optimizer_jax_loops import GridBasedMultiConditionOptimizer
 from shared.utils import filter_data_for_fitting, resolve_input_path, resolve_results_path
 
+try:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.progress import (
+        BarColumn,
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+        TimeElapsedColumn,
+        TimeRemainingColumn,
+    )
+    from rich.table import Table
+except ImportError:  # pragma: no cover - fallback for minimal environments
+    Console = None
+
+
+USE_RICH = (
+    Console is not None
+    and os.environ.get("NO_RICH") != "1"
+    and sys.stdout.isatty()
+)
+console = Console(color_system="auto") if USE_RICH else None
+
+
+def log(message: str = "", style: Optional[str] = None) -> None:
+    if USE_RICH:
+        console.print(message, style=style)
+    else:
+        print(message)
+
+
+def make_progress() -> Optional[Progress]:
+    if not USE_RICH:
+        return None
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        console=console,
+    )
+
 
 def _sanitize(value: str) -> str:
     """Replace characters that are problematic in filenames/keys."""
@@ -39,12 +85,12 @@ def load_data(data_path: str, outlier_col: Optional[str], include_outliers: bool
     df = pd.read_csv(data_path, low_memory=False)
     if include_outliers or outlier_col is None or outlier_col not in df.columns:
         if not include_outliers and outlier_col is not None and outlier_col not in df.columns:
-            print(f"Warning: outlier column '{outlier_col}' not found — keeping all rows.")
-        print(f"Loaded {len(df)} trials (no outlier filtering).")
+            log(f"Warning: outlier column '{outlier_col}' not found - keeping all rows.", "yellow")
+        log(f"Loaded {len(df)} trials (no outlier filtering).", "cyan")
         return df
     before = len(df)
     df = df[df[outlier_col] != 1].copy()
-    print(f"Loaded {before} trials, removed {before - len(df)} outliers, {len(df)} remaining.")
+    log(f"Loaded {before} trials, removed {before - len(df)} outliers, {len(df)} remaining.", "cyan")
     return df
 
 
@@ -81,7 +127,7 @@ def save_results(results: Dict, output_dir: str, label: str = None):
         json.dump(progress, f, indent=2)
 
     if label:
-        print(f"  Saved {len(results)} conditions.")
+        log(f"  Saved {len(results)} conditions.", "green")
 
 
 def group_conditions(
@@ -109,7 +155,7 @@ def group_conditions(
             if len(conditions) >= 1:
                 groups[exp_key] = conditions
             else:
-                print(f"  Skipping {exp_key}: no condition has >= {min_trials} trials.")
+                log(f"  Skipping {exp_key}: no condition has >= {min_trials} trials.", "yellow")
 
     return groups
 
@@ -123,23 +169,30 @@ def process_subject(
     y_col: str,
     existing_results: Optional[Dict] = None,
     missing_methods: Optional[List[str]] = None,
+    angle_scale_to_model: float = 1.0,
+    circ_space: int = 360,
+    progress: Optional[Progress] = None,
 ) -> Dict:
     methods_to_run = missing_methods if missing_methods is not None else methods
-    print(f"\nProcessing {subject_id}: {len(subject_conditions)} condition(s)" +
-          (f" (adding: {', '.join(methods_to_run)})" if missing_methods else ""))
+    log(f"\nProcessing {subject_id}: {len(subject_conditions)} condition(s)" +
+        (f" (adding: {', '.join(methods_to_run)})" if missing_methods else ""), "bold cyan")
 
     # Filter and convert each condition to a JAX array
     condition_datasets = {}
     for cond_key, cond_df in subject_conditions.items():
         clean = filter_data_for_fitting(cond_df, feat_diff_col=x_col, bias_col=y_col, verbose=False)
         if len(clean) < 10:
-            print(f"  Skipping {cond_key}: only {len(clean)} valid trials after filtering.")
+            log(f"  Skipping {cond_key}: only {len(clean)} valid trials after filtering.", "yellow")
             continue
-        condition_datasets[cond_key] = jnp.asarray(clean[[x_col, y_col]].values)
-        print(f"  {cond_key}: {len(clean)} trials")
+        data = clean[[x_col, y_col]].values.copy()
+        if angle_scale_to_model != 1.0:
+            data[:, 0] = data[:, 0] * angle_scale_to_model
+            data[:, 1] = data[:, 1] * angle_scale_to_model
+        condition_datasets[cond_key] = jnp.asarray(data)
+        log(f"  {cond_key}: {len(clean)} trials", "cyan")
 
     if not condition_datasets:
-        print(f"  Skipping {subject_id}: no valid conditions remain.")
+        log(f"  Skipping {subject_id}: no valid conditions remain.", "yellow")
         return {}
 
     optimizer.update_dataset(condition_datasets)
@@ -156,16 +209,29 @@ def process_subject(
     }
 
     method_results = {}
+    method_task = None
+    if progress is not None:
+        method_task = progress.add_task(f"[magenta]Methods for {subject_id}", total=len(methods_to_run))
     for method in methods_to_run:
-        print(f"  Running {method}...")
+        log(f"  Running {method}...", "magenta")
         t0 = time.time()
-        result = optimizer.fit_hierarchical_grid(fitting_method=method, verbosity=1,
-                                                 shared_grid_size=40, feat_grid_size=20)
+        status = None
+        if USE_RICH:
+            status = console.status(f"[bold magenta]Fitting {subject_id} / {method}[/]", spinner="dots")
+            status.start()
+        try:
+            result = optimizer.fit_hierarchical_grid(fitting_method=method, verbosity=1,
+                                                     shared_grid_size=40, feat_grid_size=20)
+        finally:
+            if status is not None:
+                status.stop()
         duration = time.time() - t0
         method_results[method] = {'result': result, 'duration': duration}
         shared = result['shared_params']
-        print(f"  {method} done in {duration:.1f}s — "
-              f"sd_spat={shared['sd_spat']:.1f}, sd_motor={shared['sd_motor']:.1f}")
+        log(f"  {method} done in {duration:.1f}s - "
+            f"sd_spat={shared['sd_spat']:.1f}, sd_motor={shared['sd_motor']:.1f}", "green")
+        if progress is not None and method_task is not None:
+            progress.advance(method_task)
 
     condition_results = {}
     for cond_key in condition_datasets:
@@ -175,6 +241,8 @@ def process_subject(
             'data_df': condition_datasets[cond_key],
             'n_trials': len(subject_conditions[cond_key]),
             'empirical_curves': empirical_curves.get(cond_key, {}),
+            'circ_space': circ_space,
+            'angle_scale_to_model': angle_scale_to_model,
         })
         for method, mdata in method_results.items():
             opt = mdata['result']
@@ -186,6 +254,7 @@ def process_subject(
                     shared['sd_spat'], shared['sd_motor'],
                 ]),
                 f'{method}_optimization_time': mdata['duration'],
+                f'{method}_stage_times': opt.get('stage_times', []),
                 f'{method}_loss': cond_res['loss'],
             })
         condition_results[cond_key] = entry
@@ -211,20 +280,43 @@ def run_fitting(
     corr_weight: float = 0.25,
     skip_motor_noise: bool = True,
     results_dir: str = 'results',
+    circ_space: int = 360,
 ):
     methods = methods or ['density']
+
+    from shared.config import config as _cfg
+    model_circ_space = 2 * _cfg.feat_diff_range[1]
+    angle_scale_to_model = model_circ_space / circ_space
 
     resolved_output = resolve_results_path(output_dir, results_dir)
     resolved_checkpoint = resolve_input_path(checkpoint_path, results_dir)
 
-    print("=== Demixing Model Fitting ===")
-    print(f"Data:       {data_path}")
-    print(f"Checkpoint: {resolved_checkpoint}")
-    print(f"Output:     {resolved_output}")
-    print(f"Methods:    {', '.join(methods)}")
-    print(f"Columns:    exp={exp_col}, subject={subject_col}, condition={condition_col}, "
-          f"x={x_col}, y={y_col}")
-    print()
+    if USE_RICH:
+        table = Table.grid(padding=(0, 2))
+        table.add_column(style="bold")
+        table.add_column()
+        table.add_row("Data", str(data_path))
+        table.add_row("Checkpoint", str(resolved_checkpoint))
+        table.add_row("Output", str(resolved_output))
+        table.add_row("Methods", ", ".join(methods))
+        table.add_row("Columns", f"exp={exp_col}, subject={subject_col}, condition={condition_col}, x={x_col}, y={y_col}")
+        circ_text = f"{circ_space}°"
+        if angle_scale_to_model != 1.0:
+            circ_text += f" (angles scaled x{angle_scale_to_model:.3f} into model space)"
+        table.add_row("Circular space", circ_text)
+        console.print(Panel(table, title="[bold cyan]Demixing Model Fitting[/]", border_style="cyan"))
+    else:
+        print("=== Demixing Model Fitting ===")
+        print(f"Data:       {data_path}")
+        print(f"Checkpoint: {resolved_checkpoint}")
+        print(f"Output:     {resolved_output}")
+        print(f"Methods:    {', '.join(methods)}")
+        print(f"Columns:    exp={exp_col}, subject={subject_col}, condition={condition_col}, "
+              f"x={x_col}, y={y_col}")
+        print(f"Circular space: {circ_space}°"
+              + (f" (angles scaled x{angle_scale_to_model:.3f} into model space)"
+                 if angle_scale_to_model != 1.0 else ""))
+        print()
 
     Path(resolved_output).mkdir(exist_ok=True, parents=True)
 
@@ -238,60 +330,97 @@ def run_fitting(
 
     existing_results, completed = load_results(resolved_output) if resume else ({}, set())
 
-    print("Initializing optimizer...")
+    log("Initializing optimizer...", "bold cyan")
     dummy = jnp.asarray(np.random.uniform(-180, 180, (100, 2)))
-    optimizer = GridBasedMultiConditionOptimizer(
-        str(resolved_checkpoint), {'dummy': dummy},
-        skip_motor_noise=skip_motor_noise, corr_weight=corr_weight,
-    )
-    print("Optimizer ready.\n")
+    status = None
+    if USE_RICH:
+        status = console.status("[bold cyan]Loading model and compiling optimizer[/]", spinner="dots")
+        status.start()
+    try:
+        optimizer = GridBasedMultiConditionOptimizer(
+            str(resolved_checkpoint), {'dummy': dummy},
+            skip_motor_noise=skip_motor_noise, corr_weight=corr_weight,
+        )
+    finally:
+        if status is not None:
+            status.stop()
+    log("Optimizer ready.\n", "green")
 
     subject_groups = group_conditions(df, exp_col, subject_col, condition_col, min_trials)
     n_total = min(len(subject_groups), max_subjects) if max_subjects else len(subject_groups)
-    print(f"Subject×experiment groups: {n_total} | Completed: {len(completed)} | "
-          f"Remaining: {n_total - len(completed)}\n")
+    log(f"Subject x experiment groups: {n_total} | Completed: {len(completed)} | "
+        f"Remaining: {n_total - len(completed)}\n", "bold")
 
     n_done = 0
     t_start = time.time()
 
-    for subject_id, subject_conditions in subject_groups.items():
-        if max_subjects and n_done >= max_subjects:
-            break
+    progress = make_progress()
+    progress_cm = progress if progress is not None else None
+    if progress_cm is None:
+        class _NullProgress:
+            def __enter__(self): return None
+            def __exit__(self, *args): return False
+        progress_cm = _NullProgress()
 
-        if subject_id in completed:
-            sample = next((v for k, v in existing_results.items()
-                           if k.startswith(f"{subject_id}#")), None)
-            missing = [m for m in methods
-                       if sample is None or f'{m}_fitted_params' not in sample]
-            if not missing:
-                print(f"Skipping {subject_id}: already complete.")
-                continue
-            subject_existing = {k: v for k, v in existing_results.items()
-                                 if k.startswith(f"{subject_id}#")}
-        else:
-            missing, subject_existing = None, None
+    with progress_cm as active_progress:
+        subject_task = None
+        if active_progress is not None:
+            subject_task = active_progress.add_task("[cyan]Subjects", total=n_total)
 
-        try:
-            results = process_subject(
-                subject_id, subject_conditions, optimizer, methods,
-                x_col, y_col, subject_existing, missing,
-            )
-            existing_results.update(results)
-            n_done += 1
-            save_results(existing_results, resolved_output, subject_id)
+        for subject_id, subject_conditions in subject_groups.items():
+            if max_subjects and n_done >= max_subjects:
+                break
 
-            elapsed = time.time() - t_start
-            eta = (n_total - n_done) * elapsed / n_done
-            print(f"  Progress: {n_done}/{n_total} | "
-                  f"Elapsed: {elapsed/60:.1f}m | ETA: {eta/60:.1f}m")
+            if subject_id in completed:
+                sample = next((v for k, v in existing_results.items()
+                               if k.startswith(f"{subject_id}#")), None)
+                metadata_mismatch = (
+                    sample is None
+                    or sample.get('circ_space', 360) != circ_space
+                    or not np.isclose(sample.get('angle_scale_to_model', 1.0), angle_scale_to_model)
+                )
+                if metadata_mismatch:
+                    log(f"Re-fitting {subject_id}: existing results use a different circular-space transform.", "yellow")
+                    missing, subject_existing = None, None
+                else:
+                    missing = [m for m in methods
+                               if sample is None or f'{m}_fitted_params' not in sample]
+                    if not missing:
+                        log(f"Skipping {subject_id}: already complete.", "yellow")
+                        if active_progress is not None and subject_task is not None:
+                            active_progress.advance(subject_task)
+                        continue
+                    subject_existing = {k: v for k, v in existing_results.items()
+                                         if k.startswith(f"{subject_id}#")}
+            else:
+                missing, subject_existing = None, None
 
-        except Exception as e:
-            print(f"  Error processing {subject_id}: {e}")
-            raise
+            try:
+                results = process_subject(
+                    subject_id, subject_conditions, optimizer, methods,
+                    x_col, y_col, subject_existing, missing,
+                    angle_scale_to_model=angle_scale_to_model,
+                    circ_space=circ_space,
+                    progress=active_progress,
+                )
+                existing_results.update(results)
+                n_done += 1
+                save_results(existing_results, resolved_output, subject_id)
+
+                elapsed = time.time() - t_start
+                eta = (n_total - n_done) * elapsed / n_done
+                log(f"  Progress: {n_done}/{n_total} | "
+                    f"Elapsed: {elapsed/60:.1f}m | ETA: {eta/60:.1f}m", "cyan")
+                if active_progress is not None and subject_task is not None:
+                    active_progress.advance(subject_task)
+
+            except Exception as e:
+                log(f"  Error processing {subject_id}: {e}", "bold red")
+                raise
 
     save_results(existing_results, resolved_output, 'FINAL')
     total = time.time() - t_start
-    print(f"\nDone. {len(existing_results)} conditions fitted in {total/60:.1f}m.")
+    log(f"\nDone. {len(existing_results)} conditions fitted in {total/60:.1f}m.", "bold green")
 
 
 if __name__ == '__main__':
@@ -320,7 +449,7 @@ if __name__ == '__main__':
     parser.add_argument('--include-outliers', action='store_true',
                         help='Skip outlier filtering.')
     parser.add_argument('--include-methods', nargs='+', default=['density'],
-                        choices=['density', 'expectation', 'likelihood', 'crps'],
+                        choices=['density', 'expectation', 'likelihood', 'crps', 'balanced_crps'],
                         help='Optimisation method(s) to run.')
     parser.add_argument('--min-trials', type=int, default=30,
                         help='Minimum trials per condition to include.')
@@ -334,6 +463,11 @@ if __name__ == '__main__':
                         help='Include motor noise parameter (slower, rarely needed).')
     parser.add_argument('--results-dir', default='results',
                         help='Base directory for relative output paths.')
+    parser.add_argument('--circ-space', type=int, default=360, choices=[180, 360],
+                        help='Circular space of the input data. Use 180 for axial orientation '
+                             'data in which feature differences span 0–90° and errors span '
+                             '±90°; values are doubled into the model 360° space. Use 360 '
+                             'when data already match model space.')
 
     args = parser.parse_args()
 
@@ -355,4 +489,5 @@ if __name__ == '__main__':
         corr_weight=args.corr_weight,
         skip_motor_noise=args.skip_motor_noise,
         results_dir=args.results_dir,
+        circ_space=args.circ_space,
     )
