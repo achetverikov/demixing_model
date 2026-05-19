@@ -62,6 +62,7 @@ OPTIMIZER_LABELS = {
     'density': 'Density',
     'balanced_crps': 'Balanced CRPS',
 }
+LOSS_EVALUATION_METHODS = ['density', 'expectation', 'likelihood', 'crps', 'balanced_crps']
 
 
 def _angle_display_scale(circ_space: int = 360) -> float:
@@ -380,17 +381,22 @@ def prepare_all_subjects_data(
 
                 optimizer_params = {}
                 optimizer_losses = {}
+                optimizer_eval_losses = {}
                 for opt in available_optimizers:
                     param_key = f'{opt}_fitted_params'
                     loss_key = f'{opt}_loss'
+                    eval_key = f'{opt}_evaluation_losses'
                     if param_key in result:
                         optimizer_params[opt] = result[param_key]
                     if loss_key in result:
                         optimizer_losses[opt] = result[loss_key]
+                    if eval_key in result:
+                        optimizer_eval_losses[opt] = result[eval_key]
 
                 experiment_parameters[noise_cond] = {
                     'params': optimizer_params,
-                    'losses': optimizer_losses
+                    'losses': optimizer_losses,
+                    'eval_losses': optimizer_eval_losses,
                 }
 
                 # Collect condition data (data_df is already cleaned)
@@ -868,6 +874,7 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                     # Parameter data from preprocessed results
                     opt_params_list = []
                     opt_losses = []
+                    opt_eval_losses = {method: [] for method in LOSS_EVALUATION_METHODS}
                     opt_mse_losses = []
                     opt_corr_losses = []
 
@@ -879,10 +886,13 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                         # Handle both old format (parameters[opt]) and new format (parameters['params'][opt])
                         opt_params = parameters.get('params', {}).get(opt, parameters.get(opt))
                         opt_loss = parameters.get('losses', {}).get(opt, 0.0)
+                        eval_losses = parameters.get('eval_losses', {}).get(opt, {})
 
                         if opt_params is not None:
                             opt_params_list.append(opt_params)
                             opt_losses.append(opt_loss)
+                            for loss_method in LOSS_EVALUATION_METHODS:
+                                opt_eval_losses[loss_method].append(eval_losses.get(loss_method, np.nan))
 
                             # Compute density loss components for density optimizer
                             if opt == 'density':
@@ -936,6 +946,8 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                         'sd_spat': opt_params_array[:, 2],
                         f'{opt}_loss': opt_losses
                     }
+                    for loss_method, values in opt_eval_losses.items():
+                        param_df_data[f'eval_{loss_method}_loss'] = values
 
                     # Add density loss components for density optimizer
                     if opt == 'density':
@@ -1240,9 +1252,7 @@ def create_pdf_slice_plots(
                     ax.fill_between(mu1_grid * angle_display_scale, prob_display, where=(mu1_grid < 0),
                                     alpha=0.35, color='tomato')
 
-                    if emp.max() > 0 and prob_display.max() > 0:
-                        emp = emp * (prob_display.max() / emp.max())
-                    ax.plot(bias_plot_grid, emp, color='darkorange', lw=1.5, alpha=0.85,
+                    ax.plot(bias_plot_grid, emp / angle_display_scale, color='darkorange', lw=1.5, alpha=0.85,
                             label='data (KDE)')
 
                     ax.axvline(E_display, color='black', lw=1.5, ls='--')
