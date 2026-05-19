@@ -14,6 +14,8 @@ __pycache__/
 /.claude/
 /test*/
 /debug*/
+*.csv
+!example_data/data_color_comb*.csv
 *.png
 *.pkl
 !pretrained/*.pkl
