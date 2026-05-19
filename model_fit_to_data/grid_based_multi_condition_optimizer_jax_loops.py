@@ -166,7 +166,7 @@ def create_shared_parameter_grid(grid_size: int = 20,
     return grid_points
 
 
-@partial(jax.jit, static_argnums=(1, 2))
+@partial(jax.jit, static_argnums=(1, 2, 3, 4))
 def generate_nn_density_asymmetry_batch(log_surfaces_batch: jnp.ndarray,
                                         feat_diff_grid=config.create_grid('feat_diff'),
                                         mu1_bias_grid=config.create_grid('mu1_bias'),
@@ -774,6 +774,52 @@ class GridBasedMultiConditionOptimizer:
         print(f"Bias weights shape: {self.unified_bias_weights.shape}")
         print(f"Density curves shape: {self.unified_target_density.shape}")
 
+        # Precompute empirical bias distributions for the balanced method.
+        # Q[c, j, k] = Gaussian-weighted empirical probability of bias bin k at feat_diff grid point j.
+        # target_d[c, j, k] = sum_l D_circ[k,l] * Q[c,j,l]  — expected circular distance from bin k
+        #                       to the empirical distribution.  Precomputed so the JIT branch is cheap.
+        print("Precomputing empirical bias distributions for balanced CRPS...")
+        D_np = np.array(self.D_circ_matrix)        # (n_bias, n_bias)
+        fd_grid_np = np.array(config.create_grid('feat_diff'))  # (n_feat,)
+        bias_low = config.mu1_bias_range[0]
+        bias_step_val = config.mu1_bias_step
+        n_feat_pts = len(fd_grid_np)
+        n_bias_pts = self.n_mu1_bias
+
+        target_d_list = []
+        fd_weights_list = []
+        for cond_name in self.condition_names:
+            dataset_np = np.array(self.condition_datasets[cond_name])
+            fd_vals = dataset_np[:, 0]
+            bias_vals = dataset_np[:, 1]
+
+            # Gaussian weights over feat_diff distance: shape (n_feat, n_trials)
+            gw = np.exp(-0.5 * ((fd_vals[None, :] - fd_grid_np[:, None]) / self.emp_density_weights_sd) ** 2)
+            w_c = gw.sum(axis=1)  # (n_feat,) — effective support weight per fd point
+
+            # Weighted histogram: Q_c[j, k] = sum_i gw[j,i] * I(bias_bin[i]==k) / w_c[j]
+            bias_bin = np.clip(
+                np.round((bias_vals - bias_low) / bias_step_val).astype(int), 0, n_bias_pts - 1
+            )
+            one_hot = np.zeros((len(bias_vals), n_bias_pts))
+            one_hot[np.arange(len(bias_vals)), bias_bin] = 1.0
+            Q_c = (gw @ one_hot) / np.maximum(w_c[:, None], 1e-10)  # (n_feat, n_bias)
+
+            # target_d[j, k] = (Q_c @ D_circ)[j, k]  (D_circ is symmetric)
+            target_d_list.append(Q_c @ D_np)   # (n_feat, n_bias)
+
+            # Loss weights: binary mask — 1 where there is data support, 0 elsewhere.
+            # Threshold at 1% of the median weight so edge fd bins with marginal
+            # support are excluded, but weighting is otherwise uniform (not trial-count-proportional).
+            support_threshold = np.median(w_c) * 0.01
+            fd_weights_list.append((w_c > support_threshold).astype(np.float32))
+
+        self.unified_target_d = jnp.array(np.stack(target_d_list))    # (n_cond, n_feat, n_bias)
+        self.unified_fd_weights = jnp.array(np.stack(fd_weights_list)) # (n_cond, n_feat) — binary mask
+        print(f"  target_d shape: {self.unified_target_d.shape}, "
+              f"fd_weights shape: {self.unified_fd_weights.shape}, "
+              f"mean support: {self.unified_fd_weights.mean():.2f}")
+
     def _optimize_all_conditions_hierarchical_jit(self, surfaces: jnp.ndarray,
                                                   cond_params_with_idx: jnp.ndarray,
                                                   surface_indices: jnp.ndarray,
@@ -870,9 +916,41 @@ class GridBasedMultiConditionOptimizer:
             param_crps = surface_condition_crps[surface_indices, condition_indices]
             losses = param_crps
 
+        elif fitting_method == "balanced_crps":
+            # Balanced energy score: equal weight to every feat_diff grid point regardless of
+            # how many trials fall there.  At each fd point j we compare the model distribution
+            # p[u,:,j] to the Gaussian-weighted empirical distribution Q[c,j,:] (precomputed).
+            #
+            # loss[u,c] = sum_j w[c,j] * (2 * p[u,:,j] @ target_d[c,j] - E2_model[u,j])
+            #             / sum_j w[c,j]
+            # where target_d[c,j] = D_circ @ Q[c,j]  and  E2_model[u,j] = p^T D_circ p.
+
+            log_prob_norm = surfaces - jax.scipy.special.logsumexp(surfaces, axis=1, keepdims=True)
+            prob_surfaces = jnp.exp(log_prob_norm)  # (n_unique, n_bias, n_feat)
+
+            # E2_model[u, j]: self-energy of the model distribution at each fd point
+            prob_fk = prob_surfaces.transpose(0, 2, 1).reshape(-1, n_bias)   # (n_unique*n_feat, n_bias)
+            Dp = prob_fk @ self.D_circ_matrix                                  # (n_unique*n_feat, n_bias)
+            E2 = (prob_fk * Dp).sum(axis=1).reshape(n_unique_surfaces, n_feat) # (n_unique, n_feat)
+
+            # Cross term: sum_{j,k} w[c,j] * p[u,k,j] * target_d[c,j,k]
+            # T_w[c,j,k] = w[c,j] * target_d[c,j,k]
+            T_w = self.unified_target_d * self.unified_fd_weights[:, :, None]  # (n_cond, n_feat, n_bias)
+            # einsum 'ukj,cjk->uc' — contract over bias (k) and feat (j)
+            cross_uc = jnp.einsum('ukj,cjk->uc', prob_surfaces, T_w)           # (n_unique, n_cond)
+
+            # Weighted E2: sum_j w[c,j] * E2[u,j]
+            E2_uc = E2 @ self.unified_fd_weights.T   # (n_unique, n_cond)
+
+            norm_c = self.unified_fd_weights.sum(axis=1)                        # (n_cond,)
+            loss_uc = (2.0 * cross_uc - E2_uc) / norm_c[None, :]               # (n_unique, n_cond)
+
+            losses = loss_uc[surface_indices, condition_indices]
+
         else:
             raise ValueError(
-                f"Unknown fitting method: {fitting_method}. Must be one of 'likelihood', 'expectation', 'density', 'crps'")
+                f"Unknown fitting method: {fitting_method}. Must be one of "
+                f"'likelihood', 'expectation', 'density', 'crps', 'balanced'")
 
         # Find best parameter for each condition
         min_losses = jax.ops.segment_min(losses, condition_indices, num_segments=self.n_conditions)
@@ -932,6 +1010,7 @@ class GridBasedMultiConditionOptimizer:
 
         best_overall_loss = float('inf')
         best_overall_result = None
+        stage_times = []
 
         # Stage 1: Coarse shared parameter search
         stage = 1
@@ -1078,6 +1157,7 @@ class GridBasedMultiConditionOptimizer:
                 print(f"  Best shared params: sd_spat={sd_spat:.1f}, sd_motor={sd_motor:.1f}, loss={stage_best_loss:.3f}")
 
             stage_time = time.time() - stage_start_time
+            stage_times.append(stage_time)
 
             if verbosity > 0:
                 print(f"\nStage {stage} completed in {stage_time:.1f}s")
@@ -1085,6 +1165,27 @@ class GridBasedMultiConditionOptimizer:
                       f"sd_motor={sd_motor:.1f}, loss={stage_best_loss:.3f}")
                 nn_evals_this_stage = len(shared_grid) * feat_grid_size ** 2
                 print(f"NN evaluations this stage: {nn_evals_this_stage:,}")
+
+            # Boundary-hit detection
+            spat_step = (sd_spat_range[1] - sd_spat_range[0]) / (shared_grid_size - 1)
+            if float(sd_spat) <= config.param_range_low + spat_step:
+                print(f"  BOUNDARY: sd_spat={float(sd_spat):.1f} near lower bound {config.param_range_low}")
+            if float(sd_spat) >= config.param_range_high - spat_step:
+                print(f"  BOUNDARY: sd_spat={float(sd_spat):.1f} near upper bound {config.param_range_high}")
+            feat1_best = best_shared_result[:, 3]
+            feat2_best = best_shared_result[:, 4]
+            current_feat_step = float(feat_step_schedule[-1])  # finest step reached this stage
+            for i in range(self.n_conditions):
+                cname = self.condition_names[i]
+                f1, f2 = float(feat1_best[i]), float(feat2_best[i])
+                if f1 <= config.param_range_low + current_feat_step:
+                    print(f"  BOUNDARY: {cname} sd_feat1={f1:.1f} near lower bound {config.param_range_low}")
+                if f1 >= config.param_range_high - current_feat_step:
+                    print(f"  BOUNDARY: {cname} sd_feat1={f1:.1f} near upper bound {config.param_range_high}")
+                if f2 <= config.param_range_low + current_feat_step:
+                    print(f"  BOUNDARY: {cname} sd_feat2={f2:.1f} near lower bound {config.param_range_low}")
+                if f2 >= config.param_range_high - current_feat_step:
+                    print(f"  BOUNDARY: {cname} sd_feat2={f2:.1f} near upper bound {config.param_range_high}")
 
             # Update overall best
             if stage_best_loss < best_overall_loss:
@@ -1163,6 +1264,7 @@ class GridBasedMultiConditionOptimizer:
             },
             'condition_results': condition_results,
             'total_time': total_time,
+            'stage_times': stage_times,
             'initial_grid_size': shared_grid_size,
             'initial_cond_grid': feat_grid_size,
             'min_grid_step': min_grid_step,
