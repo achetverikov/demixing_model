@@ -794,6 +794,11 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                 experiment_data = prepared_result['experiment_data']
                 noise_condition = prepared_result['noise_condition']
 
+                # Skip the "combined" pseudo-subject from summary statistics so
+                # group means/SDs reflect individual observers only.
+                if subject_id == "combined":
+                    continue
+
                 # Get precomputed optimizer curves for this subject+condition
                 optimizer_curves = experiment_data['optimizer_curves'].get(noise_condition, {})
                 empirical_curves = experiment_data['empirical_curves'].get(noise_condition, {})
@@ -834,6 +839,8 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
             valid_results = []
             for prepared_result in prepared_results_list:
                 subject_id = prepared_result['subject_id']
+                if subject_id == "combined":
+                    continue
                 experiment_data = prepared_result['experiment_data']
                 noise_condition = prepared_result['noise_condition']
 

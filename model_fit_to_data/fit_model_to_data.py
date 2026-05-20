@@ -36,7 +36,7 @@ from grid_based_multi_condition_optimizer_jax_loops import (
 from shared.utils import filter_data_for_fitting, resolve_input_path, resolve_results_path
 
 
-LOSS_EVALUATION_METHODS = ['density', 'expectation', 'likelihood', 'crps', 'balanced_crps']
+LOSS_EVALUATION_METHODS = ['density', 'expectation', 'likelihood', 'crps', 'balanced_crps', 'bias_weighted_crps']
 
 try:
     from rich.console import Console
@@ -530,7 +530,7 @@ if __name__ == '__main__':
     )
     parser.add_argument('--data-path', required=True,
                         help='Path to input CSV.')
-    parser.add_argument('--checkpoint-path', default='pretrained/model_epoch_1500.pkl',
+    parser.add_argument('--checkpoint-path', default='pretrained/model_epoch1500_8ktrain_20samples.pkl',
                         help='Path to trained NN checkpoint.')
     parser.add_argument('--output-dir', required=True,
                         help='Directory for results.')
@@ -549,7 +549,7 @@ if __name__ == '__main__':
     parser.add_argument('--include-outliers', action='store_true',
                         help='Skip outlier filtering.')
     parser.add_argument('--include-methods', nargs='+', default=['density'],
-                        choices=['density', 'expectation', 'likelihood', 'crps', 'balanced_crps'],
+                        choices=['density', 'expectation', 'likelihood', 'crps', 'balanced_crps', 'bias_weighted_crps'],
                         help='Optimisation method(s) to run.')
     parser.add_argument('--min-trials', type=int, default=30,
                         help='Minimum trials per condition to include.')

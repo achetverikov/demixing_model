@@ -11,10 +11,6 @@ Run from the repo root:
 """
 
 import os
-import pty
-import re
-import select
-import subprocess
 import sys
 from pathlib import Path
 
@@ -27,6 +23,10 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
 
 # ── paths ─────────────────────────────────────────────────────────────────────
 REPO_ROOT = Path(__file__).parent.resolve()
+sys.path.insert(0, str(REPO_ROOT))
+
+from shared.run_utils import announce, run  # noqa: E402
+
 DATA_URL = (
     "https://raw.githubusercontent.com/aozkirli/"
     "Large-scale-mega-analysis-on-serial-dependence/main/data/"
@@ -34,7 +34,7 @@ DATA_URL = (
 )
 PREPARED_CSV = REPO_ROOT / "example_data" / "fischer_whitney_prepared.csv"
 RESULTS_DIR  = "results/fischer_whitney"
-CHECKPOINT   = "pretrained/model_epoch_1500.pkl"
+CHECKPOINT   = "pretrained/model_epoch1500_8ktrain_20samples.pkl"
 
 PYTHONPATH = ":".join([
     str(REPO_ROOT),
@@ -42,45 +42,6 @@ PYTHONPATH = ":".join([
 ])
 ENV = {**os.environ, "PYTHONPATH": PYTHONPATH, "PYTHONUNBUFFERED": "1"}
 PYTHON = sys.executable  # use whichever interpreter launched this script
-
-ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-
-
-class LogCleaner:
-    """Strip terminal control codes and collapse carriage-return redraws."""
-
-    def __init__(self, log):
-        self.log = log
-        self.line = []
-        self.pending_cr = False
-
-    def write(self, text: str):
-        text = ANSI_RE.sub("", text)
-        for char in text:
-            if self.pending_cr:
-                if char == "\n":
-                    self._flush_line()
-                    self.pending_cr = False
-                    continue
-                self.line = []
-                self.pending_cr = False
-
-            if char == "\r":
-                self.pending_cr = True
-            elif char == "\n":
-                self._flush_line()
-            else:
-                self.line.append(char)
-
-    def close(self):
-        if self.line:
-            self._flush_line()
-        self.log.flush()
-
-    def _flush_line(self):
-        self.log.write("".join(self.line) + "\n")
-        self.log.flush()
-        self.line = []
 
 
 # ── preprocessing ─────────────────────────────────────────────────────────────
@@ -165,6 +126,12 @@ def prepare_data() -> Path:
         condition="orientation",
     )[["expName", "subject", "condition", "abs_td_dist", "bias_to_distr_corr", "is_outlier"]]
 
+    # Add a "combined" pseudo-subject: pool all trials so the model can be fit
+    # to the average observer.  Excluded from summary plots by downstream code.
+    combined = out.copy()
+    combined["subject"] = "combined"
+    out = pd.concat([out, combined], ignore_index=True)
+
     PREPARED_CSV.parent.mkdir(exist_ok=True)
     out.to_csv(PREPARED_CSV, index=False)
 
@@ -173,101 +140,6 @@ def prepare_data() -> Path:
     print(f"  outlier rate:       {out['is_outlier'].mean():.1%}")
     print(f"  Saved → {PREPARED_CSV}")
     return PREPARED_CSV
-
-
-# ── subprocess helpers ────────────────────────────────────────────────────────
-
-def announce(title: str, log=None):
-    message = f"\n{'=' * 60}\n{title}\n{'=' * 60}\n"
-    sys.stdout.write(message)
-    sys.stdout.flush()
-    if log:
-        log.write(message)
-        log.flush()
-
-
-def run(cmd: list, log=None):
-    header = f"\n$ {' '.join(str(c) for c in cmd)}\n{'─'*60}\n"
-    sys.stdout.write(header)
-    sys.stdout.flush()
-    if log:
-        log.write(header)
-        log.flush()
-
-    if log and os.name == "posix" and sys.stdout.isatty():
-        run_with_pty(cmd, log)
-        sys.stdout.write("\n")
-        sys.stdout.flush()
-        return
-
-    proc = subprocess.Popen(
-        cmd, cwd=REPO_ROOT, env=ENV,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, bufsize=1,
-    )
-    for line in proc.stdout:
-        sys.stdout.write(line)
-        sys.stdout.flush()
-        if log:
-            log.write(line)
-            log.flush()
-    proc.wait()
-    if proc.returncode != 0:
-        sys.exit(proc.returncode)
-
-
-def run_with_pty(cmd: list, log):
-    master_fd, slave_fd = pty.openpty()
-    cleaner = LogCleaner(log)
-    proc = None
-    try:
-        proc = subprocess.Popen(
-            cmd, cwd=REPO_ROOT, env=ENV,
-            stdin=subprocess.DEVNULL,
-            stdout=slave_fd, stderr=subprocess.STDOUT,
-            close_fds=True,
-        )
-        os.close(slave_fd)
-        slave_fd = None
-
-        while True:
-            ready, _, _ = select.select([master_fd], [], [], 0.1)
-            if master_fd in ready:
-                try:
-                    chunk = os.read(master_fd, 4096)
-                except OSError:
-                    break
-                if not chunk:
-                    break
-                sys.stdout.buffer.write(chunk)
-                sys.stdout.buffer.flush()
-                cleaner.write(chunk.decode(errors="replace"))
-
-            if proc.poll() is not None:
-                # Drain anything left in the pseudo-terminal.
-                while True:
-                    ready, _, _ = select.select([master_fd], [], [], 0)
-                    if master_fd not in ready:
-                        break
-                    try:
-                        chunk = os.read(master_fd, 4096)
-                    except OSError:
-                        break
-                    if not chunk:
-                        break
-                    sys.stdout.buffer.write(chunk)
-                    sys.stdout.buffer.flush()
-                    cleaner.write(chunk.decode(errors="replace"))
-                break
-    finally:
-        cleaner.close()
-        if slave_fd is not None:
-            os.close(slave_fd)
-        os.close(master_fd)
-
-    proc.wait()
-    if proc is None or proc.returncode != 0:
-        sys.exit(proc.returncode if proc is not None else 1)
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -287,9 +159,9 @@ if __name__ == "__main__":
             "--output-dir",      RESULTS_DIR,
         #    "--no-skip-motor-noise",
             # "--include-outliers",
-            "--include-methods", "density", "expectation", "balanced_crps",
+            "--include-methods", "density", "expectation", "balanced_crps", "bias_weighted_crps",
             "--circ-space",      "180",
-        ], log=log)
+        ], cwd=REPO_ROOT, env=ENV, log=log)
 
         announce("STEP 2 — Generate plots", log)
         run([
@@ -301,7 +173,7 @@ if __name__ == "__main__":
             "--summary-plots",
             "--csv-exports",
             "--circ-space",      "180",
-        ], log=log)
+        ], cwd=REPO_ROOT, env=ENV, log=log)
 
     print(f"\nDone.  Results → {RESULTS_DIR}/")
     print(f"       Plots   → {RESULTS_DIR}/summary_plots/")

@@ -788,6 +788,7 @@ class GridBasedMultiConditionOptimizer:
 
         target_d_list = []
         fd_weights_list = []
+        fd_bias_weights_list = []
         for cond_name in self.condition_names:
             dataset_np = np.array(self.condition_datasets[cond_name])
             fd_vals = dataset_np[:, 0]
@@ -812,10 +813,17 @@ class GridBasedMultiConditionOptimizer:
             # Threshold at 1% of the median weight so edge fd bins with marginal
             # support are excluded, but weighting is otherwise uniform (not trial-count-proportional).
             support_threshold = np.median(w_c) * 0.01
-            fd_weights_list.append((w_c > support_threshold).astype(np.float32))
+            support_mask = (w_c > support_threshold).astype(np.float32)
+            fd_weights_list.append(support_mask)
 
-        self.unified_target_d = jnp.array(np.stack(target_d_list))    # (n_cond, n_feat, n_bias)
-        self.unified_fd_weights = jnp.array(np.stack(fd_weights_list)) # (n_cond, n_feat) — binary mask
+            # Bias-weighted CRPS: weight each fd point by |mean_bias| so that
+            # feat_diff ranges with large observed bias contribute more to the loss.
+            mean_bias = (gw @ bias_vals) / np.maximum(w_c, 1e-10)   # (n_feat,)
+            fd_bias_weights_list.append(mean_bias ** 2 * support_mask)
+
+        self.unified_target_d = jnp.array(np.stack(target_d_list))         # (n_cond, n_feat, n_bias)
+        self.unified_fd_weights = jnp.array(np.stack(fd_weights_list))      # (n_cond, n_feat) — binary mask
+        self.unified_bias_fd_weights = jnp.array(np.stack(fd_bias_weights_list))  # (n_cond, n_feat)
         print(f"  target_d shape: {self.unified_target_d.shape}, "
               f"fd_weights shape: {self.unified_fd_weights.shape}, "
               f"mean support: {self.unified_fd_weights.mean():.2f}")
@@ -947,10 +955,33 @@ class GridBasedMultiConditionOptimizer:
 
             losses = loss_uc[surface_indices, condition_indices]
 
+        elif fitting_method == "bias_weighted_crps":
+            # Same energy-score formula as balanced_crps but fd points are weighted
+            # by |mean_bias| instead of a binary support mask, so feat_diff ranges
+            # with larger observed bias contribute more to the loss.
+
+            log_prob_norm = surfaces - jax.scipy.special.logsumexp(surfaces, axis=1, keepdims=True)
+            prob_surfaces = jnp.exp(log_prob_norm)  # (n_unique, n_bias, n_feat)
+
+            prob_fk = prob_surfaces.transpose(0, 2, 1).reshape(-1, n_bias)
+            Dp = prob_fk @ self.D_circ_matrix
+            E2 = (prob_fk * Dp).sum(axis=1).reshape(n_unique_surfaces, n_feat)
+
+            T_w = self.unified_target_d * self.unified_bias_fd_weights[:, :, None]
+            cross_uc = jnp.einsum('ukj,cjk->uc', prob_surfaces, T_w)
+
+            E2_uc = E2 @ self.unified_bias_fd_weights.T
+
+            norm_c = self.unified_bias_fd_weights.sum(axis=1)
+            # Avoid division by zero for conditions where all bias weights are 0
+            loss_uc = (2.0 * cross_uc - E2_uc) / jnp.maximum(norm_c[None, :], 1e-10)
+
+            losses = loss_uc[surface_indices, condition_indices]
+
         else:
             raise ValueError(
                 f"Unknown fitting method: {fitting_method}. Must be one of "
-                f"'likelihood', 'expectation', 'density', 'crps', 'balanced'")
+                f"'likelihood', 'expectation', 'density', 'crps', 'balanced_crps', 'bias_weighted_crps'")
 
         # Find best parameter for each condition
         min_losses = jax.ops.segment_min(losses, condition_indices, num_segments=self.n_conditions)
