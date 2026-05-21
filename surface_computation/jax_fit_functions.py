@@ -448,36 +448,30 @@ def train_em_jax(key, observed, num_comp=2, n_init=50, rtol=1e-3, max_iter=5000)
         return x
 
     def generate_inits(key):
-        """
-        Generates initial values for the EM algorithm.
+        pi_init = jnp.full((n_init, num_comp), 1.0 / num_comp)
 
-        :param key: PRNG key for random number generation.
-        :return: Tuple containing the initial values.
-        """
-        raw_pi_init = jax.random.uniform(key, shape=(n_init, num_comp))
-        pi_init = raw_pi_init / raw_pi_init.sum(-1, keepdims=True)
-        key, subkey = jax.random.split(key)
-        # mu_init = jax.random.uniform(subkey, minval=-180, maxval=180, shape=(n_init, num_comp, observed.shape[-1]))
-        angles = jnp.linspace(0, 180, n_init)
-
-        # Make mirror pairs: [-angle, angle]
-        mu_init = jnp.stack([-angles, angles], axis=1)  # shape: (n_init, 2)
-        n_trials = observed.shape[-1]
-        # Expand to all trials
-        mu_init = jnp.broadcast_to(mu_init[:, :, None], (n_init, 2, n_trials))  # shape: (n_init, 2, n_trials)
-
+        key, idx_key = jax.random.split(key)
+        idxs = jax.random.randint(idx_key, (n_init, num_comp), 0, observed.shape[0])
+        mu_init = observed[idxs]  # (n_init, K, D)
         mu1_init = mu_init[..., 0]
         mu2_init = mu_init[..., 1]
 
         if wrap_1st:
-            mu1_init = jnp.mod(mu1_init+180, 360.0)-180  # Wrap the first dimension
+            mu1_init = jnp.mod(mu1_init + 180, 360.0) - 180
         if wrap_2nd:
-            mu2_init = jnp.mod(mu2_init+180, 360.0) -180 # Wrap the 2nd dimension
+            mu2_init = jnp.mod(mu2_init + 180, 360.0) - 180
 
         key, subkey = jax.random.split(key)
-        sigma_init = jax.random.uniform(subkey, minval=40, maxval=120, shape=(n_init, num_comp, observed.shape[-1]))
+        data_sd = observed.std(0)
+        sigma_init = jax.random.uniform(
+            subkey,
+            minval=data_sd[None, None, :] * 0.3,
+            maxval=data_sd[None, None, :] * 2.0,
+            shape=(n_init, num_comp, observed.shape[-1])
+        )
         sigma1_init = sigma_init[..., 0]
         sigma2_init = sigma_init[..., 1]
+
         loss_init = -jnp.ones([n_init]) * jnp.inf
         loss_upd_init = jnp.ones([n_init]) * jnp.inf
 
