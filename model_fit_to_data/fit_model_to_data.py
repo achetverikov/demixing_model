@@ -36,7 +36,9 @@ from grid_based_multi_condition_optimizer_jax_loops import (
 from shared.utils import filter_data_for_fitting, resolve_input_path, resolve_results_path
 
 
-LOSS_EVALUATION_METHODS = ['density', 'expectation', 'likelihood', 'crps', 'balanced_crps', 'bias_weighted_crps']
+LOSS_EVALUATION_METHODS = [
+    'density', 'expectation', 'likelihood', 'crps', 'balanced_crps', 'bias_weighted_crps',
+]
 
 try:
     from rich.console import Console
@@ -63,6 +65,13 @@ console = Console(color_system="auto") if USE_RICH else None
 
 
 def log(message: str = "", style: Optional[str] = None) -> None:
+    """Print a message to the console, using Rich styling when available.
+
+    Args:
+        message: Text to print.
+        style: Optional Rich style string (e.g. ``"green"``, ``"yellow bold"``).
+               Ignored in plain-text mode.
+    """
     if USE_RICH:
         console.print(message, style=style)
     else:
@@ -70,6 +79,12 @@ def log(message: str = "", style: Optional[str] = None) -> None:
 
 
 def make_progress() -> Optional[Progress]:
+    """Create a Rich Progress bar configured for model fitting, or None in plain-text mode.
+
+    Returns:
+        Configured :class:`rich.progress.Progress` instance, or ``None`` when
+        Rich is unavailable (e.g. non-TTY output).
+    """
     if not USE_RICH:
         return None
     return Progress(
@@ -89,6 +104,18 @@ def _sanitize(value: str) -> str:
 
 
 def load_data(data_path: str, outlier_col: Optional[str], include_outliers: bool) -> pd.DataFrame:
+    """Load trial data from a CSV file and optionally filter outlier rows.
+
+    Args:
+        data_path: Path to the CSV file.
+        outlier_col: Column whose value of ``1`` marks a trial as an outlier.
+            If ``None`` or the column is absent, no filtering is applied.
+        include_outliers: If ``True``, skip outlier filtering regardless of
+            ``outlier_col``.
+
+    Returns:
+        DataFrame of (filtered) trial rows.
+    """
     df = pd.read_csv(data_path, low_memory=False)
     if include_outliers or outlier_col is None or outlier_col not in df.columns:
         if not include_outliers and outlier_col is not None and outlier_col not in df.columns:
@@ -102,6 +129,17 @@ def load_data(data_path: str, outlier_col: Optional[str], include_outliers: bool
 
 
 def load_results(output_dir: str):
+    """Load previously saved fit results from disk.
+
+    Args:
+        output_dir: Directory that may contain ``extended_fit_results.pkl``.
+
+    Returns:
+        Tuple of (results dict, completed set) where results maps condition
+        keys to fit result dicts and completed is the set of already-processed
+        condition key prefixes (without the trailing ``#<hash>`` suffix).
+        Both are empty when no results file exists.
+    """
     results_file = Path(output_dir) / 'extended_fit_results.pkl'
     if not results_file.exists():
         return {}, set()
@@ -112,6 +150,17 @@ def load_results(output_dir: str):
 
 
 def save_results(results: Dict, output_dir: str, label: str = None):
+    """Persist fit results to disk and write a JSON progress summary.
+
+    JAX arrays are converted to NumPy before pickling.  Internal
+    ``*_optimization_result`` keys are excluded from the saved file.
+
+    Args:
+        results: Mapping from condition key to fit result dict.
+        output_dir: Output directory (created if absent).
+        label: Human-readable label of the last completed condition written
+            into ``extended_progress.json``; ``None`` suppresses the log line.
+    """
     output_path = Path(output_dir)
     output_path.mkdir(exist_ok=True, parents=True)
 

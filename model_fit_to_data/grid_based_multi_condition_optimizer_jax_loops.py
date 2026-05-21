@@ -26,7 +26,18 @@ from shared.utils import load_checkpoint, compute_single_density_asymmetry
 
 
 def _generate_nn_bias_curve_batch(log_surfaces_batch: jnp.ndarray, target_feat_indices: jnp.ndarray) -> jnp.ndarray:
-    """Generate mu1 bias curves for batch of surfaces using proper circular integration."""
+    """Generate mu1 circular-mean bias curves for a batch of surfaces.
+
+    Args:
+        log_surfaces_batch: Log-probability surfaces with shape
+            ``(n_surfaces, n_mu1_bias, n_feat_diff)``.
+        target_feat_indices: Integer indices into the feat_diff axis selecting
+            which feature-difference values to evaluate.
+
+    Returns:
+        Circular mean bias values in degrees with shape
+        ``(n_surfaces, len(target_feat_indices))``.
+    """
     # Create grids
     mu1_bias_grid = config.create_grid('mu1_bias')
 
@@ -60,7 +71,24 @@ def _generate_nn_bias_curve_batch(log_surfaces_batch: jnp.ndarray, target_feat_i
 @jax.jit
 def compute_target_bias_curve_core(feat_diff_values: jnp.ndarray, bias_values: jnp.ndarray, n_trials: jnp.ndarray) -> \
 Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-    """Core bias curve computation for a single condition (vmap-compatible)."""
+    """Compute a binned target bias curve for a single condition (vmap-compatible).
+
+    Bins trials by feature-difference into 8-degree bins, computes the circular
+    mean bias per bin, and maps each bin centre to the nearest NN grid index.
+    Padding beyond ``n_trials`` is masked out before any computation.
+
+    Args:
+        feat_diff_values: Feature-difference values for each trial, zero-padded
+            to the fixed maximum trial count.
+        bias_values: Bias values in degrees for each trial, zero-padded to match.
+        n_trials: Scalar giving the actual number of valid (unpadded) trials.
+
+    Returns:
+        Tuple of ``(feat_indices, target_bias, weights)`` where ``feat_indices``
+        maps each bin to the NN feat_diff grid index, ``target_bias`` is the
+        circular mean bias per bin in degrees, and ``weights`` are trial counts
+        per bin (float32).
+    """
     # Create mask for valid trials instead of dynamic slicing
     max_trials = len(feat_diff_values)
     valid_mask = jnp.arange(max_trials) < n_trials
@@ -373,8 +401,25 @@ def _compute_curve_losses(predicted_curves: jnp.ndarray, target_curves: jnp.ndar
 
         # Combined loss with weights
         losses = (1 - corr_weight) * mse_scaled + corr_weight * corr_losses
+    elif loss_type == "ccc":
+        pred_mean = jnp.mean(predicted_curves, axis=1)
+        target_mean = jnp.mean(target_curves, axis=1)
+        pred_centered = predicted_curves - pred_mean[:, None]
+        target_centered = target_curves - target_mean[:, None]
+
+        covariance = jnp.mean(pred_centered * target_centered, axis=1)
+        pred_var = jnp.mean(pred_centered ** 2, axis=1)
+        target_var = jnp.mean(target_centered ** 2, axis=1)
+        mean_diff_sq = (pred_mean - target_mean) ** 2
+
+        ccc = (2 * covariance) / jnp.maximum(pred_var + target_var + mean_diff_sq, 1e-10)
+        losses = 1 - ccc
+    elif loss_type == "nrmse":
+        rmse = jnp.sqrt(jnp.mean(diff ** 2, axis=1))
+        target_range = jnp.abs(jnp.max(target_curves, axis=1) - jnp.min(target_curves, axis=1))
+        losses = rmse / jnp.maximum(target_range, 1e-6)
     else:
-        raise ValueError("Unknown loss type {}. Should be one of the mse, mad, or combined.".format(loss_type))
+        raise ValueError("Unknown loss type {}. Should be one of mse, mad, combined, ccc, or nrmse.".format(loss_type))
 
     return losses
 

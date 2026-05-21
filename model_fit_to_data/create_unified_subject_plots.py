@@ -835,6 +835,11 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                 if len(stage_sd_curves[opt]) > 0:
                     stage_sd_curves[opt] = jnp.array(stage_sd_curves[opt])
 
+            # Drop optimizers that had no subjects with data for this condition;
+            # stage_bias_curves[opt] stays a plain list when conversion was skipped.
+            available_optimizers = [opt for opt in available_optimizers
+                                    if not isinstance(stage_bias_curves[opt], list)]
+
             # Collect data for CSV export using preprocessed data
             valid_results = []
             for prepared_result in prepared_results_list:

@@ -37,7 +37,7 @@ dtype = np.float64 if use_float64 else np.float32
 print(jax.device_count())
 
 # Configuration flags
-wrap_1st = True   # @param {type:"boolean"}
+wrap_1st = False   # OSF d'=1 2D simulations are linear Gaussian, not circular.
 wrap_2nd = False   # @param {type:"boolean"}
 enable_sharding = False   # @param {type:"boolean"}
 
@@ -245,7 +245,7 @@ def wn_mean_var(X_wrapped, membership_weight=None):
 
     sigma_sq_wrapped = jnp.log(1 / R_sq_e)
     sigma_wrapped = jnp.rad2deg(jnp.sqrt(sigma_sq_wrapped))
-    sigma_wrapped = jnp.clip(sigma_wrapped, min=5)
+    sigma_wrapped = jnp.clip(sigma_wrapped, min=1)
 
     return mu_wrapped, sigma_wrapped
 
@@ -266,7 +266,7 @@ def stn_mean_var(X_standard, membership_weight=None):
     sq_dev = (X_standard[:, None] - mu_standard) ** 2
     var_diag = jnp.sum(sq_dev * membership_weight, axis=0) / effect_number
     sd_standard = jnp.sqrt(var_diag)
-    sd_standard = jnp.clip(sd_standard, min=5)
+    sd_standard = jnp.clip(sd_standard, min=1)
 
     return mu_standard, sd_standard
 
@@ -389,7 +389,7 @@ def m_step(X, membership_weight):
     :return: Tuple (pi_updated, mu1_updated, mu2_updated, sigma1_updated, sigma2_updated).
     """
     # Compute the effective number of points per component
-    effect_number = membership_weight.sum(0)
+    effect_number = jnp.clip(membership_weight.sum(0), 1e-10)
     pi_updated = effect_number / X.shape[0]
 
     # Compute the updated means
@@ -401,14 +401,274 @@ def m_step(X, membership_weight):
     centered_x = X[:, None, ...] - mu_updated
 
     # Compute the updated diagonal covariances
-    sigma_updated_diag = jnp.sum(centered_x ** 2 * membership_weight[..., None], axis=0) / effect_number[..., None]
+    sigma_updated_diag = jnp.clip(
+        jnp.sum(centered_x ** 2 * membership_weight[..., None], axis=0) / effect_number[..., None],
+        1e-6
+    )
     sigma1_updated = sigma_updated_diag[:, 0]
     sigma2_updated = sigma_updated_diag[:, 1]
 
     return pi_updated, mu1_updated, mu2_updated, sigma1_updated, sigma2_updated
 
+
+@jax.jit
+def compute_log_prob_full_common(X, mu1, mu2, sigma1, sigma2, rho):
+    """Log probability for a two-component Gaussian with one shared full covariance."""
+    dx = X[:, None, 0] - mu1[None, :]
+    dy = X[:, None, 1] - mu2[None, :]
+    sigma1 = jnp.clip(sigma1, min=1e-3)
+    sigma2 = jnp.clip(sigma2, min=1e-3)
+    rho = jnp.clip(rho, -0.98, 0.98)
+    one_minus_r2 = jnp.clip(1.0 - rho ** 2, min=1e-6)
+    z = (dx / sigma1) ** 2 - 2.0 * rho * dx * dy / (sigma1 * sigma2) + (dy / sigma2) ** 2
+    log_norm = -jnp.log(2.0 * jnp.pi) - jnp.log(sigma1) - jnp.log(sigma2) - 0.5 * jnp.log(one_minus_r2)
+    return log_norm - 0.5 * z / one_minus_r2
+
+
+@jax.jit
+def e_step_full_common(X, pi, mu1, mu2, sigma1, sigma2, rho):
+    mixture_log_prob = compute_log_prob_full_common(X, mu1, mu2, sigma1, sigma2, rho) + jnp.log(pi)
+    log_membership_weight = mixture_log_prob - jsp.special.logsumexp(mixture_log_prob, axis=-1, keepdims=True)
+    return jnp.exp(log_membership_weight)
+
+
+@jax.jit
+def compute_loglike_full_common(X, pi, mu1, mu2, sigma1, sigma2, rho):
+    mixture_log_prob = compute_log_prob_full_common(X, mu1, mu2, sigma1, sigma2, rho) + jnp.log(pi)
+    return jnp.sum(jsp.special.logsumexp(mixture_log_prob, axis=-1))
+
+
+@jax.jit
+def m_step_full_common(X, membership_weight):
+    """M-step for free weights and a single full covariance shared by both components."""
+    effect_number = jnp.clip(membership_weight.sum(0), min=1.0)
+    pi_updated = effect_number / X.shape[0]
+
+    mu_updated = jnp.sum(X[:, None, :] * membership_weight[:, :, None], axis=0) / effect_number[:, None]
+    mu1_updated = mu_updated[:, 0]
+    mu2_updated = mu_updated[:, 1]
+
+    centered = X[:, None, :] - mu_updated[None, :, :]
+    weighted_outer = membership_weight[:, :, None, None] * (
+        centered[:, :, :, None] * centered[:, :, None, :]
+    )
+    cov = jnp.sum(weighted_outer, axis=(0, 1)) / X.shape[0]
+    cov_00 = jnp.clip(cov[0, 0], min=1.0)
+    cov_11 = jnp.clip(cov[1, 1], min=1.0)
+    sigma1_updated = jnp.sqrt(cov_00)
+    sigma2_updated = jnp.sqrt(cov_11)
+    rho_updated = jnp.clip(cov[0, 1] / (sigma1_updated * sigma2_updated), -0.98, 0.98)
+
+    return pi_updated, mu1_updated, mu2_updated, sigma1_updated, sigma2_updated, rho_updated
+
+
+@jax.jit
+def compute_log_prob_diag_common(X, mu1, mu2, sigma1, sigma2):
+    dx = X[:, None, 0] - mu1[None, :]
+    dy = X[:, None, 1] - mu2[None, :]
+    sigma1 = jnp.clip(sigma1, min=1e-3)
+    sigma2 = jnp.clip(sigma2, min=1e-3)
+    return (
+        -jnp.log(2.0 * jnp.pi)
+        - jnp.log(sigma1)
+        - jnp.log(sigma2)
+        - 0.5 * ((dx / sigma1) ** 2 + (dy / sigma2) ** 2)
+    )
+
+
+@jax.jit
+def e_step_diag_common(X, pi, mu1, mu2, sigma1, sigma2):
+    mixture_log_prob = compute_log_prob_diag_common(X, mu1, mu2, sigma1, sigma2) + jnp.log(pi)
+    log_membership_weight = mixture_log_prob - jsp.special.logsumexp(mixture_log_prob, axis=-1, keepdims=True)
+    return jnp.exp(log_membership_weight)
+
+
+@jax.jit
+def compute_loglike_diag_common(X, pi, mu1, mu2, sigma1, sigma2):
+    mixture_log_prob = compute_log_prob_diag_common(X, mu1, mu2, sigma1, sigma2) + jnp.log(pi)
+    return jnp.sum(jsp.special.logsumexp(mixture_log_prob, axis=-1))
+
+
+@jax.jit
+def m_step_diag_common(X, membership_weight):
+    effect_number = jnp.clip(membership_weight.sum(0), min=1.0)
+    pi_updated = effect_number / X.shape[0]
+    mu_updated = jnp.sum(X[:, None, :] * membership_weight[:, :, None], axis=0) / effect_number[:, None]
+    mu1_updated = mu_updated[:, 0]
+    mu2_updated = mu_updated[:, 1]
+    centered = X[:, None, :] - mu_updated[None, :, :]
+    weighted_sq = membership_weight[:, :, None] * centered ** 2
+    var = jnp.sum(weighted_sq, axis=(0, 1)) / X.shape[0]
+    sigma1_updated = jnp.sqrt(jnp.clip(var[0], min=1.0))
+    sigma2_updated = jnp.sqrt(jnp.clip(var[1], min=1.0))
+    return pi_updated, mu1_updated, mu2_updated, sigma1_updated, sigma2_updated
+
+
+@jax.jit
+def m_step_Lk_B(X, membership_weight):
+    """M-step for Gaussian_pk_Lk_B: per-component volume, shared normalised diagonal shape.
+
+    Each component gets its own overall scale (lambda_k) but both share the same
+    sigma_feat/sigma_spat ratio.  Implements the Celeux-Govaert [lambda_k B] update:
+      lambda_k = sqrt(var_feat_k * var_spat_k)
+      B (pooled) = weighted mean of (Sigma_k / lambda_k) across components, normalised |B|=1
+      sigma_feat_k = sqrt(lambda_k * b_feat),  sigma_spat_k = sqrt(lambda_k * b_spat)
+    """
+    effect_number = jnp.clip(membership_weight.sum(0), min=1.0)  # (K,)
+    pi_updated = effect_number / X.shape[0]
+
+    mu_updated = jnp.sum(X[:, None, :] * membership_weight[:, :, None], axis=0) / effect_number[:, None]
+    mu1_updated = mu_updated[:, 0]
+    mu2_updated = mu_updated[:, 1]
+
+    centered = X[:, None, :] - mu_updated[None, :, :]        # (N, K, 2)
+    weighted_sq = membership_weight[:, :, None] * centered ** 2
+    var = jnp.sum(weighted_sq, axis=0) / effect_number[:, None]   # (K, 2)
+
+    var1 = var[:, 0]  # per-component feat variance
+    var2 = var[:, 1]  # per-component spat variance
+
+    lam = jnp.sqrt(jnp.clip(var1 * var2, min=1e-6))  # per-component volume
+
+    # Pooled normalised shape, weighted by soft counts
+    b1_unnorm = jnp.sum(effect_number * var1 / lam) / X.shape[0]
+    b2_unnorm = jnp.sum(effect_number * var2 / lam) / X.shape[0]
+    norm = jnp.sqrt(jnp.clip(b1_unnorm * b2_unnorm, min=1e-12))
+    b1 = b1_unnorm / norm
+    b2 = b2_unnorm / norm
+
+    sigma1_updated = jnp.sqrt(jnp.clip(lam * b1, min=1.0))
+    sigma2_updated = jnp.sqrt(jnp.clip(lam * b2, min=1.0))
+    return pi_updated, mu1_updated, mu2_updated, sigma1_updated, sigma2_updated
+
+
 @partial(jax.jit, static_argnames=['num_comp', 'n_init', 'rtol', 'max_iter'])
-def train_em_jax(key, observed, num_comp=2, n_init=50, rtol=1e-3, max_iter=5000):
+def train_em_jax_Lk_B(key, observed, num_comp=2, n_init=400, rtol=1e-6, max_iter=5000):
+    """EM for Gaussian_pk_Lk_B: per-component volume, shared diagonal shape (ratio).
+
+    Equivalent to Rmixmod Gaussian_pk_Lk_B (diagonal family).
+    Both components share the same sigma_feat/sigma_spat ratio but can differ in
+    overall scale.  Uses the same initialisation grid as train_em_jax_diag_common.
+    """
+
+    def cond_fn(state):
+        i, pi, mu1, mu2, sigma1, sigma2, loss, loss_diff = state
+        return (i < max_iter) & (loss_diff > rtol)
+
+    def project_to_simplex_with_min(x, min_val=0.01):
+        x = jnp.maximum(x, min_val)
+        excess = jnp.sum(x) - 1.0
+        x -= excess * (x - min_val) / jnp.sum(x - min_val + 1e-8)
+        return x
+
+    def one_step(state):
+        i, pi, mu1, mu2, sigma1, sigma2, loss_i, loss_diff_i = state
+        membership_weight = e_step_diag_common(observed, pi, mu1, mu2, sigma1, sigma2)
+        pi_upd, mu1_upd, mu2_upd, sigma1_upd, sigma2_upd = m_step_Lk_B(observed, membership_weight)
+        pi_upd = project_to_simplex_with_min(pi_upd, 0.1)
+        loss_upd = compute_loglike_diag_common(observed, pi_upd, mu1_upd, mu2_upd, sigma1_upd, sigma2_upd)
+        loss_diff_upd = jnp.abs(loss_upd - loss_i) / (1e-12 + jnp.abs(loss_i))
+        return (i + 1, pi_upd, mu1_upd, mu2_upd, sigma1_upd, sigma2_upd, loss_upd, loss_diff_upd)
+
+    def run_one(init_state):
+        return jax.lax.while_loop(cond_fn, one_step, init_state)
+
+    key, idx_key, sigma_key = jax.random.split(key, 3)
+    pi_init = jnp.full((n_init, num_comp), 1.0 / num_comp)
+    idxs = jax.random.randint(idx_key, (n_init, num_comp), 0, observed.shape[0])
+    mu_init = observed[idxs]          # (n_init, K, D)
+    data_sd = observed.std(0)         # (D,)
+    sigma_init = jax.random.uniform(
+        sigma_key,
+        minval=data_sd[None, None, :] * 0.3,
+        maxval=data_sd[None, None, :] * 2.0,
+        shape=(n_init, num_comp, observed.shape[-1]),
+    )
+    sigma1_init = sigma_init[..., 0]  # (n_init, K)
+    sigma2_init = sigma_init[..., 1]
+
+    init_states = (
+        jnp.zeros((n_init,), dtype=jnp.int32),
+        pi_init,
+        mu_init[:, :, 0],
+        mu_init[:, :, 1],
+        sigma1_init,
+        sigma2_init,
+        -jnp.ones((n_init,)) * jnp.inf,
+        jnp.ones((n_init,)) * jnp.inf,
+    )
+
+    _, pi_est, mu1_est, mu2_est, sigma1_est, sigma2_est, loss, _ = jax.vmap(run_one)(init_states)
+    index = jnp.argmax(jnp.nan_to_num(loss, nan=-jnp.inf))
+    weights, mu1_best, mu2_best, sigma1_best, sigma2_best, loss_best = jax.tree.map(
+        lambda x: x[index],
+        (pi_est, mu1_est, mu2_est, sigma1_est, sigma2_est, loss),
+    )
+    return weights, mu1_best, mu2_best, sigma1_best, sigma2_best, loss_best
+
+
+@partial(jax.jit, static_argnames=['num_comp', 'n_init', 'rtol', 'max_iter'])
+def train_em_jax_diag_common(key, observed, num_comp=2, n_init=400, rtol=1e-6, max_iter=5000):
+    """EM for Gaussian_pk_L_B / mclust EEI-like common diagonal covariance."""
+
+    def cond_fn(state):
+        i, pi, mu1, mu2, sigma1, sigma2, loss, loss_diff = state
+        return (i < max_iter) & (loss_diff > rtol)
+
+    def project_to_simplex_with_min(x, min_val=0.01):
+        x = jnp.maximum(x, min_val)
+        excess = jnp.sum(x) - 1.0
+        x -= excess * (x - min_val) / jnp.sum(x - min_val + 1e-8)
+        return x
+
+    def one_step(state):
+        i, pi, mu1, mu2, sigma1, sigma2, loss_i, loss_diff_i = state
+        membership_weight = e_step_diag_common(observed, pi, mu1, mu2, sigma1, sigma2)
+        pi_upd, mu1_upd, mu2_upd, sigma1_upd, sigma2_upd = m_step_diag_common(observed, membership_weight)
+        pi_upd = project_to_simplex_with_min(pi_upd, 0.1)
+        loss_upd = compute_loglike_diag_common(observed, pi_upd, mu1_upd, mu2_upd, sigma1_upd, sigma2_upd)
+        loss_diff_upd = jnp.abs(loss_upd - loss_i) / (1e-12 + jnp.abs(loss_i))
+        return (i + 1, pi_upd, mu1_upd, mu2_upd, sigma1_upd, sigma2_upd, loss_upd, loss_diff_upd)
+
+    def run_one(init_state):
+        return jax.lax.while_loop(cond_fn, one_step, init_state)
+
+    key, idx_key, sigma_key = jax.random.split(key, 3)
+    pi_init = jnp.full((n_init, num_comp), 1.0 / num_comp)
+    idxs = jax.random.randint(idx_key, (n_init, num_comp), 0, observed.shape[0])
+    mu_init = observed[idxs]          # (n_init, K, D)
+    data_sd = observed.std(0)         # (D,)
+    sigma_init = jax.random.uniform(
+        sigma_key,
+        minval=data_sd[None, :] * 0.3,
+        maxval=data_sd[None, :] * 2.0,
+        shape=(n_init, 2),
+    )
+
+    init_states = (
+        jnp.zeros((n_init,), dtype=jnp.int32),
+        pi_init,
+        mu_init[:, :, 0],
+        mu_init[:, :, 1],
+        sigma_init[:, 0],
+        sigma_init[:, 1],
+        -jnp.ones((n_init,)) * jnp.inf,
+        jnp.ones((n_init,)) * jnp.inf,
+    )
+
+    _, pi_est, mu1_est, mu2_est, sigma1_est, sigma2_est, loss, _ = jax.vmap(run_one)(init_states)
+    index = jnp.argmax(jnp.nan_to_num(loss, nan=-jnp.inf))
+    weights, mu1_best, mu2_best, sigma1_best, sigma2_best, loss_best = jax.tree.map(
+        lambda x: x[index],
+        (pi_est, mu1_est, mu2_est, sigma1_est, sigma2_est, loss),
+    )
+    sigma1_arr = jnp.full((num_comp,), sigma1_best)
+    sigma2_arr = jnp.full((num_comp,), sigma2_best)
+    return weights, mu1_best, mu2_best, sigma1_arr, sigma2_arr, loss_best
+
+
+@partial(jax.jit, static_argnames=['num_comp', 'n_init', 'rtol', 'max_iter'])
+def train_em_jax(key, observed, num_comp=2, n_init=225, rtol=1e-6, max_iter=5000):
     """
     Trains a mixture model using the Expectation-Maximization algorithm in JAX.
 
@@ -498,8 +758,7 @@ def train_em_jax(key, observed, num_comp=2, n_init=50, rtol=1e-3, max_iter=5000)
 
         pi_upd, mu1_upd, mu2_upd, sigma1_upd, sigma2_upd = m_step_circ(observed, membership_weight, debug = debug)
 
-        if wrap_1st or wrap_2nd:
-            pi_upd = project_to_simplex_with_min(pi_upd, 0.1)
+        pi_upd = project_to_simplex_with_min(pi_upd, 0.1)
 
         membership_weight_upd = e_step_circ(
             observed, pi_upd, mu1_upd, mu2_upd, sigma1_upd, sigma2_upd
@@ -533,8 +792,7 @@ def train_em_jax(key, observed, num_comp=2, n_init=50, rtol=1e-3, max_iter=5000)
 
         pi_upd, mu1_upd, mu2_upd, sigma1_upd, sigma2_upd = m_step(observed, membership_weight)
 
-        if wrap_1st or wrap_2nd:
-            pi_upd = project_to_simplex_with_min(pi_upd, 0.1)
+        pi_upd = project_to_simplex_with_min(pi_upd, 0.1)
         membership_weight_upd = e_step(
             observed, pi_upd, mu1_upd, mu2_upd, sigma1_upd, sigma2_upd
         )
@@ -665,7 +923,6 @@ def jax_generate_and_fit(key, true_mu1, true_mu2, true_sigma1, true_sigma2,
     # Generate observed samples
     observed = jax_jax_mixture(key, true_mu1, true_mu2, true_sigma1, true_sigma2, weights, n_samples)
 
-    # Fit the model using EM algorithm
     out = train_em_jax(subkey, observed, num_comp=2)
 
     # Rearrange components to match true component order based on mu2
@@ -680,7 +937,6 @@ def jax_generate_and_fit(key, true_mu1, true_mu2, true_sigma1, true_sigma2,
     result = result.at[:, ResCol.mu2_est].set(res[:, 4])
     result = result.at[:, ResCol.sigma1_est].set(res[:, 5])
     result = result.at[:, ResCol.sigma2_est].set(res[:, 6])
-    # Correlation estimate not produced by current fitter; keep as zeros (diagonal covariance)
     # True parameters
     result = result.at[:, ResCol.true_mu1].set(true_mu1)
     result = result.at[:, ResCol.true_mu2].set(true_mu2)
