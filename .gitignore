@@ -3,6 +3,7 @@
 /gist.githubusercontent.com/
 /.vscode/
 /.idea/
+agents.md
 /.ipynb_checkpoints/
 __pycache__/
 **/__pycache__/
@@ -32,3 +33,4 @@ __pycache__/
 *.h5
 *.cpp
 *backup*
+/scripts/

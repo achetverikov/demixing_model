@@ -1202,7 +1202,7 @@ def determine_run_dimensions(args) -> Tuple[int, int]:
     """Determine the number of simulations and samples per simulation for this run."""
     if args.test_mode:
         return 100, 50
-    return 1000, config.n_samples
+    return args.n_simulations, config.n_samples
 
 
 def print_runtime_configuration(args, n_simulations: int, n_samples: int, output_dir: Path) -> None:
@@ -1267,6 +1267,8 @@ def parse_arguments():
                         help='Fitting algorithm to use for simulations (EM, VBEM MAP, or VBEM_MIX for mixture-of-modes means)')
     parser.add_argument('--results-dir', type=str, default='results',
                         help='Base directory for outputs (relative paths are placed here)')
+    parser.add_argument('--n-simulations', type=int, default=10000,
+                        help='Number of simulations per surface (default: 10000)')
 
     args = parser.parse_args()
     active_n_simulations, active_n_samples = determine_run_dimensions(args)

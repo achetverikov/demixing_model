@@ -6,10 +6,20 @@ from shared.surface_functions import normalize_to_density
 
 
 def kl_divergence_loss(pred_log_density, target_log_density):
-    """KL divergence between predicted and target log-probability densities"""
+    """Compute KL divergence from target to predicted log-probability density.
 
+    Sums the KL integrand over the mu1_error axis and averages over batch and
+    feat_diff dimensions.  No grid-spacing factor is needed because
+    normalize_to_density already accounts for grid spacing.
+
+    Args:
+        pred_log_density: Predicted log-density with shape (batch, mu1_error, feat_diff).
+        target_log_density: Target log-density of the same shape.
+
+    Returns:
+        Scalar KL divergence loss.
+    """
     # KL divergence: sum over mu1_error (axis=1), mean over batch and feat_diff
-    # No dx factor needed since normalize_to_density already accounts for grid spacing
     kl_integrand = jnp.exp(target_log_density) * (target_log_density - pred_log_density)
     kl_div = jnp.sum(kl_integrand, axis=1)  # Sum over mu1_error dimension (axis=1)
 
@@ -17,7 +27,15 @@ def kl_divergence_loss(pred_log_density, target_log_density):
 
 
 def expectation_loss(pred_log_density, target_log_density):
-    """Loss based on expected mu1_error values"""
+    """Compute mean-squared error between predicted and target expected mu1_error values.
+
+    Args:
+        pred_log_density: Predicted log-density with shape (batch, mu1_error, feat_diff).
+        target_log_density: Target log-density of the same shape.
+
+    Returns:
+        Scalar MSE between predicted and target circular expectations.
+    """
     from shared.config import config
     
     # Normalize to proper densities
@@ -38,7 +56,14 @@ def expectation_loss(pred_log_density, target_log_density):
 
 
 def smoothness_regularization(log_density):
-    """Penalize rapid changes in the likelihood surface"""
+    """Penalize rapid changes in the log-density surface along both spatial axes.
+
+    Args:
+        log_density: Log-density array with shape (batch, mu1_error, feat_diff).
+
+    Returns:
+        Scalar regularization loss (mean squared finite differences along both axes).
+    """
     # Gradients along both spatial dimensions
     grad_mu1 = jnp.diff(log_density, axis=1)  # Along mu1_error
     grad_feat = jnp.diff(log_density, axis=2)  # Along feat_diff
@@ -49,7 +74,20 @@ def smoothness_regularization(log_density):
 def combined_probabilistic_loss(pred_log_probs, target_log_probs,
                                 kl_weight=0.4, expectation_weight=0.3,
                                 mse_weight=0.2, smooth_weight=0.1):
-    """Combined loss respecting probabilistic nature"""
+    """Compute a weighted combination of MSE, KL-divergence, expectation, and smoothness losses.
+
+    Args:
+        pred_log_probs: Predicted log-probabilities with shape (batch, mu1_error, feat_diff).
+        target_log_probs: Target log-probabilities of the same shape.
+        kl_weight: Weight for the KL-divergence term.
+        expectation_weight: Weight for the expectation-MSE term.
+        mse_weight: Weight for the raw log-probability MSE term.
+        smooth_weight: Weight for the smoothness regularization term.
+
+    Returns:
+        Tuple of (total_loss, breakdown) where breakdown is a dict with scalar
+        values for 'mse', 'kl', 'expectation', 'smoothness', and 'total'.
+    """
 
     # Traditional MSE loss
     mse = jnp.mean((pred_log_probs - target_log_probs) ** 2)

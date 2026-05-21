@@ -115,7 +115,24 @@ def _generate_mu2_density_asymmetry_batch(mu2_surfaces_batch: jnp.ndarray, targe
 
 
 def compute_predicted_sd_curves_batch(log_surfaces_batch, feat_vals):
-    """Compute predicted SD curves for multiple surfaces at once - fully vectorized."""
+    """Compute predicted circular-SD curves for a batch of surfaces (fully vectorized).
+
+    For each surface and each requested feature-difference value, integrates the
+    probability distribution over the mu1_bias axis using the circular standard
+    deviation formula ``sqrt(-2 * log(R))`` where ``R`` is the mean resultant
+    length.
+
+    Args:
+        log_surfaces_batch: Log-probability surfaces with shape
+            ``(n_surfaces, n_mu1_bias, n_feat_diff)``.
+        feat_vals: Sequence of feature-difference values (in degrees) at which
+            to evaluate the SD curves.  Each value is snapped to the nearest
+            grid index.
+
+    Returns:
+        Array of shape ``(n_surfaces, len(feat_vals))`` containing circular
+        standard deviations in degrees.
+    """
     mu1_bias_grid = config.create_grid('mu1_bias')
     n_surfaces, n_mu1_bias, n_feat_diff = log_surfaces_batch.shape
     n_feat_vals = len(feat_vals)

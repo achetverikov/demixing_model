@@ -17,6 +17,11 @@ class LogCleaner:
         self.pending_cr = False
 
     def write(self, text: str):
+        """Strip ANSI escape codes from text and buffer it, collapsing CR overwrite lines.
+
+        Args:
+            text: Raw text chunk (may contain ANSI codes and carriage returns).
+        """
         text = ANSI_RE.sub("", text)
         for char in text:
             if self.pending_cr:
@@ -35,17 +40,25 @@ class LogCleaner:
                 self.line.append(char)
 
     def close(self):
+        """Flush any buffered partial line and flush the underlying log file."""
         if self.line:
             self._flush_line()
         self.log.flush()
 
     def _flush_line(self):
+        """Write the accumulated line buffer to the log with a trailing newline and reset it."""
         self.log.write("".join(self.line) + "\n")
         self.log.flush()
         self.line = []
 
 
 def announce(title: str, log=None):
+    """Print a titled separator banner to stdout and optionally to a log file.
+
+    Args:
+        title: Headline text displayed between separator lines.
+        log: Optional file-like object to also receive the banner.
+    """
     message = f"\n{'=' * 60}\n{title}\n{'=' * 60}\n"
     sys.stdout.write(message)
     sys.stdout.flush()
@@ -55,6 +68,18 @@ def announce(title: str, log=None):
 
 
 def run(cmd: list, cwd, env, log=None):
+    """Run a subprocess, streaming output to stdout and optionally to a log file.
+
+    On POSIX TTYs with a log target the subprocess runs under a PTY so progress
+    bars and colors render correctly; ANSI codes are stripped from the log copy.
+    Exits the process with the subprocess return code on failure.
+
+    Args:
+        cmd: Command and arguments (passed to subprocess.Popen).
+        cwd: Working directory for the subprocess.
+        env: Environment mapping for the subprocess.
+        log: Optional file-like object to receive a clean copy of stdout.
+    """
     header = f"\n$ {' '.join(str(c) for c in cmd)}\n{'─' * 60}\n"
     sys.stdout.write(header)
     sys.stdout.flush()
@@ -85,6 +110,14 @@ def run(cmd: list, cwd, env, log=None):
 
 
 def _run_with_pty(cmd, cwd, env, log):
+    """Run a subprocess under a PTY, tee-ing raw bytes to stdout and cleaned text to log.
+
+    Args:
+        cmd: Command and arguments list.
+        cwd: Working directory for the subprocess.
+        env: Environment mapping for the subprocess.
+        log: File-like object to receive ANSI-stripped output via LogCleaner.
+    """
     import pty
     master_fd, slave_fd = pty.openpty()
     cleaner = LogCleaner(log)
