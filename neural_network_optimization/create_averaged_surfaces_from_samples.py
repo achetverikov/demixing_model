@@ -25,7 +25,7 @@ from typing import Dict, Tuple, List, Optional
 import re
 import gzip
 from dataclasses import dataclass
-from shared.utils import Surface, resolve_input_path, resolve_results_path
+from shared.utils import Surface, resolve_input_path, resolve_results_path, get_git_commit
 from shared.config import Config
 from jax.scipy.stats import gaussian_kde
 from concurrent.futures import ThreadPoolExecutor
@@ -37,7 +37,13 @@ output_folder = "averaged_surfaces_10k_20samples"
 
 @jax.jit
 def prefilter_isolated_samples(samples, feat_bin_size=8, bias_bin_size=8, min_neighbors=3):
-    """Remove isolated samples using jnp.histogram2d for efficient binning"""
+    """Flag isolated samples as NaN using a 2D histogram density check.
+
+    Bins the (feat_diff_index × bias_value) space and marks any sample whose
+    3×3 bin neighbourhood has fewer than min_neighbors total samples as NaN.
+    NaN-flagged samples are assigned zero weight in the KDE and do not
+    contribute to the density estimate.  Returns (filtered_samples, n_removed).
+    """
     feat_diff_n, sample_n = samples.shape
     
     # Flatten all coordinates
@@ -68,18 +74,16 @@ def prefilter_isolated_samples(samples, feat_bin_size=8, bias_bin_size=8, min_ne
                 b_idx = jnp.clip(bias_bin_idx + db, 0, hist.shape[1] - 1)
                 neighbor_sum += hist[f_idx, b_idx]
         
-        # Keep sample if neighborhood has enough samples, otherwise set to 0
-        return jnp.where(neighbor_sum >= min_neighbors, bias_val, 0.0)
-    
+        return jnp.where(neighbor_sum >= min_neighbors, bias_val, jnp.nan)
+
     # Apply filtering to all samples
-    filtered = jax.vmap(jax.vmap(check_sample_neighborhood, in_axes=(None, 0)), 
+    filtered = jax.vmap(jax.vmap(check_sample_neighborhood, in_axes=(None, 0)),
                        in_axes=(0, None))(
         jnp.arange(feat_diff_n), jnp.arange(sample_n)
     )
-    
-    # Count removed samples (samples set to 0)
-    removed_count = jnp.sum(filtered == 0.0)
-    
+
+    removed_count = jnp.sum(jnp.isnan(filtered))
+
     return filtered, removed_count
 
 def sum_wrapped_pdf(kde, bias_grid):
@@ -127,11 +131,14 @@ def weighted_kde_single_step_bounded(i, samples, bias_grid, feat_diff_steps, bia
     compensated_weights = min_weight + (valid_weights - min_weight) * scale_factor
     scaled_weights = compensated_weights / jnp.sum(compensated_weights)
     
-    # Create weighted samples
+    # Create weighted samples; NaN-flagged outliers get zero weight
     weighted_samples = window_samples.flatten()
     sample_weights = jnp.repeat(scaled_weights, window_samples.shape[1])
-    
-    # Weighted 1D KDE 
+    nan_mask = jnp.isnan(weighted_samples)
+    sample_weights = jnp.where(nan_mask, 0.0, sample_weights)
+    weighted_samples = jnp.where(nan_mask, 0.0, weighted_samples)
+
+    # Weighted 1D KDE
     kde = gaussian_kde(weighted_samples, bw_method=bias_bandwidth, weights=sample_weights)
     
     # Simple conditional - will work with static_argnames
@@ -178,18 +185,39 @@ def load_sample_data(file_path: Path) -> Dict:
     with gzip.open(file_path, 'rb') as f:
         return pickle.load(f)
 
+
+def stub_sample_file(file_path: Path) -> None:
+    """Replace a sample file with a tiny stub so grid tracking still works.
+
+    The stub keeps the filename (and therefore the hash that simulated_samples_grid.py
+    uses for progress tracking) but replaces the large sample arrays with empty ones,
+    reducing file size from ~6 MB to ~1 KB.  simulated_samples_grid._samples_exist()
+    checks for 'parameters' and 'mu1_samples'/'mu2_samples' keys, so the stub still
+    passes that check and the combination will not be re-computed.
+    """
+    try:
+        # Read just the parameters block to preserve machine/hash metadata
+        with gzip.open(file_path, 'rb') as f:
+            original = pickle.load(f)
+        stub = {
+            'parameters': original.get('parameters', {}),
+            'mu1_samples': np.empty((0,), dtype=np.float16),
+            'mu2_samples': np.empty((0,), dtype=np.float16),
+            'stub': True,
+        }
+        with gzip.open(file_path, 'wb') as f:
+            pickle.dump(stub, f, protocol=pickle.HIGHEST_PROTOCOL)
+    except Exception as e:
+        print(f"Warning: could not stub {file_path.name}: {e}")
+
 def is_l1_surface(sf1: float, sf2: float, sp: float) -> bool:
     """Check if surface parameters correspond to L1 grid (coarse grid)."""
-    # L1 surfaces have parameters at config.param_step intervals
     step = config.param_step
     low = config.param_range_low
-    high = config.param_range_high
-    
-    # Check if parameters are on the coarse grid
-def is_on_grid(val):
-    """Return True if a value aligns with the coarse parameter grid."""
-    return abs(val - round((val - low) / step) * step - low) < 1e-6
-    
+
+    def is_on_grid(val):
+        return abs(val - round((val - low) / step) * step - low) < 1e-6
+
     return is_on_grid(sf1) and is_on_grid(sf2) and is_on_grid(sp)
 
 
@@ -244,19 +272,22 @@ def get_existing_surfaces(output_folder: Path) -> set:
     
     return existing
 
-def save_averaged_surface(averaged_surface: AveragedSurface, sf1: float, sf2: float, sp: float, 
-                         output_folder: Path) -> None:
-    """Save averaged surface to output folder."""
-    
+def save_averaged_surface(averaged_surface: AveragedSurface, sf1: float, sf2: float, sp: float,
+                         output_folder: Path,
+                         source_files_meta: List[Dict] = None) -> None:
+    """Save averaged surface to output folder.
+
+    Stores parameters, the surface object, creation timestamp, the git commit
+    of the averaging script, and provenance metadata for each source sample file.
+    """
     filename = get_surface_filename(sf1, sf2, sp)
     output_file = output_folder / filename
     print(f"Saving averaged surface to {output_file}")
-    
-    # Create canonical filename (always sf1 <= sf2 for consistency)
+
     canonical_sf1 = min(sf1, sf2)
     canonical_sf2 = max(sf1, sf2)
-    
-    # Create data structure
+
+    averaging_commit = get_git_commit()
     averaged_data = {
         'parameters': {
             'sd_feat1': canonical_sf1,
@@ -264,18 +295,27 @@ def save_averaged_surface(averaged_surface: AveragedSurface, sf1: float, sf2: fl
             'sd_spat': sp
         },
         'surface': averaged_surface,
-        'creation_timestamp': np.datetime64('now').astype(str)
+        'creation_timestamp': np.datetime64('now').astype(str),
+        'git_commit': averaging_commit,
+        'source_files': source_files_meta or [],
     }
-    
+
     with open(output_file, 'wb') as f:
         pickle.dump(averaged_data, f)
-    
+
     print(f"Saved: {filename} (from {averaged_surface.n_sample_files_used} sample files)")
 
-def process_single_surface(params_tuple, input_path, output_path, compiled_vmap_circular, compiled_vmap_spatial, 
-                          feat_diff_grid, mu1_bias_grid, mu2_bias_grid, feat_diff_steps, 
-                          bias_bandwidth, feat_bandwidth, ref_sum):
-    """Process a single surface parameter combination."""
+def process_single_surface(params_tuple, input_path, output_path, compiled_vmap_circular, compiled_vmap_spatial,
+                          feat_diff_grid, mu1_bias_grid, mu2_bias_grid, feat_diff_steps,
+                          bias_bandwidth, feat_bandwidth, ref_sum, stub_processed_samples=False,
+                          dry_run=False):
+    """Load, combine, KDE-smooth, and save one averaged surface for (sf1, sf2, sp).
+
+    Skips if the mirror file (sf2, sf1, sp) is absent for sf1 != sf2 cases so
+    both files can be processed together on a later run.  With stub_processed_samples
+    the raw sample files are replaced with tiny stubs after saving.  With dry_run
+    nothing is written to disk.  Returns True on success, False if skipped/errored.
+    """
     sf1, sf2, sp = params_tuple
     
     try:
@@ -290,14 +330,30 @@ def process_single_surface(params_tuple, input_path, output_path, compiled_vmap_
         
         print(f"[Thread {thread_id}] Loading original samples from {original_file}")
         original_samples = load_sample_data(original_file)
-        
-        # Find and load mirror sample file (sf2, sf1, sp) if different
+
+        # Old sample files include feat_diff=0 as the first row; drop it.
+        n_expected = len(feat_diff_steps)
+        if original_samples['mu1_samples'].shape[0] > n_expected:
+            original_samples = {**original_samples,
+                                'mu1_samples': original_samples['mu1_samples'][1:],
+                                'mu2_samples': original_samples['mu2_samples'][1:]}
+
+        # Find and load mirror sample file (sf2, sf1, sp) if different.
+        # If the mirror file doesn't exist yet, skip this pair entirely so a
+        # re-run can process both files together once the mirror arrives.
         mirror_samples = None
+        mirror_file = None
         if sf1 != sf2:
             mirror_file = find_sample_file(input_path, sf2, sf1, sp)
-            if mirror_file:
-                print(f"[Thread {thread_id}] Loading mirror samples from {mirror_file}")
-                mirror_samples = load_sample_data(mirror_file)
+            if not mirror_file:
+                print(f"[Thread {thread_id}] Mirror file not yet available for ({sf1}, {sf2}, {sp}) — skipping")
+                return False
+            print(f"[Thread {thread_id}] Loading mirror samples from {mirror_file}")
+            mirror_samples = load_sample_data(mirror_file)
+            if mirror_samples['mu1_samples'].shape[0] > n_expected:
+                mirror_samples = {**mirror_samples,
+                                  'mu1_samples': mirror_samples['mu1_samples'][1:],
+                                  'mu2_samples': mirror_samples['mu2_samples'][1:]}
         
         # Process samples and create surface directly
         print(f"[Thread {thread_id}] Creating averaged surface for ({sf1}, {sf2}, {sp})")
@@ -397,11 +453,40 @@ def process_single_surface(params_tuple, input_path, output_path, compiled_vmap_
         )
         
         print(f"[Thread {thread_id}] Averaged surface created for ({sf1}, {sf2}, {sp})")
+        if dry_run:
+            mirror_note = f" + {mirror_file.name}" if mirror_file else ""
+            print(f"[Thread {thread_id}] DRY RUN: would save averaged surface for ({sf1}, {sf2}, {sp})"
+                  f" from {original_file.name}{mirror_note}"
+                  + (" [would stub both]" if stub_processed_samples else ""))
+            return True
+
+        # Collect source file provenance
+        source_files_meta = [{'filename': original_file.name,
+                               'parameters': original_samples.get('parameters', {}),
+                               'computation_time': original_samples.get('computation_time'),
+                               'timestamp': original_samples.get('timestamp')}]
+        if mirror_samples is not None:
+            source_files_meta.append({'filename': mirror_file.name,
+                                      'parameters': mirror_samples.get('parameters', {}),
+                                      'computation_time': mirror_samples.get('computation_time'),
+                                      'timestamp': mirror_samples.get('timestamp')})
+
         # Save averaged surface
-        save_averaged_surface(averaged_surface, sf1, sf2, sp, output_path)
+        save_averaged_surface(averaged_surface, sf1, sf2, sp, output_path,
+                              source_files_meta=source_files_meta)
         print(f"[Thread {thread_id}] Completed ({sf1}, {sf2}, {sp})")
+
+        # Optionally replace raw sample files with tiny stubs to free disk space.
+        # We only reach here when both files exist (or sf1==sf2), so it is safe to stub both.
+        if stub_processed_samples:
+            stub_sample_file(original_file)
+            print(f"[Thread {thread_id}] Stubbed {original_file.name}")
+            if sf1 != sf2:
+                stub_sample_file(mirror_file)
+                print(f"[Thread {thread_id}] Stubbed {mirror_file.name}")
+
         return True
-        
+
     except Exception as e:
         thread_id = threading.current_thread().ident
         print(f"[Thread {thread_id}] Error processing ({sf1}, {sf2}, {sp}): {e}")
@@ -412,8 +497,18 @@ def create_all_averaged_surfaces(input_folder: str = None, output_folder: str = 
                                 bias_bandwidth: float = 0.075, feat_bandwidth: float = 5.0,
                                 use_bounded: bool = True,
                                 n_workers: int = 2, results_dir: str = "results",
-                                include_all_params: bool = False) -> None:
-    """Main function to create all averaged surfaces from samples."""
+                                include_all_params: bool = False,
+                                stub_processed_samples: bool = False,
+                                dry_run: bool = False) -> None:
+    """Main function to create all averaged surfaces from samples.
+
+    Args:
+        stub_processed_samples: If True, replace raw sample files with tiny stubs after
+            averaging.  The stubs preserve the filename/hash so simulated_samples_grid.py
+            still counts those combinations as done, but occupy ~1 KB instead of ~6 MB.
+            Default False — sample files are left untouched.
+        dry_run: If True, print what would be done without writing any files.
+    """
     
     if input_folder is None:
         input_folder = config.samples_folder
@@ -435,6 +530,7 @@ def create_all_averaged_surfaces(input_folder: str = None, output_folder: str = 
     
     # Setup grids and compute reference weight sum for bounded method
     feat_diff_grid = config.create_grid('feat_diff')
+    feat_diff_grid = feat_diff_grid[feat_diff_grid > 0]  # skip feat_diff=0 (trivially zero bias)
     mu1_bias_grid = config.create_grid('mu1_bias')
     mu2_bias_grid = config.create_grid('mu2_bias')
     feat_diff_steps = jnp.arange(len(feat_diff_grid))
@@ -507,6 +603,9 @@ def create_all_averaged_surfaces(input_folder: str = None, output_folder: str = 
     
     # Create a partial function with all the shared parameters
     from functools import partial
+    if stub_processed_samples:
+        print("stub-samples enabled: raw sample files will be replaced with stubs after averaging.")
+
     worker_func = partial(
         process_single_surface,
         input_path=input_path,
@@ -519,9 +618,11 @@ def create_all_averaged_surfaces(input_folder: str = None, output_folder: str = 
         feat_diff_steps=feat_diff_steps,
         bias_bandwidth=bias_bandwidth,
         feat_bandwidth=feat_bandwidth,
-        ref_sum=ref_sum
+        ref_sum=ref_sum,
+        stub_processed_samples=stub_processed_samples,
+        dry_run=dry_run,
     )
-    
+
     # Process with ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=n_workers) as executor:
         # Submit all tasks
@@ -567,12 +668,19 @@ if __name__ == "__main__":
                         help='Number of worker threads for parallel processing')
     parser.add_argument('--include-all-params', action='store_true',
                         help='Include all parameter combinations (skip L1 grid filtering)')
-    
+    parser.add_argument('--stub-samples', action='store_true', default=False,
+                        help='After averaging, replace raw sample files with tiny stubs to free '
+                             'disk space while preserving grid progress tracking (default: off)')
+    parser.add_argument('--dry-run', action='store_true', default=False,
+                        help='Print what would be done without writing any files (default: off)')
+
     args = parser.parse_args()
-    
-    # Create averaged surfaces
+
     create_all_averaged_surfaces(
         args.input_folder, args.output_folder,
         args.bias_bandwidth, args.feat_bandwidth, not args.no_bounded,
-        args.workers, results_dir=args.results_dir, include_all_params=args.include_all_params
+        args.workers, results_dir=args.results_dir,
+        include_all_params=args.include_all_params,
+        stub_processed_samples=args.stub_samples,
+        dry_run=args.dry_run,
     )
