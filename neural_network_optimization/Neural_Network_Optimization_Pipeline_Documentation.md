@@ -2,74 +2,79 @@
 
 ## Overview
 
-This document describes the current pipeline for mirror-aware neural network optimization. It has two stages:
-1) Create averaged surfaces from simulated samples.
-2) Train the mirror-aware network on the averaged surfaces.
+Two-step pipeline for training the mirror-aware neural network:
 
-The workflow starts from `create_averaged_surfaces_from_samples.py` and continues with `mirror_aware_training.py`.
+1. Create averaged surfaces from simulated samples.
+2. Train the mirror-aware network on those surfaces.
+
+`combine_mirrored_surfaces.py` is a leftover from an older three-step version where
+mirroring was a separate pass. The current `create_averaged_surfaces_from_samples.py`
+already loads both `(sf1, sf2, sp)` and `(sf2, sf1, sp)` sample files, merges them
+with appropriate component flipping, and builds the KDE surfaces in one step.
 
 ---
 
-## Pipeline Flow Diagram
+## Pipeline Flow
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│ START: neural_network_optimization/create_averaged_surfaces_from_samples.py │
-│ Command: python neural_network_optimization/create_averaged_surfaces_from_samples.py │
-│ Args: --input-folder <samples> --output-folder <averaged>        │
-└───────────────┬──────────────────────────────────────────────────┘
-                │
-                ▼
-┌──────────────────────────────────────────────────────────────────┐
-│ 1. Load L1 sample files                                          │
-│                                                                  │
-│    Inputs: samples_sf1_*_sf2_*_sp_*.pkl.gz                        │
-│    Filter: L1 (coarse) grid based on config.param_step           │
-│                                                                  │
-│    Symmetry rule:                                                │
-│    mu1_comp1(sf1,sf2,sp) = mu1_comp2(sf2,sf1,sp)                  │
-└───────────────┬──────────────────────────────────────────────────┘
-                │
-                ▼
-┌──────────────────────────────────────────────────────────────────┐
-│ 2. Build averaged surfaces from samples                          │
-│                                                                  │
-│    For each unique (sf1, sf2, sp):                               │
-│    - mirror/merge samples for mu1_comp1 and mu1_comp2             │
-│    - create KDE-based surfaces for mu1/mu2                        │
-│                                                                  │
-│    Output: averaged_sf1_*_sf2_*_sp_*.pkl                           │
-│    Default folder: combined_mirrored_surfaces_10k                 │
-└───────────────┬──────────────────────────────────────────────────┘
-                │
-                ▼
-┌──────────────────────────────────────────────────────────────────┐
-│ 3. Train mirror-aware model                                      │
-│                                                                  │
-│    Script: mirror_aware_training.py                               │
-│    Command: python mirror_aware_training.py                       │
-│    Args: --surfaces-folder <averaged> --save-dir <checkpoints>    │
-│                                                                  │
-│    Data prep:                                                     │
-│    - canonical case: use mu1_comp1_surface                        │
-│    - mirrored case: use mu1_comp2_surface with swapped inputs     │
-│                                                                  │
-│    Output: checkpoints + training logs                            │
-└──────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│ Step 1: create averaged surfaces                                │
+│                                                                 │
+│ python neural_network_optimization/create_averaged_surfaces_from_samples.py │
+│   --input-folder  results/<samples_folder>                      │
+│   --output-folder results/<averaged_folder>                     │
+│                                                                 │
+│ Inputs : samples_sf1_*_sf2_*_sp_*.pkl.gz  (L1 grid only)       │
+│ For each unique (sf1 ≤ sf2, sp):                                │
+│   - load (sf1, sf2, sp) and mirror (sf2, sf1, sp) sample files  │
+│   - combine samples with component flipping                     │
+│   - fit KDE → mu1_comp1_surface, mu1_comp2_surface, mu2_surface │
+│ Output : averaged_sf1_*_sf2_*_sp_*.pkl  (4,200 files for L1)   │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Step 2: train mirror-aware NN                                   │
+│                                                                 │
+│ python neural_network_optimization/mirror_aware_training.py     │
+│   --surfaces-folder results/<averaged_folder>                   │
+│   --epochs 1500                                                 │
+│   --batch-size 32                                               │
+│   --learning-rate 2e-3                                          │
+│   --weight-decay 1e-4                                           │
+│   --save-dir results/<checkpoints_folder>                       │
+│                                                                 │
+│ Data prep:                                                      │
+│   canonical case  : inputs [sf1, sf2, sp] → mu1_comp1_surface  │
+│   mirrored case   : inputs [sf2, sf1, sp] → mu1_comp2_surface  │
+│     (only added when sf1 ≠ sf2)                                 │
+│ Output: checkpoints + training logs                             │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Stage 1: Create Averaged Surfaces From Samples
+## Disk Space: Stubbing Raw Sample Files
 
-### Command
+Raw sample files are ~6 MB each (~50 GB for a full L1 run). Once averaged, they can be
+replaced with tiny stubs (~1 KB) that preserve the filename/hash so
+`simulated_samples_grid.py` still counts those combinations as done and won't recompute
+them.  Pass `--stub-samples` to enable this:
+
 ```bash
 python neural_network_optimization/create_averaged_surfaces_from_samples.py \
-  --input-folder <samples_folder> \
-  --output-folder averaged_surfaces_10k_20samples
+  --input-folder  results/<samples_folder> \
+  --output-folder results/<averaged_folder> \
+  --stub-samples
 ```
 
-### Output Format (averaged surface)
+Without `--stub-samples` (the default) sample files are left untouched.  The script is
+safe to re-run either way — it skips combinations whose averaged surface already exists.
+
+---
+
+## Output Format (averaged surface file)
+
 ```python
 {
     'parameters': {
@@ -77,67 +82,26 @@ python neural_network_optimization/create_averaged_surfaces_from_samples.py \
         'sd_feat2': float,
         'sd_spat': float
     },
-    'surface': AveragedSurface(...),
+    'surface': AveragedSurface(
+        mu1_comp1_surface,   # shape (181, 89) — feat_diff × bias grid
+        mu1_comp2_surface,
+        mu2_surface,
+        ...
+    ),
     'creation_timestamp': 'YYYY-MM-DDTHH:MM:SS'
 }
 ```
 
-Notes:
-- Output filename format: `averaged_sf1_{sf1}_sf2_{sf2}_sp_{sp}.pkl`
-- `sf1`/`sf2` are stored in canonical order (sf1 <= sf2)
-
----
-
-## Stage 2: Mirror-Aware Training
-
-### Command
-```bash
-python mirror_aware_training.py \
-  --surfaces-folder averaged_surfaces_10k_20samples \
-  --epochs 1500 \
-  --batch-size 32 \
-  --learning-rate 2e-3 \
-  --weight-decay 1e-4 \
-  --save-dir neural_net_checkpoints_20samples
-```
-
-### Data Preparation
-- Each averaged surface yields one canonical training example:
-  - inputs: [sf1, sf2, sp]
-  - targets: mu1_comp1_surface
-- If sf1 != sf2, a mirrored example is added:
-  - inputs: [sf2, sf1, sp]
-  - targets: mu1_comp2_surface
-
-### Outputs
-- Checkpoints saved to `--save-dir` (via `utils.save_checkpoint`)
-- Training log entries saved by `utils.save_training_log_smart`
-
----
-
-## Related Files (Copied for Standalone Use)
-
-The standalone folder `neural_network_optimization/` includes:
-- `create_averaged_surfaces_from_samples.py`
-- `combine_mirrored_surfaces.py`
-- `mirror_aware_training.py`
-- `mirror_aware_model.py`
-- `loss_functions.py`
-- `config.py`
-- `utils.py`
-- `seed_manager.py`
-- `surface_folder_parsing.py`
-- `surface_functions.py`
-- `plotting.py`
+Filename: `averaged_sf1_{sf1}_sf2_{sf2}_sp_{sp}.pkl`  
+Convention: `sf1 ≤ sf2` (canonical order).
 
 ---
 
 ## Key Configuration
 
-Relevant fields from `config.py`:
 ```python
-config.param_range_low = 10
+config.param_range_low  = 10
 config.param_range_high = 200
-config.param_step = 10
-config.mu1_surface_shape = (181, 89)
+config.param_step       = 10
+config.mu1_surface_shape = (181, 89)   # (feat_diff_points, bias_points)
 ```
