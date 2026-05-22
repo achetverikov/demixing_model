@@ -37,8 +37,8 @@ dtype = np.float64 if use_float64 else np.float32
 print(jax.device_count())
 
 # Configuration flags
-wrap_1st = False   # OSF d'=1 2D simulations are linear Gaussian, not circular.
-wrap_2nd = False   # @param {type:"boolean"}
+wrap_1st = True
+wrap_2nd = False
 enable_sharding = False   # @param {type:"boolean"}
 
 import sys
