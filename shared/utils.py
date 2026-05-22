@@ -3,9 +3,10 @@
 import json
 import random
 import re
+import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 import itertools
 from flax.training import train_state
 import inspect, pickle
@@ -17,6 +18,16 @@ from jax.scipy.special import logsumexp
 from shared.surface_functions import compute_expectation
 import jax.numpy as jnp
 import jax
+
+
+def get_git_commit() -> Optional[str]:
+    """Return the current HEAD commit hash, or None if not in a git repo."""
+    try:
+        return subprocess.check_output(
+            ['git', 'rev-parse', 'HEAD'], stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except Exception:
+        return None
 
 
 def resolve_results_path(path: str, results_dir: str = "results") -> Path:

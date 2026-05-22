@@ -3,7 +3,8 @@
 Enhanced Parallel Likelihood Surface Grid Computer with Dynamic Chunking
 =======================================================================
 
-Enhanced version that supports dynamic chunking for optimal load balancing across 5 PCs:
+Parallel likelihood surface grid computer with dynamic chunking for load balancing
+across any number of machines:
 1. Dynamic chunk sizes: 100 parameter combinations when many chunks available, 10 when few remain
 2. Chunk-based locking system for better coordination
 3. Robust progress tracking and load balancing
@@ -11,12 +12,8 @@ Enhanced version that supports dynamic chunking for optimal load balancing acros
 
 Works with the new Surface class and compute_empirical_likelihood_surface format.
 
-Usage:
-- Machine 1: machine_id="PC1"
-- Machine 2: machine_id="PC2"
-- Machine 3: machine_id="PC3"
-- Machine 4: machine_id="PC4"
-- Machine 5: machine_id="PC5"
+Usage (run from repo root):
+    PYTHONPATH=. python surface_computation/simulated_samples_grid.py --machine-id my_pc
 """
 
 import os
@@ -36,7 +33,7 @@ from datetime import datetime
 from jax import Array
 
 # Import required functions and config
-from shared.utils import Surface, resolve_input_path, resolve_results_path
+from shared.utils import Surface, resolve_input_path, resolve_results_path, get_git_commit
 from shared.config import Config
 import jax_fit_functions as jf  # Import module to access diagonal_covariance flag
 import jax_fit_main as jfm
@@ -100,22 +97,13 @@ def save_samples_checkpoint(output_dir: Path,
                             param_name: str,
                             param_hash: str, sd_feat1: float, sd_feat2: float,
                             sd_spat: float, computation_time: float, machine_id: str,
+                            n_simulations: int = 0, n_samples: int = 0,
+                            random_seed: int = 0,
                             full_results: Optional[Array] = None, save_csv: bool = False) -> None:
-    """Save individual surface data and optionally full results.
+    """Save EM sample arrays and provenance metadata to a compressed pickle.
 
-    Args:
-        output_dir: Directory to save files
-        mu1_samples: Mu1 bias samples
-        mu2_samples: Mu2 bias samples
-        param_name: Human-readable parameter name
-        param_hash: Parameter hash
-        sd_feat1: Standard deviation for feature component 1
-        sd_feat2: Standard deviation for feature component 2
-        sd_spat: Spatial standard deviation
-        computation_time: Time taken for computation
-        machine_id: Machine identifier
-        full_results: Optional full results array of shape (n_simulations, 2, C)
-        save_csv: If True, also save full results as CSV
+    Provenance fields stored under 'parameters': machine_id, platform,
+    n_simulations, n_samples, random_seed, git_commit.
     """
     checkpoint_data = {
         'parameters': {
@@ -125,7 +113,11 @@ def save_samples_checkpoint(output_dir: Path,
             'param_name': param_name,
             'param_hash': param_hash,
             'machine_id': machine_id,
-            'platform': platform.node()
+            'platform': platform.node(),
+            'n_simulations': n_simulations,
+            'n_samples': n_samples,
+            'random_seed': random_seed,
+            'git_commit': get_git_commit(),
         },
         'mu1_samples': mu1_samples.astype(jnp.float16),
         'mu2_samples': mu2_samples.astype(jnp.float16),
@@ -266,9 +258,6 @@ class ChunkedGridComputer:
         print(f"Large/small chunk sizes: {self.large_chunk_size}/{self.small_chunk_size}")
         print(f"Save full results: {self.save_full_results}, Save CSV: {self.save_csv}")
 
-        if self.total_combinations > 1000:
-            estimated_hours = self.total_combinations * 30 / 3600 / 5  # ~30s per surface, 5 PCs
-            print(f"Estimated computation time (5 PCs): {estimated_hours:.1f} hours")
 
     def _create_param_combinations(self) -> List[Tuple]:
         """Create parameter combinations for the current grid level or from custom list."""
@@ -464,6 +453,7 @@ class ChunkedGridComputer:
         chunk_start_time = time.time()
         samples_computed = samples_skipped = 0
         feat_diff_vals = config.create_grid('feat_diff')
+        feat_diff_vals = feat_diff_vals[feat_diff_vals > 0]  # feat_diff=0 is trivially 0 bias
         key = config.seed.get_jax_key(purpose='generating samples')
 
         num_scan_loops = 10
@@ -553,6 +543,9 @@ class ChunkedGridComputer:
             save_samples_checkpoint(
                 self.output_dir, mu1_bias_array, mu2_bias_array, param_name, param_hash,
                 sd_feat1, sd_feat2, sd_spat, samples_time, self.machine_id,
+                n_simulations=samples_params['n_simulations'],
+                n_samples=samples_params['n_samples'],
+                random_seed=samples_params['random_seed'],
                 full_results=full_results_combined, save_csv=self.save_csv
             )
 
