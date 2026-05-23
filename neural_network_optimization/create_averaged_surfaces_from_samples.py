@@ -196,7 +196,6 @@ def stub_sample_file(file_path: Path) -> None:
     passes that check and the combination will not be re-computed.
     """
     try:
-        # Read just the parameters block to preserve machine/hash metadata
         with gzip.open(file_path, 'rb') as f:
             original = pickle.load(f)
         stub = {
@@ -205,8 +204,12 @@ def stub_sample_file(file_path: Path) -> None:
             'mu2_samples': np.empty((0,), dtype=np.float16),
             'stub': True,
         }
-        with gzip.open(file_path, 'wb') as f:
+        # Write atomically: temp file beside the target, then rename, so
+        # simulated_samples_grid never sees a half-written stub.
+        tmp = file_path.with_suffix('.pkl.gz.tmp')
+        with gzip.open(tmp, 'wb') as f:
             pickle.dump(stub, f, protocol=pickle.HIGHEST_PROTOCOL)
+        tmp.replace(file_path)
     except Exception as e:
         print(f"Warning: could not stub {file_path.name}: {e}")
 

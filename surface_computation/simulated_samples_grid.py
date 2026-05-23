@@ -291,11 +291,15 @@ class ChunkedGridComputer:
             with gzip.open(samples_file, 'rb') as f:
                 data = pickle.load(f)
                 return ('parameters' in data and ('mu1_samples' in data or 'mu2_samples' in data))
-        except (pickle.PickleError, EOFError, FileNotFoundError, gzip.BadGzipFile):
+        except (pickle.PickleError, EOFError, gzip.BadGzipFile):
+            # Corrupt file — delete and recompute
             try:
                 samples_file.unlink()
-            except:
+            except Exception:
                 pass
+            return False
+        except (OSError, FileNotFoundError):
+            # Transient error (e.g. file being written by another process) — skip
             return False
 
     def _chunk_lock_operations(self, chunk_id: str, operation: str) -> bool:
