@@ -1075,7 +1075,7 @@ class GridBasedMultiConditionOptimizer:
         total_nn_evaluations = 0
 
         # Initialize bounds for shared parameters
-        sd_spat_range = (config.param_range_low, config.param_range_high)
+        sd_spat_range = (config.param_range_low - config.param_step // 2, config.param_range_high)
         sd_motor_range = (0.1, 50.0)
         center = (config.param_range_low + config.param_range_high) / 2
         feat_step_schedule = [10, 6, 4, 2, 1] # Decreasing step sizes
@@ -1244,8 +1244,8 @@ class GridBasedMultiConditionOptimizer:
 
             # Boundary-hit detection
             spat_step = (sd_spat_range[1] - sd_spat_range[0]) / (shared_grid_size - 1)
-            if float(sd_spat) <= config.param_range_low + spat_step:
-                print(f"  BOUNDARY: sd_spat={float(sd_spat):.1f} near lower bound {config.param_range_low}")
+            if float(sd_spat) <= sd_spat_range[0] + spat_step:
+                print(f"  BOUNDARY: sd_spat={float(sd_spat):.1f} near lower bound {sd_spat_range[0]}")
             if float(sd_spat) >= config.param_range_high - spat_step:
                 print(f"  BOUNDARY: sd_spat={float(sd_spat):.1f} near upper bound {config.param_range_high}")
             feat1_best = best_shared_result[:, 3]
@@ -1254,12 +1254,13 @@ class GridBasedMultiConditionOptimizer:
             for i in range(self.n_conditions):
                 cname = self.condition_names[i]
                 f1, f2 = float(feat1_best[i]), float(feat2_best[i])
-                if f1 <= config.param_range_low + current_feat_step:
-                    print(f"  BOUNDARY: {cname} sd_feat1={f1:.1f} near lower bound {config.param_range_low}")
+                feat_low = config.param_range_low - config.param_step // 2
+                if f1 <= feat_low + current_feat_step:
+                    print(f"  BOUNDARY: {cname} sd_feat1={f1:.1f} near lower bound {feat_low}")
                 if f1 >= config.param_range_high - current_feat_step:
                     print(f"  BOUNDARY: {cname} sd_feat1={f1:.1f} near upper bound {config.param_range_high}")
-                if f2 <= config.param_range_low + current_feat_step:
-                    print(f"  BOUNDARY: {cname} sd_feat2={f2:.1f} near lower bound {config.param_range_low}")
+                if f2 <= feat_low + current_feat_step:
+                    print(f"  BOUNDARY: {cname} sd_feat2={f2:.1f} near lower bound {feat_low}")
                 if f2 >= config.param_range_high - current_feat_step:
                     print(f"  BOUNDARY: {cname} sd_feat2={f2:.1f} near upper bound {config.param_range_high}")
 
@@ -1300,7 +1301,7 @@ class GridBasedMultiConditionOptimizer:
 
             # Update ranges, ensuring they stay within bounds
             sd_spat_range = (
-                max(config.param_range_low, best_sd_spat - new_spat_half_range),
+                max(config.param_range_low - config.param_step // 2, best_sd_spat - new_spat_half_range),
                 min(config.param_range_high, best_sd_spat + new_spat_half_range)
             )
             sd_motor_range = (

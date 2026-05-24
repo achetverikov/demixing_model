@@ -233,7 +233,7 @@ def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_
 
     surfaces_list = load_averaged_surfaces(
         folder=str(resolved_surfaces_folder),
-        param_low=config.param_range_low,
+        param_low=config.param_range_low - config.param_step // 2,
         param_high=config.param_range_high
     )
     

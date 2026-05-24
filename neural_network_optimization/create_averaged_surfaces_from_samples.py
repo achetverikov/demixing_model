@@ -171,14 +171,32 @@ class AveragedSurface(Surface):
         super().__post_init__()
 
 def find_sample_file(folder: Path, sf1: float, sf2: float, sp: float) -> Optional[Path]:
-    """Find sample file matching the given parameters."""
-    pattern = re.compile(rf"samples_sf1_{sf1:.1f}_sf2_{sf2:.1f}_sp_{sp:.1f}_.*\.pkl\.gz")
-    
+    """Find sample file matching the given parameters.
+
+    For off-diagonal (sf1 != sf2) files this returns the first match.
+    For diagonal files use find_diagonal_run_files instead.
+    Excludes _r0/_r1 run-indexed files so diagonal runs don't accidentally
+    satisfy an off-diagonal lookup.
+    """
+    pattern = re.compile(rf"samples_sf1_{sf1:.1f}_sf2_{sf2:.1f}_sp_{sp:.1f}_[^r].*\.pkl\.gz")
     for file in folder.glob("samples_sf1_*_sf2_*_sp_*.pkl.gz"):
         if pattern.match(file.name):
             return file
-    
     return None
+
+
+def find_diagonal_run_files(folder: Path, sf1: float, sp: float) -> List[Path]:
+    """Find the two independent-run sample files for a diagonal (sf1==sf2) combination.
+
+    Returns a list of matching files ordered by run index (r0 before r1).
+    Returns an empty list if neither run file exists.
+    """
+    pattern = re.compile(rf"samples_sf1_{sf1:.1f}_sf2_{sf1:.1f}_sp_{sp:.1f}_r\d_.*\.pkl\.gz")
+    files = sorted(
+        (f for f in folder.glob("samples_sf1_*_sf2_*_sp_*.pkl.gz") if pattern.match(f.name)),
+        key=lambda f: f.name
+    )
+    return files
 
 def load_sample_data(file_path: Path) -> Dict:
     """Load sample data from compressed pickle file."""
@@ -341,9 +359,10 @@ def process_single_surface(params_tuple, input_path, output_path, compiled_vmap_
                                 'mu1_samples': original_samples['mu1_samples'][1:],
                                 'mu2_samples': original_samples['mu2_samples'][1:]}
 
-        # Find and load mirror sample file (sf2, sf1, sp) if different.
-        # If the mirror file doesn't exist yet, skip this pair entirely so a
-        # re-run can process both files together once the mirror arrives.
+        # Find and load the second sample file:
+        # - Off-diagonal (sf1 != sf2): mirror file (sf2, sf1, sp); skip if absent.
+        # - Diagonal (sf1 == sf2): independent run-1 file (_r1 suffix); fall back
+        #   gracefully if not yet available (old files without run index still work).
         mirror_samples = None
         mirror_file = None
         if sf1 != sf2:
@@ -357,6 +376,25 @@ def process_single_surface(params_tuple, input_path, output_path, compiled_vmap_
                 mirror_samples = {**mirror_samples,
                                   'mu1_samples': mirror_samples['mu1_samples'][1:],
                                   'mu2_samples': mirror_samples['mu2_samples'][1:]}
+        else:
+            # Diagonal: look for a second independent run (_r0/_r1 pair).
+            run_files = find_diagonal_run_files(input_path, sf1, sp)
+            if len(run_files) >= 2:
+                # Use run_files[0] as canonical, run_files[1] as "mirror"
+                original_file = run_files[0]
+                original_samples = load_sample_data(original_file)
+                if original_samples['mu1_samples'].shape[0] > n_expected:
+                    original_samples = {**original_samples,
+                                        'mu1_samples': original_samples['mu1_samples'][1:],
+                                        'mu2_samples': original_samples['mu2_samples'][1:]}
+                mirror_file = run_files[1]
+                print(f"[Thread {thread_id}] Loading diagonal run-1 samples from {mirror_file}")
+                mirror_samples = load_sample_data(mirror_file)
+                if mirror_samples['mu1_samples'].shape[0] > n_expected:
+                    mirror_samples = {**mirror_samples,
+                                      'mu1_samples': mirror_samples['mu1_samples'][1:],
+                                      'mu2_samples': mirror_samples['mu2_samples'][1:]}
+            # else: only one file available (old format) — original_samples already loaded above
         
         # Process samples and create surface directly
         print(f"[Thread {thread_id}] Creating averaged surface for ({sf1}, {sf2}, {sp})")
@@ -648,7 +686,7 @@ def create_all_averaged_surfaces(input_folder: str = None, output_folder: str = 
     
     print(f"\nSurface creation complete!")
     print(f"Total averaged surfaces created: {created_count}")
-    print(f"Original L1 combinations: {len(combinations)}")
+    print(f"Overall combinations: {len(combinations)}")
 
 if __name__ == "__main__":
     import argparse

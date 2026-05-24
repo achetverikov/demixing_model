@@ -40,6 +40,31 @@ import jax_fit_main as jfm
 config = Config()
 config.n_samples = 100
 
+
+class ChunkConflict(Exception):
+    """Raised when a write conflict is detected mid-chunk; signals the main loop to release
+    the current chunk lock and call _find_available_chunk again."""
+
+
+def _load_json_with_retry(path: Path, max_attempts: int = 3, delay: float = 2.0):
+    """Read and parse a JSON file, retrying on transient I/O errors (e.g. OneDrive sync).
+
+    Raises the last OSError if all attempts fail, so callers can decide whether to
+    treat the file as missing/corrupt or to propagate the error.
+    """
+    last_exc: Exception = FileNotFoundError(path)
+    for _ in range(max_attempts):
+        try:
+            with open(path, 'r') as f:
+                return json.load(f)
+        except OSError as e:
+            last_exc = e
+            time.sleep(delay)
+        except json.JSONDecodeError:
+            raise  # Not transient — propagate immediately
+    raise last_exc
+
+
 def get_grid_level_info(level: int = 1) -> Dict:
     """
     Get grid configuration for different refinement levels.
@@ -64,10 +89,11 @@ def get_grid_level_info(level: int = 1) -> Dict:
     elif level == 2:
         step_size = config.param_step // 2
         description = f"Fine grid (step={step_size})"
-        # Level 2: all surfaces at step_size/2 intervals MINUS those already in Level 1
-        fine_param_vals = np.arange(config.param_range_low, config.param_range_high + step_size, step_size)
+        # L2 extends one step below L1 so values like 5 are included.
+        fine_start = config.param_range_low - step_size
+        fine_param_vals = np.arange(fine_start, config.param_range_high + step_size, step_size)
         coarse_param_vals = np.arange(config.param_range_low, config.param_range_high + config.param_step, config.param_step)
-        
+
         total_fine_surfaces = len(fine_param_vals) ** 3
         total_coarse_surfaces = len(coarse_param_vals) ** 3
         expected_total = total_fine_surfaces - total_coarse_surfaces
@@ -83,10 +109,19 @@ def get_grid_level_info(level: int = 1) -> Dict:
     }
 
 
-def create_param_identifier(sd_feat1: float, sd_feat2: float, sd_spat: float) -> Tuple[str, str]:
-    """Create human-readable parameter identifier and hash."""
-    param_name = f"sf1_{sd_feat1:.1f}_sf2_{sd_feat2:.1f}_sp_{sd_spat:.1f}"
-    param_str = f"{sd_feat1:.6f}_{sd_feat2:.6f}_{sd_spat:.6f}"
+def create_param_identifier(sd_feat1: float, sd_feat2: float, sd_spat: float,
+                            run_index: Optional[int] = None) -> Tuple[str, str]:
+    """Create human-readable parameter identifier and hash.
+
+    For diagonal combinations (sf1==sf2) that are computed twice, pass run_index=0 or 1
+    to produce distinct filenames and hashes for each independent run.
+    """
+    if run_index is not None:
+        param_name = f"sf1_{sd_feat1:.1f}_sf2_{sd_feat2:.1f}_sp_{sd_spat:.1f}_r{run_index}"
+        param_str = f"{sd_feat1:.6f}_{sd_feat2:.6f}_{sd_spat:.6f}_r{run_index}"
+    else:
+        param_name = f"sf1_{sd_feat1:.1f}_sf2_{sd_feat2:.1f}_sp_{sd_spat:.1f}"
+        param_str = f"{sd_feat1:.6f}_{sd_feat2:.6f}_{sd_spat:.6f}"
     param_hash = hashlib.md5(param_str.encode()).hexdigest()[:8]
     return param_name, param_hash
 
@@ -129,10 +164,12 @@ def save_samples_checkpoint(output_dir: Path,
     if full_results is not None:
         checkpoint_data['full_results'] = full_results.astype(jnp.float32)
 
-    # Save pickle file
+    # Save pickle file atomically: write to .tmp then rename to avoid partial reads
     file = output_dir / f"samples_{param_name}_{param_hash}.pkl.gz"
-    with gzip.open(file, 'wb') as f:
+    tmp = file.parent / (file.name + '.tmp')
+    with gzip.open(tmp, 'wb') as f:
         pickle.dump(checkpoint_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+    tmp.replace(file)
 
     # Optionally save CSV
     if save_csv and full_results is not None:
@@ -177,10 +214,7 @@ def load_progress_state(output_dir: Path) -> Dict:
     # Get actual computation time and machine info from progress summaries
     for summary_file in output_dir.glob("progress_summary_*.json"):
         try:
-            import json
-            with open(summary_file, 'r') as f:
-                summary = json.load(f)
-            
+            summary = _load_json_with_retry(summary_file)
             machine_id = summary.get('machine_id', 'unknown')
             session_stats = summary.get('session_stats', {})
             samples_computed = session_stats.get('samples_computed', 0)
@@ -240,9 +274,13 @@ class ChunkedGridComputer:
         # Create output directory
         self.output_dir.mkdir(exist_ok=True)
 
-        # Initialize parameter grid for this level
-        self.param_combinations = self._create_param_combinations()
-        self.total_combinations = len(self.param_combinations)
+        # Initialize parameter grid for this level.
+        # param_groups is a list of groups; each group is a list of 1 or 2 combinations.
+        # Off-diagonal pairs (sf1 != sf2) form groups of 2 so they always land in the
+        # same chunk.  Diagonal combinations (sf1 == sf2) form singleton groups.
+        self.param_groups = self._create_param_groups()
+        self.total_groups = len(self.param_groups)
+        self.total_combinations = sum(len(g) for g in self.param_groups)
 
         print(f"=== Enhanced Chunked Grid Computer ===")
         print(f"Machine ID: {self.machine_id}")
@@ -254,31 +292,47 @@ class ChunkedGridComputer:
             print(f"Grid Level: {self.grid_info['level']} - {self.grid_info['description']}")
             print(
                 f"Parameter range: {config.param_range_low}-{config.param_range_high}, step: {self.grid_info['step_size']}")
-        print(f"Total parameter combinations: {self.total_combinations:,}")
+        print(f"Total parameter combinations: {self.total_combinations:,} ({self.total_groups:,} groups)")
         print(f"Large/small chunk sizes: {self.large_chunk_size}/{self.small_chunk_size}")
         print(f"Save full results: {self.save_full_results}, Save CSV: {self.save_csv}")
 
 
-    def _create_param_combinations(self) -> List[Tuple]:
-        """Create parameter combinations for the current grid level or from custom list."""
-        if self.custom_param_list:
-            # Use custom parameter list
-            combinations = []
-            for idx, (sd_feat1, sd_feat2, sd_spat) in enumerate(self.custom_param_list):
-                # Use idx as placeholder for i, j, k
-                combinations.append((idx, idx, idx, sd_feat1, sd_feat2, sd_spat))
-            return combinations
-        else:
-            # Use standard grid
-            step_size = self.grid_info['step_size']
-            param_vals = np.arange(config.param_range_low, config.param_range_high + step_size, step_size)
-            combinations = []
+    def _create_param_groups(self) -> List[List[Tuple]]:
+        """Create parameter combination groups for the current grid level or custom list.
 
-            for i, sd_feat1 in enumerate(param_vals):
-                for j, sd_feat2 in enumerate(param_vals):
-                    for k, sd_spat in enumerate(param_vals):
-                        combinations.append((i, j, k, sd_feat1, sd_feat2, sd_spat))
-            return combinations
+        Each group is a list of 1 or 2 tuples (i, j, k, sf1, sf2, sp).
+        Off-diagonal pairs (sf1 != sf2) yield a group of two: canonical (sf1 < sf2)
+        followed by its mirror (sf2, sf1).  Diagonal combinations yield a singleton.
+        Grouping guarantees that mirrors always fall in the same chunk.
+        """
+        if self.custom_param_list:
+            return [[(idx, idx, idx, float(sf1), float(sf2), float(sp), None)]
+                    for idx, (sf1, sf2, sp) in enumerate(self.custom_param_list)]
+
+        step_size = self.grid_info['step_size']
+        fine_start = (config.param_range_low - step_size
+                      if self.grid_level == 2 else config.param_range_low)
+        param_vals = np.arange(fine_start, config.param_range_high + step_size, step_size)
+        groups = []
+        for i, sf1 in enumerate(param_vals):
+            for j, sf2 in enumerate(param_vals):
+                if sf1 > sf2:
+                    continue  # covered as the mirror in group (sf2, sf1)
+                for k, sp in enumerate(param_vals):
+                    if sf1 < sf2:
+                        # Off-diagonal: canonical + mirror, no run_index needed
+                        groups.append([
+                            (i, j, k, float(sf1), float(sf2), float(sp), None),
+                            (j, i, k, float(sf2), float(sf1), float(sp), None),
+                        ])
+                    else:
+                        # Diagonal (sf1==sf2): two independent runs with different seeds
+                        # so the averaged surface has the same sample count as off-diagonal.
+                        groups.append([
+                            (i, j, k, float(sf1), float(sf2), float(sp), 0),
+                            (i, j, k, float(sf1), float(sf2), float(sp), 1),
+                        ])
+        return groups
 
     def _samples_exist(self, param_name: str, param_hash: str) -> bool:
         """Check if surface file exists and is complete."""
@@ -330,8 +384,7 @@ class ChunkedGridComputer:
     def _handle_existing_lock(self, lock_file: Path, chunk_id: str) -> bool:
         """Handle existing lock with comprehensive stale detection."""
         try:
-            with open(lock_file, 'r') as f:
-                lock_data = json.load(f)
+            lock_data = _load_json_with_retry(lock_file)
 
             lock_start_time = lock_data.get('start_time', 0)
             lock_machine_id = lock_data.get('machine_id', 'unknown')
@@ -381,44 +434,144 @@ class ChunkedGridComputer:
                 return self._chunk_lock_operations(chunk_id, 'create')
 
     def _is_machine_inactive(self, machine_id: str, lock_start_time: float) -> bool:
-        """Check if a machine appears to be inactive based on recent surface creation."""
-        # Look for surfaces created by this machine after the lock was created
-        recent_activity_threshold = lock_start_time + 1800  # 30 minutes after lock
+        """Check if a machine appears inactive by looking at its progress summary timestamp.
 
-        for samples_file in self.output_dir.glob("samples_sf1_*_sf2_*_sp_*_*.pkl"):
+        Uses the progress_summary_{machine_id}.json mtime as a heartbeat — written after
+        every chunk.  A machine is considered active if its summary was updated after the
+        lock was created (with a one-full-chunk grace period based on the slowest observed
+        throughput so slow machines are not wrongly declared inactive).
+        """
+        summary_file = self.output_dir / f"progress_summary_{machine_id}.json"
+        try:
+            last_update = summary_file.stat().st_mtime
+        except OSError:
+            return True  # No summary file → definitely inactive
+
+        # Allow up to 3 hours grace so a slow machine finishing a large chunk isn't
+        # incorrectly evicted (at 29 surf/h, a 50-combo chunk takes ~1.7 hours).
+        grace_period = 10800  # seconds
+        return last_update < lock_start_time - grace_period
+
+    def _log_error(self, param_name: str, param_hash: str,
+                   sd_feat1: float, sd_feat2: float, sd_spat: float,
+                   error: Exception) -> None:
+        """Append a write-failure entry to the machine-specific error log (JSONL)."""
+        log_file = self.output_dir / f"errors_{self.machine_id}.jsonl"
+        entry = {
+            'timestamp': datetime.now().isoformat(),
+            'param_name': param_name,
+            'param_hash': param_hash,
+            'sd_feat1': sd_feat1,
+            'sd_feat2': sd_feat2,
+            'sd_spat': sd_spat,
+            'error': str(error),
+        }
+        with open(log_file, 'a') as f:
+            f.write(json.dumps(entry) + '\n')
+
+    def _check_error_logs(self) -> None:
+        """After all work is done, verify that previously errored files are now correct."""
+        log_file = self.output_dir / f"errors_{self.machine_id}.jsonl"
+        if not log_file.exists():
+            return
+
+        errors = []
+        with open(log_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        errors.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+
+        if not errors:
+            return
+
+        still_broken = [
+            e for e in errors
+            if not self._samples_exist(e['param_name'], e['param_hash'])
+        ]
+
+        if still_broken:
+            print(f"\n[{self.machine_id}] WARNING: {len(still_broken)}/{len(errors)} "
+                  f"previously errored files are still missing or corrupt:")
+            for e in still_broken:
+                print(f"  {e['param_name']} (error at {e['timestamp']}): {e['error']}")
+        else:
+            print(f"\n[{self.machine_id}] All {len(errors)} previously errored files "
+                  f"are now present and correct.")
+
+    def _save_with_retry(self, output_dir: Path, mu1_bias_array, mu2_bias_array,
+                         param_name: str, param_hash: str,
+                         sd_feat1: float, sd_feat2: float, sd_spat: float,
+                         samples_time: float, samples_params: Dict,
+                         run_index: Optional[int] = None,
+                         full_results_combined=None) -> str:
+        """Save samples with retry logic for OneDrive/network filesystem conflicts.
+
+        Returns 'saved' or 'error'.
+        Raises ChunkConflict if another machine's file appears during a retry — the caller
+        should release the chunk lock and call _find_available_chunk again.
+        On persistent failure the error is logged to errors_{machine_id}.jsonl.
+        """
+        max_retries = 3
+        wait_seconds = 60
+        last_exc = None
+
+        for attempt in range(max_retries):
             try:
-                # Check file modification time
-                if samples_file.stat().st_mtime > recent_activity_threshold:
-                    # Check if this surface was created by the locked machine
-                    with open(samples_file, 'rb') as f:
-                        data = pickle.load(f)
-                        if data.get('parameters', {}).get('machine_id') == machine_id:
-                            return False  # Machine is still active
-            except (OSError, pickle.PickleError, KeyError):
-                continue
+                save_samples_checkpoint(
+                    output_dir, mu1_bias_array, mu2_bias_array,
+                    param_name, param_hash, sd_feat1, sd_feat2, sd_spat,
+                    samples_time, self.machine_id,
+                    n_simulations=samples_params['n_simulations'],
+                    n_samples=samples_params['n_samples'],
+                    random_seed=samples_params['random_seed'],
+                    full_results=full_results_combined,
+                    save_csv=self.save_csv,
+                )
+                return 'saved'
+            except OSError as e:
+                last_exc = e
+                print(f"  [{self.machine_id}] Write failed (attempt {attempt + 1}/{max_retries}): {e}")
+                print(f"  [{self.machine_id}] Waiting {wait_seconds}s then checking for conflict...")
+                time.sleep(wait_seconds)
+                if self._samples_exist(param_name, param_hash):
+                    print(f"  [{self.machine_id}] File appeared — another machine wrote it.")
+                    raise ChunkConflict(
+                        f"Write conflict on {param_name}: another machine owns this work"
+                    )
+                print(f"  [{self.machine_id}] File still absent, retrying write...")
 
-        # No recent activity found from this machine
-        return True
+        print(f"  [{self.machine_id}] All {max_retries} retries exhausted for {param_name}, logging error.")
+        self._log_error(param_name, param_hash, sd_feat1, sd_feat2, sd_spat, last_exc)
+        return 'error'
 
     def _find_available_chunk(self) -> Tuple[Optional[int], Optional[int]]:
-        """Find the next available chunk to work on."""
-        progress = load_progress_state(self.output_dir)
-        completed_hashes = progress['completed_hashes']
+        """Find the next available chunk to work on.
 
-        # Find incomplete parameter combinations
-        incomplete_indices = []
-        for idx, (i, j, k, sd_feat1, sd_feat2, sd_spat) in enumerate(self.param_combinations):
-            param_name, param_hash = create_param_identifier(sd_feat1, sd_feat2, sd_spat)
-            if param_hash not in completed_hashes and not self._samples_exist(param_name, param_hash):
-                incomplete_indices.append(idx)
+        Uses only filename-based completed_hashes (no file opens) to determine which
+        groups still have work.  _samples_exist is reserved for the per-combination
+        check inside _process_chunk.
+        """
+        completed_hashes = load_progress_state(self.output_dir)['completed_hashes']
 
-        if not incomplete_indices:
+        # A group is incomplete if any of its combinations is not yet on disk.
+        incomplete_group_indices = set()
+        for idx, group in enumerate(self.param_groups):
+            for (_, _, _, sf1, sf2, sp, run_index) in group:
+                _, param_hash = create_param_identifier(sf1, sf2, sp, run_index)
+                if param_hash not in completed_hashes:
+                    incomplete_group_indices.add(idx)
+                    break  # one missing member is enough to mark the group incomplete
+
+        if not incomplete_group_indices:
             return None, None
 
-        # Determine chunk size based on remaining work
-        remaining_work = len(incomplete_indices)
-        potential_large_chunks = remaining_work // self.large_chunk_size
-
+        # Determine chunk size (in groups) based on remaining work
+        remaining_groups = len(incomplete_group_indices)
+        potential_large_chunks = remaining_groups // self.large_chunk_size
         chunk_size = (self.small_chunk_size if potential_large_chunks <= self.small_chunk_threshold
                       else self.large_chunk_size)
 
@@ -426,29 +579,23 @@ class ChunkedGridComputer:
             print(f"[{self.machine_id}] Switching to small chunks (size={chunk_size})")
 
         import random
-        # Step 1: Collect candidate chunks
         candidate_chunks = []
-        for chunk_start in range(0, self.total_combinations, chunk_size):
-            chunk_end = min(chunk_start + chunk_size, self.total_combinations)
+        for chunk_start in range(0, self.total_groups, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, self.total_groups)
             chunk_id = f"L{self.grid_level}_chunk_{chunk_start:05d}_{chunk_end:05d}"
-
-            # Check if this chunk has any work to do
-            chunk_has_work = any(idx in incomplete_indices for idx in range(chunk_start, chunk_end))
-            if chunk_has_work:
+            if any(idx in incomplete_group_indices for idx in range(chunk_start, chunk_end)):
                 candidate_chunks.append((chunk_start, chunk_end, chunk_id))
 
-        # Step 2: Shuffle candidates and try locking one
         random.shuffle(candidate_chunks)
         for chunk_start, chunk_end, chunk_id in candidate_chunks:
             if self._chunk_lock_operations(chunk_id, 'create'):
                 return chunk_start, chunk_size
 
-        # No available chunk found
         return None, None
 
     def _process_chunk(self, chunk_start_idx: int, chunk_size: int, samples_params: Dict) -> Tuple[int, int, float]:
         """Process a single chunk of parameter combinations."""
-        chunk_end_idx = min(chunk_start_idx + chunk_size, self.total_combinations)
+        chunk_end_idx = min(chunk_start_idx + chunk_size, self.total_groups)
         chunk_id = f"L{self.grid_level}_chunk_{chunk_start_idx:05d}_{chunk_end_idx:05d}"
 
         print(f"\n[{self.machine_id}] Processing {chunk_id}")
@@ -489,72 +636,69 @@ class ChunkedGridComputer:
                 )
                 return carry, (mu_1_bias, mu_2_bias)
 
-        for idx in range(chunk_start_idx, chunk_end_idx):
-            if idx >= len(self.param_combinations):
+        for group_idx in range(chunk_start_idx, chunk_end_idx):
+            if group_idx >= self.total_groups:
                 break
 
-            i, j, k, sd_feat1, sd_feat2, sd_spat = self.param_combinations[idx]
-            param_name, param_hash = create_param_identifier(sd_feat1, sd_feat2, sd_spat)
-            sd_feat1_arr = jnp.full(len(feat_diff_vals), sd_feat1)
-            sd_feat2_arr = jnp.full(len(feat_diff_vals), sd_feat2)
-            sd_spat_arr = jnp.full(len(feat_diff_vals), sd_spat)
+            for (i, j, k, sd_feat1, sd_feat2, sd_spat, run_index) in self.param_groups[group_idx]:
+                param_name, param_hash = create_param_identifier(sd_feat1, sd_feat2, sd_spat, run_index)
 
-            if self._samples_exist(param_name, param_hash):
-                samples_skipped += 1
-                continue
+                if self._samples_exist(param_name, param_hash):
+                    samples_skipped += 1
+                    continue
 
-            samples_start = time.time()
-            print(f"  [{self.machine_id}] Computing {samples_computed + 1}: "
-                  f"sd_feat1={sd_feat1:.1f}, sd_feat2={sd_feat2:.1f}, sd_spat={sd_spat:.1f}, n_simulations={samples_params['n_simulations']}, n_samples={samples_params['n_samples']}")
+                sd_feat1_arr = jnp.full(len(feat_diff_vals), sd_feat1)
+                sd_feat2_arr = jnp.full(len(feat_diff_vals), sd_feat2)
+                sd_spat_arr = jnp.full(len(feat_diff_vals), sd_spat)
 
-            # Run simulations 10 times and combine results
-            all_mu1_results = []
-            all_mu2_results = []
+                samples_start = time.time()
+                print(f"  [{self.machine_id}] Computing {samples_computed + 1}: "
+                      f"sd_feat1={sd_feat1:.1f}, sd_feat2={sd_feat2:.1f}, sd_spat={sd_spat:.1f}, "
+                      f"n_simulations={samples_params['n_simulations']}, n_samples={samples_params['n_samples']}")
 
-            all_full_results = [] if self.save_full_results else None
+                all_mu1_results = []
+                all_mu2_results = []
+                all_full_results = [] if self.save_full_results else None
 
-            for rep in range(num_scan_loops):
-                key, *subkeys = jax.random.split(key, len(feat_diff_vals)+1)
+                for rep in range(num_scan_loops):
+                    key, *subkeys = jax.random.split(key, len(feat_diff_vals) + 1)
 
-                tic = time.time()
-                if self.save_full_results:
-                    _, (mu1_bias_array, mu2_bias_array, full_res_array) = jax.lax.scan(
-                        universal_scan_fn, None, (jnp.array(subkeys), feat_diff_vals, sd_feat1_arr, sd_feat2_arr, sd_spat_arr)
-                    )
-                    all_full_results.append(full_res_array)
-                else:
-                    _, (mu1_bias_array, mu2_bias_array) = jax.lax.scan(
-                        universal_scan_fn, None, (jnp.array(subkeys), feat_diff_vals, sd_feat1_arr, sd_feat2_arr, sd_spat_arr)
-                    )
-                toc = time.time()
-                print(f"    Scan {rep+1}/10: {toc-tic:.1f}s")
+                    tic = time.time()
+                    if self.save_full_results:
+                        _, (mu1_bias_array, mu2_bias_array, full_res_array) = jax.lax.scan(
+                            universal_scan_fn, None,
+                            (jnp.array(subkeys), feat_diff_vals, sd_feat1_arr, sd_feat2_arr, sd_spat_arr)
+                        )
+                        all_full_results.append(full_res_array)
+                    else:
+                        _, (mu1_bias_array, mu2_bias_array) = jax.lax.scan(
+                            universal_scan_fn, None,
+                            (jnp.array(subkeys), feat_diff_vals, sd_feat1_arr, sd_feat2_arr, sd_spat_arr)
+                        )
+                    toc = time.time()
+                    print(f"    Scan {rep + 1}/10: {toc - tic:.1f}s")
+                    all_mu1_results.append(mu1_bias_array)
+                    all_mu2_results.append(mu2_bias_array)
 
-                all_mu1_results.append(mu1_bias_array)
-                all_mu2_results.append(mu2_bias_array)
+                mu1_bias_array = jnp.concatenate(all_mu1_results, axis=1)
+                mu2_bias_array = jnp.concatenate(all_mu2_results, axis=1)
+                full_results_combined = (
+                    jnp.concatenate(all_full_results, axis=1)
+                    if self.save_full_results and all_full_results else None
+                )
 
-            # Combine all results
-            mu1_bias_array = jnp.concatenate(all_mu1_results, axis=1)
-            mu2_bias_array = jnp.concatenate(all_mu2_results, axis=1)
+                samples_time = time.time() - samples_start
+                result = self._save_with_retry(
+                    self.output_dir, mu1_bias_array, mu2_bias_array,
+                    param_name, param_hash, sd_feat1, sd_feat2, sd_spat,
+                    samples_time, samples_params, run_index, full_results_combined
+                )
 
-            # Combine full results if collected
-            full_results_combined = None
-            if self.save_full_results and all_full_results:
-                # all_full_results is list of length num_scan_loops, each element shape (n_feat_diff, num_sims_per_loop, 2, C)
-                # Concatenate along the simulation dimension (axis=1)
-                full_results_combined = jnp.concatenate(all_full_results, axis=1)  # shape: (n_feat_diff, n_simulations, 2, C)
-
-            samples_time = time.time() - samples_start
-            save_samples_checkpoint(
-                self.output_dir, mu1_bias_array, mu2_bias_array, param_name, param_hash,
-                sd_feat1, sd_feat2, sd_spat, samples_time, self.machine_id,
-                n_simulations=samples_params['n_simulations'],
-                n_samples=samples_params['n_samples'],
-                random_seed=samples_params['random_seed'],
-                full_results=full_results_combined, save_csv=self.save_csv
-            )
-
-            samples_computed += 1
-            print(f"    Completed in {samples_time:.1f}s")
+                if result == 'saved':
+                    samples_computed += 1
+                    print(f"    Completed in {samples_time:.1f}s")
+                # 'error': already logged, continue to next combination
+                # ChunkConflict propagates up to compute_grid_level unchanged
 
         chunk_time = time.time() - chunk_start_time
 
@@ -619,8 +763,10 @@ class ChunkedGridComputer:
             chunk_start, chunk_size = self._find_available_chunk()
             if chunk_start is None:
                 print(f"\n[{self.machine_id}] No more work available")
+                self._check_error_logs()
                 break
 
+            chunk_id = f"L{self.grid_level}_chunk_{chunk_start:05d}_{min(chunk_start + chunk_size, self.total_groups):05d}"
             try:
                 samples_computed, samples_skipped, chunk_time = self._process_chunk(
                     chunk_start, chunk_size, samples_params
@@ -635,9 +781,14 @@ class ChunkedGridComputer:
                 self._save_progress_summary(session_stats)
                 time.sleep(1)  # Brief pause between chunks
 
+            except ChunkConflict as e:
+                print(f"\n[{self.machine_id}] Chunk conflict detected: {e}")
+                print(f"[{self.machine_id}] Releasing lock on {chunk_id} and reassigning chunk.")
+                self._chunk_lock_operations(chunk_id, 'remove')
+                # Continue immediately — _find_available_chunk will pick a different chunk
+
             except KeyboardInterrupt:
                 print(f"\n[{self.machine_id}] Interrupted by user")
-                chunk_id = f"L{self.grid_level}_chunk_{chunk_start:05d}_{min(chunk_start + chunk_size, self.total_combinations):05d}"
                 self._chunk_lock_operations(chunk_id, 'remove')
                 break
 
@@ -693,13 +844,12 @@ def get_grid_status(grid_level: int = None) -> Dict:
     active_chunks = []
     for lock_file in output_dir.glob(f"computing_L{grid_level}_chunk_*.lock"):
         try:
-            with open(lock_file, 'r') as f:
-                lock_data = json.load(f)
-                active_chunks.append({
-                    'chunk_id': lock_file.stem.replace('computing_', ''),
-                    'machine_id': lock_data.get('machine_id', 'unknown'),
-                    'running_time': time.time() - lock_data.get('start_time', time.time())
-                })
+            lock_data = _load_json_with_retry(lock_file)
+            active_chunks.append({
+                'chunk_id': lock_file.stem.replace('computing_', ''),
+                'machine_id': lock_data.get('machine_id', 'unknown'),
+                'running_time': time.time() - lock_data.get('start_time', time.time())
+            })
         except (json.JSONDecodeError, FileNotFoundError):
             continue
 
@@ -707,9 +857,8 @@ def get_grid_status(grid_level: int = None) -> Dict:
     machine_summaries = {}
     for summary_file in output_dir.glob("progress_summary_*.json"):
         try:
-            with open(summary_file, 'r') as f:
-                summary = json.load(f)
-                machine_summaries[summary.get('machine_id', 'unknown')] = summary
+            summary = _load_json_with_retry(summary_file)
+            machine_summaries[summary.get('machine_id', 'unknown')] = summary
         except (json.JSONDecodeError, FileNotFoundError):
             continue
 
@@ -718,12 +867,14 @@ def get_grid_status(grid_level: int = None) -> Dict:
     step_size = grid_info['step_size']
     import re
 
-    pattern = re.compile(r"samples_sf1_(?P<sf1>[\d.]+)_sf2_(?P<sf2>[\d.]+)_sp_(?P<sp>[\d.]+)_.*")
+    # Strict pattern: only canonical filenames with 8-char hex hash and .pkl.gz extension.
+    # Excludes OneDrive conflict copies, .tmp files, and other spurious matches.
+    pattern = re.compile(r"samples_sf1_(?P<sf1>[\d.]+)_sf2_(?P<sf2>[\d.]+)_sp_(?P<sp>[\d.]+)_[a-f0-9]{8}\.pkl\.gz$")
 
     if grid_level == 1:
         # Level 1: count surfaces at coarse step intervals
         param_vals = np.arange(config.param_range_low, config.param_range_high + config.param_step, config.param_step)
-        for samples_file in output_dir.glob("samples_sf1_*_sf2_*_sp_*"):
+        for samples_file in output_dir.glob("samples_sf1_*_sf2_*_sp_*.pkl.gz"):
             try:
                 match = pattern.match(samples_file.name)
                 if not match:
@@ -742,10 +893,11 @@ def get_grid_status(grid_level: int = None) -> Dict:
                 
     elif grid_level == 2:
         # Level 2: count surfaces at fine step intervals BUT exclude those from Level 1
-        fine_param_vals = np.arange(config.param_range_low, config.param_range_high + step_size, step_size)
+        fine_start = config.param_range_low - step_size
+        fine_param_vals = np.arange(fine_start, config.param_range_high + step_size, step_size)
         coarse_param_vals = np.arange(config.param_range_low, config.param_range_high + config.param_step, config.param_step)
         
-        for samples_file in output_dir.glob("samples_sf1_*_sf2_*_sp_*"):
+        for samples_file in output_dir.glob("samples_sf1_*_sf2_*_sp_*.pkl.gz"):
             try:
                 match = pattern.match(samples_file.name)
                 if not match:
@@ -971,8 +1123,7 @@ def cleanup_stale_locks(max_age_hours: float = 3.0, dry_run: bool = True) -> Dic
         cleanup_results['scanned_locks'] += 1
 
         try:
-            with open(lock_file, 'r') as f:
-                lock_data = json.load(f)
+            lock_data = _load_json_with_retry(lock_file)
 
             lock_start_time = lock_data.get('start_time', 0)
             lock_machine_id = lock_data.get('machine_id', 'unknown')
@@ -1076,8 +1227,7 @@ def recover_crashed_machine(machine_id: str, max_age_hours: float = 2.0,
     # Find chunks locked by this machine
     for lock_file in output_dir.glob("computing_*.lock"):
         try:
-            with open(lock_file, 'r') as f:
-                lock_data = json.load(f)
+            lock_data = _load_json_with_retry(lock_file)
 
             if lock_data.get('machine_id') == machine_id:
                 lock_age_hours = (current_time - lock_data.get('start_time', 0)) / 3600

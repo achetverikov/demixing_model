@@ -298,14 +298,21 @@ def print_comprehensive_status(
     if total_rate > 0:
         l1_rem = level1['missing_count']
         l2_rem = level2['missing_count']
-        l1_h = l1_rem / total_rate
-        total_h = (l1_rem + l2_rem) / total_rate
-        l1_eta = datetime.now() + timedelta(hours=l1_h)
-        total_eta = datetime.now() + timedelta(hours=total_h)
-        print(f"  Est. L1 done:   {l1_eta.strftime('%Y-%m-%d %H:%M')} "
-              f"({l1_h:.1f}h, {l1_rem:,} remaining)")
-        print(f"  Est. L1+L2 done:{total_eta.strftime('%Y-%m-%d %H:%M')} "
-              f"({total_h:.1f}h, {l1_rem + l2_rem:,} remaining)")
+        if l1_rem > 0:
+            l1_h = l1_rem / total_rate
+            l1_eta = datetime.now() + timedelta(hours=l1_h)
+            print(f"  Est. L1 done:   {l1_eta.strftime('%Y-%m-%d %H:%M')} "
+                  f"({l1_h:.1f}h, {l1_rem:,} remaining)")
+        else:
+            print(f"  Est. L1 done:   complete")
+        total_rem = l1_rem + l2_rem
+        if total_rem > 0:
+            total_h = total_rem / total_rate
+            total_eta = datetime.now() + timedelta(hours=total_h)
+            print(f"  Est. L1+L2 done:{total_eta.strftime('%Y-%m-%d %H:%M')} "
+                  f"({total_h:.1f}h, {total_rem:,} remaining)")
+        else:
+            print(f"  Est. L1+L2 done: complete")
     if not all_machines:
         print("  No machine data yet.")
 

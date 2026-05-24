@@ -320,7 +320,7 @@ def plot_model_preds(checkpoint_file: str = None, params=None, n_points: int = 1
         checkpoint_file = max(all_checkpoints, key=lambda p: int(re.search(r'epoch_(\d+)', p.name).group(1)))
     model,_ = load_checkpoint(checkpoint_file)
 
-    param_range = np.arange(config.param_range_low, config.param_range_high, config.param_step)
+    param_range = np.arange(config.param_range_low, config.param_range_high + config.param_step, config.param_step)
     all_points = list(itertools.product(param_range, repeat=3))
     if n_points:
         all_points = random.sample(all_points, n_points)
