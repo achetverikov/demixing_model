@@ -26,15 +26,20 @@ import jax
 import jax.numpy as jnp
 from pathlib import Path
 import hashlib
-from typing import Tuple, Dict,  List, Optional
+from typing import Tuple, Dict, List, Optional
 import platform
 import json
 from datetime import datetime
 from jax import Array
 
+# Load .env before any other local imports so REDIS_* vars are available
+from lock_backend import load_env, make_lock_backend, FileLockBackend, LockBackend
+load_env()
+
 # Import required functions and config
-from shared.utils import Surface, resolve_input_path, resolve_results_path, get_git_commit
+from shared.utils import AveragedSurface, Surface, resolve_input_path, resolve_results_path, get_git_commit
 from shared.config import Config
+from shared.averaging import make_averaging_functions, average_sample_pair
 import jax_fit_functions as jf  # Import module to access diagonal_covariance flag
 import jax_fit_main as jfm
 config = Config()
@@ -244,7 +249,14 @@ class ChunkedGridComputer:
                  custom_param_list: Optional[List[Tuple[float, float, float]]] = None,
                  save_full_results: bool = False, save_csv: bool = False,
                  diagonal_covariance: bool = True, fix_weights: bool = False,
-                 algorithm: str = "EM"):
+                 algorithm: str = "EM",
+                 lock_backend: Optional[LockBackend] = None,
+                 lock_ttl: int = 1800,
+                 pipeline: bool = False,
+                 averaged_surfaces_dir: Optional[Path] = None,
+                 save_samples: bool = False,
+                 bias_bandwidth: float = 0.075,
+                 feat_bandwidth: float = 3.0):
         """Initialize a grid computer with chunking settings.
 
         Args:
@@ -256,6 +268,15 @@ class ChunkedGridComputer:
             diagonal_covariance: Whether to use diagonal covariance in fitting.
             fix_weights: Whether to fix mixture weights during fitting.
             algorithm: Fitting algorithm name.
+            lock_backend: LockBackend instance; defaults to FileLockBackend.
+            lock_ttl: Lock TTL in seconds (heartbeat keeps it alive).
+            pipeline: If True, average samples in-memory and save only averaged
+                      surfaces, skipping intermediate sample files.
+            averaged_surfaces_dir: Output directory for averaged surfaces when
+                                   pipeline=True. Derived from samples_folder if None.
+            save_samples: If True (and pipeline=True), also write sample files.
+            bias_bandwidth: KDE bandwidth for bias dimension (pipeline mode).
+            feat_bandwidth: KDE bandwidth for feat_diff dimension (pipeline mode).
         """
         self.machine_id = machine_id
         self.platform = platform.node()
@@ -268,6 +289,12 @@ class ChunkedGridComputer:
         self.fix_weights = fix_weights
         self.diagonal_covariance = diagonal_covariance
         self.algorithm = algorithm.upper()
+        self.lock_ttl = lock_ttl
+        self.pipeline = pipeline
+        self.save_samples = save_samples
+
+        # Lock backend — default to file locks in the output directory
+        self.lock_backend = lock_backend  # set after mkdir below
 
         # Dynamic chunking parameters
         self.large_chunk_size = 50
@@ -277,6 +304,32 @@ class ChunkedGridComputer:
         # Create output directory
         self.output_dir.mkdir(exist_ok=True)
 
+        # Resolve lock backend now that output_dir exists
+        if self.lock_backend is None:
+            self.lock_backend = FileLockBackend(self.output_dir)
+
+        # Averaged surfaces directory (pipeline mode)
+        if pipeline:
+            if averaged_surfaces_dir is not None:
+                self.averaged_surfaces_dir = Path(averaged_surfaces_dir)
+            else:
+                folder_name = Path(config.samples_folder).name
+                parent = Path(config.samples_folder).parent
+                self.averaged_surfaces_dir = parent / folder_name.replace(
+                    'sim_samples_', 'averaged_surfaces_', 1
+                )
+            self.averaged_surfaces_dir.mkdir(parents=True, exist_ok=True)
+
+            print("Compiling KDE averaging functions (pipeline mode)...")
+            self.avg_fns = make_averaging_functions(
+                config, bias_bandwidth=bias_bandwidth,
+                feat_bandwidth=feat_bandwidth,
+            )
+            print("KDE functions ready.")
+        else:
+            self.averaged_surfaces_dir = None
+            self.avg_fns = None
+
         # Initialize parameter grid for this level.
         # param_groups is a list of groups; each group is a list of 1 or 2 combinations.
         # Off-diagonal pairs (sf1 != sf2) form groups of 2 so they always land in the
@@ -285,19 +338,25 @@ class ChunkedGridComputer:
         self.total_groups = len(self.param_groups)
         self.total_combinations = sum(len(g) for g in self.param_groups)
 
+        lock_type = type(self.lock_backend).__name__
         print(f"=== Enhanced Chunked Grid Computer ===")
         print(f"Machine ID: {self.machine_id}")
         print(f"Platform: {self.platform}")
         print(f"Algorithm: {self.algorithm}")
+        print(f"Lock backend: {lock_type}  TTL: {self.lock_ttl}s")
+        print(f"Mode: {'pipeline (sample→average in-memory)' if pipeline else 'standard (save sample files)'}")
         if custom_param_list:
-            print(f"Mode: Custom parameter list ({len(custom_param_list)} combinations)")
+            print(f"Input: Custom parameter list ({len(custom_param_list)} combinations)")
         else:
             print(f"Grid Level: {self.grid_info['level']} - {self.grid_info['description']}")
             print(
                 f"Parameter range: {config.param_range_low}-{config.param_range_high}, step: {self.grid_info['step_size']}")
         print(f"Total parameter combinations: {self.total_combinations:,} ({self.total_groups:,} groups)")
         print(f"Large/small chunk sizes: {self.large_chunk_size}/{self.small_chunk_size}")
-        print(f"Save full results: {self.save_full_results}, Save CSV: {self.save_csv}")
+        if pipeline:
+            print(f"Averaged surfaces dir: {self.averaged_surfaces_dir}")
+        else:
+            print(f"Save full results: {self.save_full_results}, Save CSV: {self.save_csv}")
 
 
     def _create_param_groups(self) -> List[List[Tuple]]:
@@ -359,101 +418,11 @@ class ChunkedGridComputer:
             # Transient error (e.g. file being written by another process) — skip
             return False
 
-    def _chunk_lock_operations(self, chunk_id: str, operation: str) -> bool:
-        """Handle chunk lock creation/removal with improved stale lock detection."""
-        lock_file = self.output_dir / f"computing_{chunk_id}.lock"
+    def _acquire_chunk_lock(self, chunk_id: str) -> bool:
+        return self.lock_backend.acquire(chunk_id, self.machine_id, self.lock_ttl)
 
-        if operation == 'create':
-            try:
-                with open(lock_file, 'x') as f:
-                    json.dump({
-                        'machine_id': self.machine_id,
-                        'platform': self.platform,
-                        'start_time': time.time(),
-                        'timestamp': datetime.now().isoformat()
-                    }, f, indent=2)
-                return True
-            except FileExistsError:
-                # Enhanced stale lock detection
-                return self._handle_existing_lock(lock_file, chunk_id)
-
-        elif operation == 'remove':
-            try:
-                lock_file.unlink()
-            except FileNotFoundError:
-                pass
-            return True
-
-    def _handle_existing_lock(self, lock_file: Path, chunk_id: str) -> bool:
-        """Handle existing lock with comprehensive stale detection."""
-        try:
-            lock_data = _load_json_with_retry(lock_file)
-
-            lock_start_time = lock_data.get('start_time', 0)
-            lock_machine_id = lock_data.get('machine_id', 'unknown')
-            current_time = time.time()
-            lock_age_hours = (current_time - lock_start_time) / 3600
-
-            # Multiple criteria for stale lock detection
-            is_stale = False
-            stale_reason = ""
-
-            # Criterion 1: Age-based (configurable threshold)
-            stale_threshold_hours = 3.0  # Increased from 2 to 3 hours
-            if lock_age_hours > stale_threshold_hours:
-                is_stale = True
-                stale_reason = f"age {lock_age_hours:.1f}h > {stale_threshold_hours}h threshold"
-
-            # Criterion 2: Same machine reclaiming its own work
-            elif lock_machine_id == self.machine_id:
-                is_stale = True
-                stale_reason = f"same machine ({self.machine_id}) reclaiming own lock"
-
-            # Criterion 3: Check if lock file is older than any recent surface files
-            # (indicates the machine stopped working)
-            elif self._is_machine_inactive(lock_machine_id, lock_start_time):
-                is_stale = True
-                stale_reason = f"machine {lock_machine_id} appears inactive"
-
-            if is_stale:
-                print(f"[{self.machine_id}] Removing stale lock {chunk_id}: {stale_reason}")
-                try:
-                    lock_file.unlink()
-                    # Try to create our own lock
-                    return self._chunk_lock_operations(chunk_id, 'create')
-                except FileNotFoundError:
-                    return self._chunk_lock_operations(chunk_id, 'create')
-            else:
-                # Lock is still valid
-                return False
-
-        except (json.JSONDecodeError, FileNotFoundError, KeyError) as e:
-            # Corrupted lock file - treat as stale
-            print(f"[{self.machine_id}] Removing corrupted lock {chunk_id}: {e}")
-            try:
-                lock_file.unlink()
-                return self._chunk_lock_operations(chunk_id, 'create')
-            except FileNotFoundError:
-                return self._chunk_lock_operations(chunk_id, 'create')
-
-    def _is_machine_inactive(self, machine_id: str, lock_start_time: float) -> bool:
-        """Check if a machine appears inactive by looking at its progress summary timestamp.
-
-        Uses the progress_summary_{machine_id}.json mtime as a heartbeat — written after
-        every chunk.  A machine is considered active if its summary was updated after the
-        lock was created (with a one-full-chunk grace period based on the slowest observed
-        throughput so slow machines are not wrongly declared inactive).
-        """
-        summary_file = self.output_dir / f"progress_summary_{machine_id}.json"
-        try:
-            last_update = summary_file.stat().st_mtime
-        except OSError:
-            return True  # No summary file → definitely inactive
-
-        # Allow up to 3 hours grace so a slow machine finishing a large chunk isn't
-        # incorrectly evicted (at 29 surf/h, a 50-combo chunk takes ~1.7 hours).
-        grace_period = 10800  # seconds
-        return last_update < lock_start_time - grace_period
+    def _release_chunk_lock(self, chunk_id: str) -> None:
+        self.lock_backend.release(chunk_id, self.machine_id)
 
     def _log_error(self, param_name: str, param_hash: str,
                    sd_feat1: float, sd_feat2: float, sd_spat: float,
@@ -551,28 +520,51 @@ class ChunkedGridComputer:
         self._log_error(param_name, param_hash, sd_feat1, sd_feat2, sd_spat, last_exc)
         return 'error'
 
-    def _find_available_chunk(self) -> Tuple[Optional[int], Optional[int]]:
-        """Find the next available chunk to work on.
+    def _get_completed_keys(self) -> set:
+        """Return the set of completed keys used for progress tracking.
 
-        Uses only filename-based completed_hashes (no file opens) to determine which
-        groups still have work.  _samples_exist is reserved for the per-combination
-        check inside _process_chunk.
+        In standard mode: set of sample file hashes.
+        In pipeline mode: set of averaged surface canonical names (sf1_sf2_sp).
         """
-        completed_hashes = load_progress_state(self.output_dir)['completed_hashes']
+        if self.pipeline:
+            completed = set()
+            import re
+            pat = re.compile(
+                r"averaged_sf1_(?P<sf1>[\d.]+)_sf2_(?P<sf2>[\d.]+)_sp_(?P<sp>[\d.]+)\.pkl$"
+            )
+            for f in self.averaged_surfaces_dir.glob("averaged_sf1_*.pkl"):
+                m = pat.match(f.name)
+                if m:
+                    completed.add((float(m['sf1']), float(m['sf2']), float(m['sp'])))
+            return completed
+        return load_progress_state(self.output_dir)['completed_hashes']
 
-        # A group is incomplete if any of its combinations is not yet on disk.
-        incomplete_group_indices = set()
-        for idx, group in enumerate(self.param_groups):
-            for (_, _, _, sf1, sf2, sp, run_index) in group:
-                _, param_hash = create_param_identifier(sf1, sf2, sp, run_index)
-                if param_hash not in completed_hashes:
-                    incomplete_group_indices.add(idx)
-                    break  # one missing member is enough to mark the group incomplete
+    def _group_is_complete(self, group: List[Tuple], completed_keys: set) -> bool:
+        """Return True if all outputs for this group already exist."""
+        if self.pipeline:
+            # Pipeline output is one averaged surface per group, keyed by canonical (sf1<=sf2, sp)
+            _, _, _, sf1, sf2, sp, _ = group[0]
+            canon_sf1, canon_sf2 = min(sf1, sf2), max(sf1, sf2)
+            return (canon_sf1, canon_sf2, sp) in completed_keys
+        # Standard mode: check all sample hashes
+        for (_, _, _, sf1, sf2, sp, run_index) in group:
+            _, param_hash = create_param_identifier(sf1, sf2, sp, run_index)
+            if param_hash not in completed_keys:
+                return False
+        return True
+
+    def _find_available_chunk(self) -> Tuple[Optional[int], Optional[int]]:
+        """Find the next available chunk to work on and acquire its lock."""
+        completed_keys = self._get_completed_keys()
+
+        incomplete_group_indices = {
+            idx for idx, group in enumerate(self.param_groups)
+            if not self._group_is_complete(group, completed_keys)
+        }
 
         if not incomplete_group_indices:
             return None, None
 
-        # Determine chunk size (in groups) based on remaining work
         remaining_groups = len(incomplete_group_indices)
         potential_large_chunks = remaining_groups // self.large_chunk_size
         chunk_size = (self.small_chunk_size if potential_large_chunks <= self.small_chunk_threshold
@@ -591,10 +583,142 @@ class ChunkedGridComputer:
 
         random.shuffle(candidate_chunks)
         for chunk_start, chunk_end, chunk_id in candidate_chunks:
-            if self._chunk_lock_operations(chunk_id, 'create'):
+            if self._acquire_chunk_lock(chunk_id):
                 return chunk_start, chunk_size
 
         return None, None
+
+    def _compute_samples_for_entry(self, sd_feat1: float, sd_feat2: float, sd_spat: float,
+                                    run_index: Optional[int], samples_params: Dict,
+                                    feat_diff_vals) -> Tuple:
+        """Generate mu1/mu2 sample arrays for one parameter combination.
+
+        Returns (mu1_bias_array, mu2_bias_array, full_results_combined).
+        full_results_combined is None unless save_full_results is True.
+        """
+        num_scan_loops = 10
+        num_sims_per_loop = samples_params['n_simulations'] // num_scan_loops
+
+        def scan_fn(carry, inputs):
+            subkey, feat_diff, sf1, sf2, sp = inputs
+            if self.save_full_results:
+                b1, b2, full = jfm.simulate_dual_component_bias_distribution(
+                    subkey, sf1, sf2, sp, feat_diff, 42.0, num_sims_per_loop,
+                    samples_params['n_samples'], return_full_results=True,
+                    fix_weights=self.fix_weights, algorithm=self.algorithm,
+                    diagonal_covariance=self.diagonal_covariance,
+                )
+                return carry, (b1, b2, full)
+            b1, b2 = jfm.simulate_dual_component_bias_distribution(
+                subkey, sf1, sf2, sp, feat_diff, 42.0, num_sims_per_loop,
+                samples_params['n_samples'], return_full_results=False,
+                fix_weights=self.fix_weights, algorithm=self.algorithm,
+                diagonal_covariance=self.diagonal_covariance,
+            )
+            return carry, (b1, b2)
+
+        _, param_hash = create_param_identifier(sd_feat1, sd_feat2, sd_spat, run_index)
+        base_key = jax.random.PRNGKey(samples_params['random_seed'])
+        param_key = jax.random.fold_in(base_key, int(param_hash, 16))
+        key = jax.random.fold_in(param_key, run_index if run_index is not None else 0)
+
+        sd1_arr = jnp.full(len(feat_diff_vals), sd_feat1)
+        sd2_arr = jnp.full(len(feat_diff_vals), sd_feat2)
+        sp_arr  = jnp.full(len(feat_diff_vals), sd_spat)
+
+        all_mu1, all_mu2, all_full = [], [], []
+        for rep in range(num_scan_loops):
+            key, *subkeys = jax.random.split(key, len(feat_diff_vals) + 1)
+            tic = time.time()
+            if self.save_full_results:
+                _, (mu1, mu2, full) = jax.lax.scan(
+                    scan_fn, None,
+                    (jnp.array(subkeys), feat_diff_vals, sd1_arr, sd2_arr, sp_arr)
+                )
+                all_full.append(full)
+            else:
+                _, (mu1, mu2) = jax.lax.scan(
+                    scan_fn, None,
+                    (jnp.array(subkeys), feat_diff_vals, sd1_arr, sd2_arr, sp_arr)
+                )
+            print(f"    Scan {rep + 1}/{num_scan_loops}: {time.time() - tic:.1f}s")
+            all_mu1.append(mu1)
+            all_mu2.append(mu2)
+
+        mu1_out = jnp.concatenate(all_mu1, axis=1)
+        mu2_out = jnp.concatenate(all_mu2, axis=1)
+        full_out = jnp.concatenate(all_full, axis=1) if self.save_full_results else None
+        return mu1_out, mu2_out, full_out
+
+    def _process_group_pipeline(self, group: List[Tuple], samples_params: Dict,
+                                 feat_diff_vals) -> str:
+        """Pipeline mode: compute both entries in a group, average in-memory, save surface.
+
+        Returns 'saved', 'skipped', or 'error'.
+        """
+        _, _, _, sf1_a, sf2_a, sp, run_index_a = group[0]
+        _, _, _, sf1_b, sf2_b, _,  run_index_b = group[1]
+
+        canon_sf1, canon_sf2 = min(sf1_a, sf2_a), max(sf1_a, sf2_a)
+        surface_file = self.averaged_surfaces_dir / (
+            f"averaged_sf1_{canon_sf1:.1f}_sf2_{canon_sf2:.1f}_sp_{sp:.1f}.pkl"
+        )
+
+        if surface_file.exists():
+            return 'skipped'
+
+        print(f"  [{self.machine_id}] Pipeline: sf1={sf1_a:.1f} sf2={sf2_a:.1f} sp={sp:.1f}")
+
+        try:
+            mu1_a, mu2_a, full_a = self._compute_samples_for_entry(
+                sf1_a, sf2_a, sp, run_index_a, samples_params, feat_diff_vals
+            )
+            mu1_b, mu2_b, full_b = self._compute_samples_for_entry(
+                sf1_b, sf2_b, sp, run_index_b, samples_params, feat_diff_vals
+            )
+        except Exception as e:
+            print(f"  [{self.machine_id}] Simulation error: {e}")
+            return 'error'
+
+        # Optionally persist sample files
+        if self.save_samples:
+            for (sf1, sf2, sp_, ri, mu1, mu2, full) in [
+                (sf1_a, sf2_a, sp, run_index_a, mu1_a, mu2_a, full_a),
+                (sf1_b, sf2_b, sp, run_index_b, mu1_b, mu2_b, full_b),
+            ]:
+                pname, phash = create_param_identifier(sf1, sf2, sp_, ri)
+                self._save_with_retry(
+                    self.output_dir, mu1, mu2, pname, phash,
+                    sf1, sf2, sp_, 0.0, samples_params, ri, full,
+                )
+
+        try:
+            averaged = average_sample_pair(
+                mu1_a, mu2_a, mu1_b, mu2_b, sf1_a, sf2_a, self.avg_fns
+            )
+        except Exception as e:
+            print(f"  [{self.machine_id}] Averaging error: {e}")
+            return 'error'
+
+        # Atomic write
+        tmp = surface_file.with_suffix('.pkl.tmp')
+        import pickle as _pickle
+        with open(tmp, 'wb') as f:
+            _pickle.dump({
+                'parameters': {
+                    'sd_feat1': canon_sf1, 'sd_feat2': canon_sf2, 'sd_spat': sp,
+                    'machine_id': self.machine_id,
+                    'n_simulations': samples_params['n_simulations'],
+                    'n_samples': samples_params['n_samples'],
+                    'random_seed': samples_params['random_seed'],
+                    'git_commit': get_git_commit(),
+                },
+                'surface': averaged,
+                'creation_timestamp': str(jnp.datetime64('now') if False else __import__('datetime').datetime.now().isoformat()),
+            }, f)
+        tmp.replace(surface_file)
+        print(f"  [{self.machine_id}] Saved {surface_file.name}")
+        return 'saved'
 
     def _process_chunk(self, chunk_start_idx: int, chunk_size: int, samples_params: Dict) -> Tuple[int, int, float]:
         """Process a single chunk of parameter combinations."""
@@ -605,116 +729,59 @@ class ChunkedGridComputer:
         print(f"Parameter indices: {chunk_start_idx} to {chunk_end_idx - 1}")
 
         chunk_start_time = time.time()
-        samples_computed = samples_skipped = 0
+        surfaces_computed = surfaces_skipped = 0
         feat_diff_vals = config.create_grid('feat_diff')
-        feat_diff_vals = feat_diff_vals[feat_diff_vals > 0]  # feat_diff=0 is trivially 0 bias
-        num_scan_loops = 10
-        num_sims_per_loop = samples_params['n_simulations'] // num_scan_loops
-
-        def universal_scan_fn(carry, inputs):
-            """Run one scan step for either full results or bias-only mode."""
-            subkey, feat_diff, sd_feat1, sd_feat2, sd_spat = inputs
-            if self.save_full_results:
-                mu_1_bias, mu_2_bias, full_res = jfm.simulate_dual_component_bias_distribution(
-                    subkey, sd_feat1, sd_feat2, sd_spat, feat_diff, 42.0,
-                    num_sims_per_loop,
-                    samples_params['n_samples'],
-                    return_full_results=True,
-                    fix_weights=self.fix_weights,
-                    algorithm=self.algorithm,
-                    diagonal_covariance=self.diagonal_covariance
-                )
-                return carry, (mu_1_bias, mu_2_bias, full_res)
-            else:
-                mu_1_bias, mu_2_bias = jfm.simulate_dual_component_bias_distribution(
-                    subkey, sd_feat1, sd_feat2, sd_spat, feat_diff, 42.0,
-                    num_sims_per_loop,
-                    samples_params['n_samples'],
-                    return_full_results=False,
-                    fix_weights=self.fix_weights,
-                    algorithm=self.algorithm,
-                    diagonal_covariance=self.diagonal_covariance
-                )
-                return carry, (mu_1_bias, mu_2_bias)
+        feat_diff_vals = feat_diff_vals[feat_diff_vals > 0]
 
         for group_idx in range(chunk_start_idx, chunk_end_idx):
             if group_idx >= self.total_groups:
                 break
 
-            for (i, j, k, sd_feat1, sd_feat2, sd_spat, run_index) in self.param_groups[group_idx]:
-                param_name, param_hash = create_param_identifier(sd_feat1, sd_feat2, sd_spat, run_index)
+            group = self.param_groups[group_idx]
 
-                if self._samples_exist(param_name, param_hash):
-                    samples_skipped += 1
-                    continue
-
-                sd_feat1_arr = jnp.full(len(feat_diff_vals), sd_feat1)
-                sd_feat2_arr = jnp.full(len(feat_diff_vals), sd_feat2)
-                sd_spat_arr = jnp.full(len(feat_diff_vals), sd_spat)
-
-                samples_start = time.time()
-                print(f"  [{self.machine_id}] Computing {samples_computed + 1}: "
-                      f"sd_feat1={sd_feat1:.1f}, sd_feat2={sd_feat2:.1f}, sd_spat={sd_spat:.1f}, "
-                      f"n_simulations={samples_params['n_simulations']}, n_samples={samples_params['n_samples']}")
-
-                all_mu1_results = []
-                all_mu2_results = []
-                all_full_results = [] if self.save_full_results else None
-
-                base_key = jax.random.PRNGKey(samples_params['random_seed'])
-                param_key = jax.random.fold_in(base_key, int(param_hash, 16))
-                key = jax.random.fold_in(param_key, run_index if run_index is not None else 0)
-
-                for rep in range(num_scan_loops):
-                    key, *subkeys = jax.random.split(key, len(feat_diff_vals) + 1)
-
-                    tic = time.time()
-                    if self.save_full_results:
-                        _, (mu1_bias_array, mu2_bias_array, full_res_array) = jax.lax.scan(
-                            universal_scan_fn, None,
-                            (jnp.array(subkeys), feat_diff_vals, sd_feat1_arr, sd_feat2_arr, sd_spat_arr)
-                        )
-                        all_full_results.append(full_res_array)
-                    else:
-                        _, (mu1_bias_array, mu2_bias_array) = jax.lax.scan(
-                            universal_scan_fn, None,
-                            (jnp.array(subkeys), feat_diff_vals, sd_feat1_arr, sd_feat2_arr, sd_spat_arr)
-                        )
-                    toc = time.time()
-                    print(f"    Scan {rep + 1}/10: {toc - tic:.1f}s")
-                    all_mu1_results.append(mu1_bias_array)
-                    all_mu2_results.append(mu2_bias_array)
-
-                mu1_bias_array = jnp.concatenate(all_mu1_results, axis=1)
-                mu2_bias_array = jnp.concatenate(all_mu2_results, axis=1)
-                full_results_combined = (
-                    jnp.concatenate(all_full_results, axis=1)
-                    if self.save_full_results and all_full_results else None
-                )
-
-                samples_time = time.time() - samples_start
-                result = self._save_with_retry(
-                    self.output_dir, mu1_bias_array, mu2_bias_array,
-                    param_name, param_hash, sd_feat1, sd_feat2, sd_spat,
-                    samples_time, samples_params, run_index, full_results_combined
-                )
-
+            if self.pipeline:
+                result = self._process_group_pipeline(group, samples_params, feat_diff_vals)
                 if result == 'saved':
-                    samples_computed += 1
-                    print(f"    Completed in {samples_time:.1f}s")
-                # 'error': already logged, continue to next combination
-                # ChunkConflict propagates up to compute_grid_level unchanged
+                    surfaces_computed += 1
+                elif result == 'skipped':
+                    surfaces_skipped += 1
+            else:
+                # Standard mode: process each combination independently
+                for (i, j, k, sd_feat1, sd_feat2, sd_spat, run_index) in group:
+                    param_name, param_hash = create_param_identifier(
+                        sd_feat1, sd_feat2, sd_spat, run_index
+                    )
+                    if self._samples_exist(param_name, param_hash):
+                        surfaces_skipped += 1
+                        continue
+
+                    samples_start = time.time()
+                    print(f"  [{self.machine_id}] Computing {surfaces_computed + 1}: "
+                          f"sd_feat1={sd_feat1:.1f}, sd_feat2={sd_feat2:.1f}, "
+                          f"sd_spat={sd_spat:.1f}")
+
+                    mu1, mu2, full = self._compute_samples_for_entry(
+                        sd_feat1, sd_feat2, sd_spat, run_index, samples_params, feat_diff_vals
+                    )
+                    samples_time = time.time() - samples_start
+                    result = self._save_with_retry(
+                        self.output_dir, mu1, mu2, param_name, param_hash,
+                        sd_feat1, sd_feat2, sd_spat, samples_time, samples_params,
+                        run_index, full,
+                    )
+                    if result == 'saved':
+                        surfaces_computed += 1
+                        print(f"    Completed in {samples_time:.1f}s")
 
         chunk_time = time.time() - chunk_start_time
-
+        label = 'surfaces' if self.pipeline else 'samples'
         print(f"[{self.machine_id}] {chunk_id} completed:")
-        print(f"  Surfaces computed: {samples_computed}, skipped: {samples_skipped}")
+        print(f"  {label.capitalize()} computed: {surfaces_computed}, skipped: {surfaces_skipped}")
         print(f"  Chunk time: {chunk_time:.1f}s")
-        if samples_computed > 0:
-            print(f"  Average time per surface: {chunk_time / samples_computed:.1f}s")
+        if surfaces_computed > 0:
+            print(f"  Average time per {label[:-1]}: {chunk_time / surfaces_computed:.1f}s")
 
-        self._chunk_lock_operations(chunk_id, 'remove')
-        return samples_computed, samples_skipped, chunk_time
+        return surfaces_computed, surfaces_skipped, chunk_time
 
     def _save_progress_summary(self, session_stats: Dict) -> None:
         """Save progress summary for this machine."""
@@ -773,28 +840,28 @@ class ChunkedGridComputer:
 
             chunk_id = f"L{self.grid_level}_chunk_{chunk_start:05d}_{min(chunk_start + chunk_size, self.total_groups):05d}"
             try:
-                samples_computed, samples_skipped, chunk_time = self._process_chunk(
+                surfaces_computed, surfaces_skipped, chunk_time = self._process_chunk(
                     chunk_start, chunk_size, samples_params
                 )
 
                 # Update session stats
                 session_stats['chunks_processed'] += 1
-                session_stats['samples_computed'] += samples_computed
-                session_stats['samples_skipped'] += samples_skipped
+                session_stats['samples_computed'] += surfaces_computed
+                session_stats['samples_skipped'] += surfaces_skipped
                 session_stats['total_computation_time'] += chunk_time
 
+                self._release_chunk_lock(chunk_id)
                 self._save_progress_summary(session_stats)
-                time.sleep(1)  # Brief pause between chunks
+                time.sleep(1)
 
             except ChunkConflict as e:
                 print(f"\n[{self.machine_id}] Chunk conflict detected: {e}")
                 print(f"[{self.machine_id}] Releasing lock on {chunk_id} and reassigning chunk.")
-                self._chunk_lock_operations(chunk_id, 'remove')
-                # Continue immediately — _find_available_chunk will pick a different chunk
+                self._release_chunk_lock(chunk_id)
 
             except KeyboardInterrupt:
                 print(f"\n[{self.machine_id}] Interrupted by user")
-                self._chunk_lock_operations(chunk_id, 'remove')
+                self._release_chunk_lock(chunk_id)
                 break
 
         # Final session summary
@@ -1011,7 +1078,12 @@ def run_chunked_computation(machine_id: str = "PC1", grid_level: int = 1,
                             custom_param_list: Optional[List[Tuple[float, float, float]]] = None,
                             save_full_results: bool = False, save_csv: bool = False,
                             diagonal_covariance: bool = True, fix_weights: bool = False,
-                            algorithm: str = "EM", **samples_params) -> Dict:
+                            algorithm: str = "EM",
+                            lock_backend: str = 'auto', lock_ttl: int = 1800,
+                            pipeline: bool = False, save_samples: bool = False,
+                            averaged_surfaces_dir: Optional[str] = None,
+                            bias_bandwidth: float = 0.075, feat_bandwidth: float = 3.0,
+                            **samples_params) -> Dict:
     """
     Run the enhanced chunked computation system with multi-level refinement.
 
@@ -1039,13 +1111,34 @@ def run_chunked_computation(machine_id: str = "PC1", grid_level: int = 1,
         Surface computation parameters passed to compute_grid()
     """
 
+    def _make_computer(level):
+        lb = make_lock_backend(lock_backend,
+                               lock_dir=Path(config.samples_folder))
+        return ChunkedGridComputer(
+            machine_id, level,
+            save_full_results=save_full_results, save_csv=save_csv,
+            diagonal_covariance=diagonal_covariance, fix_weights=fix_weights,
+            algorithm=algorithm,
+            lock_backend=lb, lock_ttl=lock_ttl,
+            pipeline=pipeline, save_samples=save_samples,
+            averaged_surfaces_dir=Path(averaged_surfaces_dir) if averaged_surfaces_dir else None,
+            bias_bandwidth=bias_bandwidth, feat_bandwidth=feat_bandwidth,
+        )
+
     # If using custom param list, skip grid level management
     if custom_param_list:
         print(f"✅ Using custom parameter list ({len(custom_param_list)} combinations)")
-        computer = ChunkedGridComputer(machine_id, grid_level, custom_param_list=custom_param_list,
-                                       save_full_results=save_full_results, save_csv=save_csv,
-                                       diagonal_covariance=diagonal_covariance, fix_weights=fix_weights,
-                                       algorithm=algorithm)
+        lb = make_lock_backend(lock_backend, lock_dir=Path(config.samples_folder))
+        computer = ChunkedGridComputer(
+            machine_id, grid_level, custom_param_list=custom_param_list,
+            save_full_results=save_full_results, save_csv=save_csv,
+            diagonal_covariance=diagonal_covariance, fix_weights=fix_weights,
+            algorithm=algorithm,
+            lock_backend=lb, lock_ttl=lock_ttl,
+            pipeline=pipeline, save_samples=save_samples,
+            averaged_surfaces_dir=Path(averaged_surfaces_dir) if averaged_surfaces_dir else None,
+            bias_bandwidth=bias_bandwidth, feat_bandwidth=feat_bandwidth,
+        )
         result = computer.compute_grid(**samples_params)
         return {'custom_params': result}
 
@@ -1066,10 +1159,7 @@ def run_chunked_computation(machine_id: str = "PC1", grid_level: int = 1,
         print(f"✅ {readiness['message']}")
 
         # Run computation for current level
-        computer = ChunkedGridComputer(machine_id, current_level,
-                                       save_full_results=save_full_results, save_csv=save_csv,
-                                       diagonal_covariance=diagonal_covariance, fix_weights=fix_weights,
-                                       algorithm=algorithm)
+        computer = _make_computer(current_level)
         level_result = computer.compute_grid(**samples_params)
         all_results[f'level_{current_level}'] = level_result
 
@@ -1378,6 +1468,12 @@ def print_runtime_configuration(args, n_simulations: int, n_samples: int, output
     print(f"N Simulations        : {n_simulations}")
     print(f"N Samples            : {n_samples}")
     print(f"Random Seed          : {args.random_seed}")
+    print(f"Lock Backend         : {args.lock_backend}")
+    print(f"Pipeline Mode        : {boolean_flag(args.pipeline)}")
+    if args.pipeline:
+        print(f"Save Samples         : {boolean_flag(args.save_samples)}")
+        print(f"Bias Bandwidth       : {args.bias_bandwidth}")
+        print(f"Feat Bandwidth       : {args.feat_bandwidth}")
     print(f"Output Folder        : {output_dir}")
     print("================================\n")
 
@@ -1427,6 +1523,22 @@ def parse_arguments():
                         help='Samples per simulation (default: config value = 100)')
     parser.add_argument('--random-seed', type=int, default=42,
                         help='Base random seed for reproducible simulations (default: 42)')
+    parser.add_argument('--lock-backend', choices=['redis', 'file', 'auto'], default='auto',
+                        help='Lock backend: redis, file, or auto (redis if REDIS_HOST set, else file)')
+    parser.add_argument('--pipeline', action='store_true', default=False,
+                        help='Average samples in-memory and save averaged surfaces directly, '
+                             'skipping intermediate sample files')
+    parser.add_argument('--save-samples', action='store_true', default=False,
+                        help='When --pipeline is set, also write sample files to disk')
+    parser.add_argument('--averaged-surfaces-dir', type=str, default=None,
+                        help='Output directory for averaged surfaces in pipeline mode '
+                             '(default: derived from samples folder name)')
+    parser.add_argument('--bias-bandwidth', type=float, default=0.075,
+                        help='KDE bandwidth for bias dimension in pipeline mode (default: 0.075)')
+    parser.add_argument('--feat-bandwidth', type=float, default=3.0,
+                        help='KDE bandwidth for feat_diff dimension in pipeline mode (default: 3.0)')
+    parser.add_argument('--lock-ttl', type=int, default=1800,
+                        help='Lock TTL in seconds; heartbeat keeps it alive (default: 1800)')
 
     args = parser.parse_args()
     active_n_simulations, active_n_samples = determine_run_dimensions(args)
@@ -1469,37 +1581,40 @@ def parse_arguments():
                 print(f"Error: No parameter combinations found in {csv_param_dir}")
                 return
 
+        shared_kwargs = dict(
+            machine_id=args.machine_id,
+            grid_level=args.grid_level,
+            auto_advance=args.auto_advance,
+            custom_param_list=custom_params,
+            save_full_results=args.save_full_results,
+            save_csv=args.save_csv,
+            diagonal_covariance=args.diagonal_covariance,
+            fix_weights=args.fix_weights,
+            algorithm=args.algorithm,
+            lock_backend=args.lock_backend,
+            lock_ttl=args.lock_ttl,
+            pipeline=args.pipeline,
+            save_samples=args.save_samples,
+            averaged_surfaces_dir=args.averaged_surfaces_dir,
+            bias_bandwidth=args.bias_bandwidth,
+            feat_bandwidth=args.feat_bandwidth,
+            random_seed=args.random_seed,
+        )
+
         if args.test_mode:
             print("Running in test mode")
             session_stats = run_chunked_computation(
-                machine_id=args.machine_id,
-                grid_level=args.grid_level,
-                auto_advance=args.auto_advance,
-                custom_param_list=custom_params,
-                save_full_results=args.save_full_results,
-                save_csv=args.save_csv,
-                diagonal_covariance=args.diagonal_covariance,
-                fix_weights=args.fix_weights,
-                algorithm=args.algorithm,
+                **shared_kwargs,
+                n_simulations=active_n_simulations,
+                n_samples=active_n_samples,
                 feat_diff_step=4, mu1_bias_step=4, mu2_bias_step=12,
-                n_simulations=active_n_simulations, n_samples=active_n_samples,
-                random_seed=args.random_seed,
             )
         else:
             print("Running full computation")
             session_stats = run_chunked_computation(
-                machine_id=args.machine_id,
-                grid_level=args.grid_level,
-                auto_advance=args.auto_advance,
-                custom_param_list=custom_params,
-                save_full_results=args.save_full_results,
-                save_csv=args.save_csv,
-                diagonal_covariance=args.diagonal_covariance,
-                fix_weights=args.fix_weights,
-                algorithm=args.algorithm,
+                **shared_kwargs,
                 n_simulations=active_n_simulations,
                 n_samples=active_n_samples,
-                random_seed=args.random_seed,
             )
 
         print(f"\nSession completed. Final status:")
