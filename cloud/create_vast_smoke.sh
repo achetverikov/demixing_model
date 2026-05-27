@@ -112,7 +112,7 @@ fi
 GIT_REPO="${GIT_REPO:-https://github.com/achetverikov/demixing_model.git}"
 GIT_REF="${GIT_REF:-main}"
 VAST_IMAGE="${VAST_IMAGE:-andreychetverikov/demixing-vast:latest}"
-VAST_DISK="${VAST_DISK:-40}"
+VAST_DISK="${VAST_DISK:-60}"  # image alone is ~4-5GB; offers with <60GB disk fail to start
 S3_PREFIX="${VAST_SMOKE_S3_PREFIX:-demixing/vast_smoke}"
 COMPLETION_REGISTRY="${VAST_SMOKE_REGISTRY:-averaged_surfaces_vast_smoke}"
 N_SIMULATIONS="${N_SIMULATIONS:-100}"
@@ -154,7 +154,7 @@ VAST_ENV=(
   -e "MAX_CHUNKS=$MAX_CHUNKS"
 )
 
-ONSTART='cd /workspace && git clone "$GIT_REPO" "$REPO_DIR" && cd "$REPO_DIR" && git checkout "$GIT_REF" && bash cloud/vast_worker.sh'
+ONSTART='cd /workspace && git clone "$GIT_REPO" "$REPO_DIR" && cd "$REPO_DIR" && git checkout "$GIT_REF" && bash cloud/vast_worker.sh; vastai destroy instance $CONTAINER_ID'
 
 echo "Creating Vast smoke instance from offer $OFFER_ID"
 echo "  Image   : $VAST_IMAGE"

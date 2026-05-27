@@ -11,7 +11,9 @@ import csv
 import json
 import os
 import random
+import shutil
 import statistics
+import subprocess
 import sys
 import time
 from contextlib import contextmanager
@@ -22,6 +24,56 @@ from typing import Dict, Iterable, List, Tuple
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "surface_computation"))
+
+
+def _collect_hardware_info() -> Dict:
+    """Collect GPU and system hardware info for anomaly diagnosis."""
+    info: Dict = {}
+
+    if shutil.which("nvidia-smi"):
+        fields = (
+            "name,index,memory.total,memory.free,driver_version,"
+            "compute_cap,temperature.gpu,power.draw,power.max_watts,"
+            "clocks.gr,clocks.mem,ecc.mode.current"
+        )
+        try:
+            out = subprocess.check_output(
+                ["nvidia-smi", f"--query-gpu={fields}", "--format=csv,noheader,nounits"],
+                text=True, stderr=subprocess.DEVNULL, timeout=10,
+            )
+            keys = [k.strip() for k in fields.split(",")]
+            gpus = []
+            for line in out.strip().splitlines():
+                vals = [v.strip() for v in line.split(",")]
+                gpus.append(dict(zip(keys, vals)))
+            info["nvidia_smi"] = gpus
+        except Exception as exc:
+            info["nvidia_smi_error"] = str(exc)
+
+    # CPU / memory from /proc (Linux)
+    try:
+        cpuinfo = Path("/proc/cpuinfo").read_text()
+        model_names = list(dict.fromkeys(
+            line.split(":", 1)[1].strip()
+            for line in cpuinfo.splitlines()
+            if line.startswith("model name")
+        ))
+        cpu_count = cpuinfo.count("processor\t:")
+        info["cpu_model"] = model_names[0] if model_names else "unknown"
+        info["cpu_count"] = cpu_count
+    except Exception:
+        pass
+
+    try:
+        meminfo = Path("/proc/meminfo").read_text()
+        for line in meminfo.splitlines():
+            if line.startswith("MemTotal:"):
+                info["ram_total_kb"] = int(line.split()[1])
+                break
+    except Exception:
+        pass
+
+    return info
 
 
 @contextmanager
@@ -229,6 +281,7 @@ def run_condition(args, n_samples: int) -> Tuple[Dict, List[Dict], List[Path]]:
         "diagonal_covariance": args.diagonal_covariance,
         "fix_weights": args.fix_weights,
         "algorithm": args.algorithm,
+        "hardware": _collect_hardware_info(),
     }
 
     csv_path = out_dir / f"{run_id}.csv"
