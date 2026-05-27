@@ -950,7 +950,7 @@ def get_grid_status(grid_level: int = None) -> Dict:
                 'machine_id': lock_data.get('machine_id', 'unknown'),
                 'running_time': time.time() - lock_data.get('start_time', time.time())
             })
-        except (json.JSONDecodeError, FileNotFoundError):
+        except (json.JSONDecodeError, OSError):
             continue
 
     # Load machine summaries
@@ -959,7 +959,7 @@ def get_grid_status(grid_level: int = None) -> Dict:
         try:
             summary = _load_json_with_retry(summary_file)
             machine_summaries[summary.get('machine_id', 'unknown')] = summary
-        except (json.JSONDecodeError, FileNotFoundError):
+        except (json.JSONDecodeError, OSError):
             continue
 
     # Count surfaces that match this grid level
