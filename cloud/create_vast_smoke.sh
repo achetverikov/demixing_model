@@ -125,6 +125,8 @@ MAX_CHUNKS="${MAX_CHUNKS:-1}"
 REDIS_PORT="${REDIS_PORT:-6379}"
 REDIS_USERNAME="${REDIS_USERNAME:-default}"
 AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-auto}"
+DOCKER_LOGIN_USER="${DOCKER_LOGIN_USER:-}"
+DOCKER_LOGIN_PASS="${DOCKER_LOGIN_PASS:-}"
 AVERAGED_SURFACES_DIR="${AVERAGED_SURFACES_DIR:-results/$COMPLETION_REGISTRY}"
 BUNDLE_DIR="${BUNDLE_DIR:-results/${COMPLETION_REGISTRY}_bundles}"
 
@@ -162,10 +164,16 @@ echo "  Repo    : $GIT_REPO@$GIT_REF"
 echo "  Prefix  : $S3_PREFIX"
 echo "  Registry: $COMPLETION_REGISTRY"
 
-"${VASTAI[@]}" create instance "$OFFER_ID" \
-  --image "$VAST_IMAGE" \
-  --disk "$VAST_DISK" \
-  --ssh \
-  --direct \
-  --env "${VAST_ENV[*]}" \
+VASTAI_CREATE_ARGS=(
+  --image "$VAST_IMAGE"
+  --disk "$VAST_DISK"
+  --ssh
+  --direct
+  --env "${VAST_ENV[*]}"
   --onstart-cmd "$ONSTART"
+)
+if [[ -n "$DOCKER_LOGIN_USER" && -n "$DOCKER_LOGIN_PASS" ]]; then
+  VASTAI_CREATE_ARGS+=(--login "-u $DOCKER_LOGIN_USER -p $DOCKER_LOGIN_PASS docker.io")
+fi
+
+"${VASTAI[@]}" create instance "$OFFER_ID" "${VASTAI_CREATE_ARGS[@]}"

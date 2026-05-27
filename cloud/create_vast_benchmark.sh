@@ -115,6 +115,8 @@ BENCHMARK_SEED="${BENCHMARK_SEED:-20260527}"
 BENCHMARK_N_SIMULATIONS="${BENCHMARK_N_SIMULATIONS:-10000}"
 BENCHMARK_N_SAMPLES="${BENCHMARK_N_SAMPLES:-20,100}"
 AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-auto}"
+DOCKER_LOGIN_USER="${DOCKER_LOGIN_USER:-}"
+DOCKER_LOGIN_PASS="${DOCKER_LOGIN_PASS:-}"
 
 VAST_ENV=(
   -e "GIT_REPO=$GIT_REPO"
@@ -146,10 +148,16 @@ echo "  Repo    : $GIT_REPO@$GIT_REF"
 echo "  Prefix  : $BENCHMARK_S3_PREFIX"
 echo "  Workload: ${BENCHMARK_N_SIMULATIONS} x [${BENCHMARK_N_SAMPLES}], surfaces=$BENCHMARK_SURFACE_COUNT"
 
-"$VASTAI_BIN" create instance "$OFFER_ID" \
-  --image "$VAST_IMAGE" \
-  --disk "$VAST_DISK" \
-  --ssh \
-  --direct \
-  --env "${VAST_ENV[*]}" \
+VASTAI_CREATE_ARGS=(
+  --image "$VAST_IMAGE"
+  --disk "$VAST_DISK"
+  --ssh
+  --direct
+  --env "${VAST_ENV[*]}"
   --onstart-cmd "$ONSTART"
+)
+if [[ -n "$DOCKER_LOGIN_USER" && -n "$DOCKER_LOGIN_PASS" ]]; then
+  VASTAI_CREATE_ARGS+=(--login "-u $DOCKER_LOGIN_USER -p $DOCKER_LOGIN_PASS docker.io")
+fi
+
+"$VASTAI_BIN" create instance "$OFFER_ID" "${VASTAI_CREATE_ARGS[@]}"
