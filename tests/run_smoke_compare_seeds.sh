@@ -144,10 +144,64 @@ for fname in sorted(std_names):
 print()
 if all_ok:
     print("All checks passed.")
-    sys.exit(0)
 else:
     print("One or more checks failed.")
-    sys.exit(1)
+
+# ── plots ─────────────────────────────────────────────────────────────────
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+plot_dir = Path("$STD_RESULTS").parent / "compare_seed_plots"
+plot_dir.mkdir(parents=True, exist_ok=True)
+
+for fname in sorted(std_names):
+    with open(std_dir / fname, "rb") as f:
+        std_surf  = pickle.load(f)["surface"]
+    with open(pipe_dir / fname, "rb") as f:
+        pipe_surf = pickle.load(f)["surface"]
+
+    stem = fname.replace(".pkl", "")
+    for field in MU1_FIELDS:
+        a = np.asarray(getattr(std_surf,  field), dtype=np.float32)  # (181, 90)
+        b = np.asarray(getattr(pipe_surf, field), dtype=np.float32)
+        diff = b - a
+
+        fd_grid   = np.asarray(std_surf.feat_diff_grid)
+        bias_grid = np.asarray(std_surf.mu1_bias_grid)
+
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+        fig.suptitle(f"{stem} / {field}\nmax|diff|={np.nanmax(np.abs(diff)):.4f}  (float16 quantisation)")
+
+        vmin = min(a.min(), b.min())
+        vmax = max(a.max(), b.max())
+
+        for ax, data, title in zip(axes[:2], [a, b], ["standard (float16→KDE)", "pipeline (float32→KDE)"]):
+            im = ax.imshow(data, aspect="auto", origin="lower",
+                           extent=[fd_grid[0], fd_grid[-1], bias_grid[0], bias_grid[-1]],
+                           vmin=vmin, vmax=vmax, cmap="viridis")
+            ax.set_title(title)
+            ax.set_xlabel("feat_diff (°)")
+            ax.set_ylabel("mu1_bias (°)")
+            plt.colorbar(im, ax=ax, label="log density")
+
+        abs_max = np.nanmax(np.abs(diff))
+        im = axes[2].imshow(diff, aspect="auto", origin="lower",
+                            extent=[fd_grid[0], fd_grid[-1], bias_grid[0], bias_grid[-1]],
+                            vmin=-abs_max, vmax=abs_max, cmap="RdBu_r")
+        axes[2].set_title("pipeline − standard")
+        axes[2].set_xlabel("feat_diff (°)")
+        plt.colorbar(im, ax=axes[2], label="Δ log density")
+
+        plt.tight_layout()
+        out = plot_dir / f"{stem}_{field}.png"
+        plt.savefig(out, dpi=120)
+        plt.close()
+        print(f"Saved: {out}")
+
+print(f"Plots saved to: {plot_dir}")
+
+sys.exit(0 if all_ok else 1)
 PYEOF
 
 echo "Seed comparison completed successfully."
