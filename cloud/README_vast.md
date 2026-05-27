@@ -84,6 +84,35 @@ Deletion requires an explicit confirmation flag:
 python cloud/cleanup_remote_prefix.py --yes --max-delete 1000
 ```
 
+## GPU Benchmarks
+
+Run a local benchmark smoke before spending Vast credits:
+
+```bash
+python cloud/benchmark_gpu_surfaces.py \
+  --gpu-name local_smoke \
+  --offer-id local \
+  --price-per-hour 0 \
+  --n-simulations 100 \
+  --n-samples 20 \
+  --surface-count 1 \
+  --no-upload
+```
+
+Launch a Vast benchmark for one offer:
+
+```bash
+cloud/create_vast_benchmark.sh <offer-id> <gpu-name> <price-per-hour>
+```
+
+Benchmark jobs use 10k simulations by default, run both `n_samples=20` and
+`n_samples=100`, warm up one untimed surface per condition, time 20 surfaces,
+then upload CSV/JSON outputs to:
+
+```text
+demixing/benchmarks/gpu_surface_timing
+```
+
 ## Launch
 
 Build and push the runtime image from the repo root:
@@ -165,6 +194,25 @@ Find offers, then choose one offer ID:
 ```bash
 vastai search offers "gpu_name=RTX_4090 num_gpus>=1 reliability>0.95 verified=true" \
   --order "dph_total"
+```
+
+This workspace has a persistent Vast SSH key registered on the account:
+
+```text
+~/.ssh/vast_demixing_ed25519
+```
+
+For a newly created instance, get the SSH target and connect with:
+
+```bash
+vastai ssh-url <instance-id>
+ssh -i ~/.ssh/vast_demixing_ed25519 -p <port> root@<host>
+```
+
+If an already-running instance does not have the key attached:
+
+```bash
+vastai attach ssh <instance-id> ~/.ssh/vast_demixing_ed25519.pub
 ```
 
 From PowerShell, launch a smoke instance using credentials from `.env` or
