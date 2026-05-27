@@ -35,6 +35,10 @@ from jax import Array
 # Load .env before any other local imports so REDIS_* vars are available
 from lock_backend import load_env, make_lock_backend, FileLockBackend, LockBackend
 load_env()
+try:
+    from object_store import ObjectStoreConfig, SurfaceObjectStore
+except ImportError:
+    from surface_computation.object_store import ObjectStoreConfig, SurfaceObjectStore
 
 # Import required functions and config
 from shared.utils import AveragedSurface, Surface, resolve_input_path, resolve_results_path, get_git_commit
@@ -132,6 +136,13 @@ def create_param_identifier(sd_feat1: float, sd_feat2: float, sd_spat: float,
         param_str = f"{sd_feat1:.6f}_{sd_feat2:.6f}_{sd_spat:.6f}"
     param_hash = hashlib.md5(param_str.encode()).hexdigest()[:8]
     return param_name, param_hash
+
+
+def create_surface_identifier(sd_feat1: float, sd_feat2: float, sd_spat: float) -> str:
+    """Create a compact canonical ID for one averaged surface."""
+    canonical_sf1 = min(sd_feat1, sd_feat2)
+    canonical_sf2 = max(sd_feat1, sd_feat2)
+    return f"{canonical_sf1:.1f}|{canonical_sf2:.1f}|{sd_spat:.1f}"
 
 
 def save_samples_checkpoint(output_dir: Path,
@@ -254,9 +265,13 @@ class ChunkedGridComputer:
                  lock_ttl: int = 1800,
                  pipeline: bool = False,
                  averaged_surfaces_dir: Optional[Path] = None,
+                 completion_registry: Optional[str] = None,
+                 bundle_output: bool = False,
+                 bundle_dir: Optional[Path] = None,
                  save_samples: bool = False,
                  bias_bandwidth: float = 0.075,
-                 feat_bandwidth: float = 3.0):
+                 feat_bandwidth: float = 3.0,
+                 chunk_size: Optional[int] = None):
         """Initialize a grid computer with chunking settings.
 
         Args:
@@ -274,9 +289,16 @@ class ChunkedGridComputer:
                       surfaces, skipping intermediate sample files.
             averaged_surfaces_dir: Output directory for averaged surfaces when
                                    pipeline=True. Derived from samples_folder if None.
+            completion_registry: Redis completed-set registry name. If omitted,
+                                 pipeline mode uses the averaged-surfaces folder name.
+            bundle_output: If True, upload one compressed chunk bundle instead of
+                           uploading each surface file separately.
+            bundle_dir: Local directory for chunk bundles when bundle_output=True.
             save_samples: If True (and pipeline=True), also write sample files.
             bias_bandwidth: KDE bandwidth for bias dimension (pipeline mode).
             feat_bandwidth: KDE bandwidth for feat_diff dimension (pipeline mode).
+            chunk_size: Optional override for both large and small dynamic chunk
+                        sizes, useful for smoke tests.
         """
         self.machine_id = machine_id
         self.platform = platform.node()
@@ -292,6 +314,7 @@ class ChunkedGridComputer:
         self.lock_ttl = lock_ttl
         self.pipeline = pipeline
         self.save_samples = save_samples
+        self.bundle_output = bundle_output
 
         # Lock backend — default to file locks in the output directory
         self.lock_backend = lock_backend  # set after mkdir below
@@ -300,6 +323,9 @@ class ChunkedGridComputer:
         self.large_chunk_size = 50
         self.small_chunk_size = 5
         self.small_chunk_threshold = 10
+        if chunk_size is not None:
+            self.large_chunk_size = chunk_size
+            self.small_chunk_size = chunk_size
 
         # Create output directory
         self.output_dir.mkdir(exist_ok=True)
@@ -319,6 +345,24 @@ class ChunkedGridComputer:
                     'sim_samples_', 'averaged_surfaces_', 1
                 )
             self.averaged_surfaces_dir.mkdir(parents=True, exist_ok=True)
+            if bundle_output:
+                if bundle_dir is not None:
+                    self.bundle_dir = Path(bundle_dir)
+                else:
+                    self.bundle_dir = self.averaged_surfaces_dir.parent / (
+                        self.averaged_surfaces_dir.name + "_bundles"
+                    )
+                self.bundle_dir.mkdir(parents=True, exist_ok=True)
+            else:
+                self.bundle_dir = None
+            object_store_config = ObjectStoreConfig.from_env()
+            self.object_store = (
+                SurfaceObjectStore(object_store_config) if object_store_config else None
+            )
+            self.completion_registry = (
+                completion_registry
+                or (self.averaged_surfaces_dir.name if self.object_store else None)
+            )
 
             print("Compiling KDE averaging functions (pipeline mode)...")
             self.avg_fns = make_averaging_functions(
@@ -326,8 +370,12 @@ class ChunkedGridComputer:
                 feat_bandwidth=feat_bandwidth,
             )
             print("KDE functions ready.")
+            self._reconcile_object_store_completion()
         else:
             self.averaged_surfaces_dir = None
+            self.completion_registry = completion_registry
+            self.object_store = None
+            self.bundle_dir = None
             self.avg_fns = None
 
         # Initialize parameter grid for this level.
@@ -355,6 +403,17 @@ class ChunkedGridComputer:
         print(f"Large/small chunk sizes: {self.large_chunk_size}/{self.small_chunk_size}")
         if pipeline:
             print(f"Averaged surfaces dir: {self.averaged_surfaces_dir}")
+            print(f"Completion registry: {self.completion_registry}")
+            print(f"Bundle output: {'enabled' if self.bundle_output else 'disabled'}")
+            if self.bundle_output:
+                print(f"Bundle dir: {self.bundle_dir}")
+            if self.object_store:
+                print(
+                    f"Object store: s3://{self.object_store.config.bucket}/"
+                    f"{self.object_store.config.prefix}"
+                )
+            else:
+                print("Object store: disabled")
         else:
             print(f"Save full results: {self.save_full_results}, Save CSV: {self.save_csv}")
 
@@ -556,24 +615,57 @@ class ChunkedGridComputer:
         """
         if self.pipeline:
             completed = set()
-            import re
-            pat = re.compile(
-                r"averaged_sf1_(?P<sf1>[\d.]+)_sf2_(?P<sf2>[\d.]+)_sp_(?P<sp>[\d.]+)\.pkl$"
-            )
-            for f in self.averaged_surfaces_dir.glob("averaged_sf1_*.pkl"):
-                m = pat.match(f.name)
-                if m:
-                    completed.add((float(m['sf1']), float(m['sf2']), float(m['sp'])))
+            if self.bundle_output:
+                for manifest_file in self.bundle_dir.glob("surface_bundle_*.manifest.json"):
+                    try:
+                        with open(manifest_file) as f:
+                            manifest = json.load(f)
+                        completed.update(manifest.get('surface_ids', []))
+                    except (OSError, json.JSONDecodeError):
+                        continue
+            else:
+                import re
+                pat = re.compile(
+                    r"averaged_sf1_(?P<sf1>[\d.]+)_sf2_(?P<sf2>[\d.]+)_sp_(?P<sp>[\d.]+)\.pkl$"
+                )
+                for f in self.averaged_surfaces_dir.glob("averaged_sf1_*.pkl"):
+                    m = pat.match(f.name)
+                    if m:
+                        completed.add(create_surface_identifier(
+                            float(m['sf1']), float(m['sf2']), float(m['sp'])
+                        ))
+            if self.completion_registry:
+                try:
+                    completed.update(self.lock_backend.completed_members(self.completion_registry))
+                except Exception as e:
+                    print(f"[{self.machine_id}] Warning: could not read completion registry: {e}")
             return completed
         return load_progress_state(self.output_dir)['completed_hashes']
+
+    def _reconcile_object_store_completion(self) -> None:
+        """Seed the Redis completed set from durable object storage on startup."""
+        if not self.pipeline or not self.object_store or not self.completion_registry:
+            return
+        try:
+            completed = self.object_store.list_completed_surface_ids()
+        except Exception as e:
+            print(f"[{self.machine_id}] Warning: could not list object storage: {e}")
+            return
+        if not completed:
+            return
+        for surface_id in completed:
+            self.lock_backend.mark_completed(self.completion_registry, surface_id)
+        print(
+            f"[{self.machine_id}] Reconciled {len(completed)} completed surfaces "
+            f"from object storage into {self.completion_registry}"
+        )
 
     def _group_is_complete(self, group: List[Tuple], completed_keys: set) -> bool:
         """Return True if all outputs for this group already exist."""
         if self.pipeline:
             # Pipeline output is one averaged surface per group, keyed by canonical (sf1<=sf2, sp)
             _, _, _, sf1, sf2, sp, _ = group[0]
-            canon_sf1, canon_sf2 = min(sf1, sf2), max(sf1, sf2)
-            return (canon_sf1, canon_sf2, sp) in completed_keys
+            return create_surface_identifier(sf1, sf2, sp) in completed_keys
         # Standard mode: check all sample hashes
         for (_, _, _, sf1, sf2, sp, run_index) in group:
             _, param_hash = create_param_identifier(sf1, sf2, sp, run_index)
@@ -688,11 +780,22 @@ class ChunkedGridComputer:
         _, _, _, sf1_b, sf2_b, _,  run_index_b = group[1]
 
         canon_sf1, canon_sf2 = min(sf1_a, sf2_a), max(sf1_a, sf2_a)
+        surface_id = create_surface_identifier(sf1_a, sf2_a, sp)
         surface_file = self.averaged_surfaces_dir / (
             f"averaged_sf1_{canon_sf1:.1f}_sf2_{canon_sf2:.1f}_sp_{sp:.1f}.pkl"
         )
 
-        if surface_file.exists():
+        completed_remotely = False
+        if self.completion_registry:
+            completed_remotely = surface_id in self.lock_backend.completed_members(
+                self.completion_registry
+            )
+        if not completed_remotely and self.object_store and not self.bundle_output:
+            completed_remotely = self.object_store.object_exists(surface_file.name)
+            if completed_remotely and self.completion_registry:
+                self.lock_backend.mark_completed(self.completion_registry, surface_id)
+
+        if surface_file.exists() or completed_remotely:
             return 'skipped'
 
         print(f"  [{self.machine_id}] Pipeline: sf1={sf1_a:.1f} sf2={sf2_a:.1f} sp={sp:.1f}")
@@ -745,8 +848,117 @@ class ChunkedGridComputer:
                 'creation_timestamp': str(jnp.datetime64('now') if False else __import__('datetime').datetime.now().isoformat()),
             }, f)
         tmp.replace(surface_file)
+        if self.object_store and not self.bundle_output:
+            try:
+                key = self.object_store.upload_surface(surface_file)
+                print(f"  [{self.machine_id}] Uploaded {surface_file.name} to s3://{self.object_store.config.bucket}/{key}")
+            except Exception as e:
+                print(f"  [{self.machine_id}] Object-store upload failed: {e}")
+                surface_file.unlink(missing_ok=True)
+                return 'error'
+        if self.completion_registry and not self.bundle_output:
+            try:
+                self.lock_backend.mark_completed(self.completion_registry, surface_id)
+            except Exception as e:
+                print(f"  [{self.machine_id}] Warning: could not mark completed in Redis: {e}")
         print(f"  [{self.machine_id}] Saved {surface_file.name}")
         return 'saved'
+
+    def _surface_info_for_group(self, group: List[Tuple]) -> Tuple[str, Path]:
+        """Return the canonical surface ID and expected local path for a group."""
+        _, _, _, sf1, sf2, sp, _ = group[0]
+        canon_sf1, canon_sf2 = min(sf1, sf2), max(sf1, sf2)
+        surface_id = create_surface_identifier(sf1, sf2, sp)
+        surface_file = self.averaged_surfaces_dir / (
+            f"averaged_sf1_{canon_sf1:.1f}_sf2_{canon_sf2:.1f}_sp_{sp:.1f}.pkl"
+        )
+        return surface_id, surface_file
+
+    def _bundle_chunk_outputs(self, chunk_id: str, chunk_start_idx: int,
+                              chunk_end_idx: int, samples_params: Dict) -> bool:
+        """Create/upload a compressed bundle for local surfaces produced in a chunk."""
+        if not (self.pipeline and self.bundle_output):
+            return True
+
+        surfaces = {}
+        surface_ids = []
+        missing = []
+        completed = set()
+        if self.completion_registry:
+            try:
+                completed = self.lock_backend.completed_members(self.completion_registry)
+            except Exception as e:
+                print(f"  [{self.machine_id}] Warning: could not read completion registry before bundling: {e}")
+
+        for group_idx in range(chunk_start_idx, chunk_end_idx):
+            if group_idx >= self.total_groups:
+                break
+            surface_id, surface_file = self._surface_info_for_group(self.param_groups[group_idx])
+            if surface_id in completed:
+                continue
+            if not surface_file.exists():
+                missing.append(surface_file.name)
+                continue
+            surfaces[surface_file.name] = surface_file.read_bytes()
+            surface_ids.append(surface_id)
+
+        if missing:
+            print(f"  [{self.machine_id}] Bundle skipped; {len(missing)} local surfaces missing")
+            return False
+        if not surfaces:
+            return True
+
+        bundle_name = f"surface_bundle_{chunk_id}.pkl.gz"
+        manifest_name = f"surface_bundle_{chunk_id}.manifest.json"
+        bundle_path = self.bundle_dir / bundle_name
+        manifest_path = self.bundle_dir / manifest_name
+        manifest = {
+            'chunk_id': chunk_id,
+            'machine_id': self.machine_id,
+            'surface_count': len(surface_ids),
+            'surface_ids': surface_ids,
+            'surface_files': sorted(surfaces),
+            'parameters': {
+                'n_simulations': samples_params['n_simulations'],
+                'n_samples': samples_params['n_samples'],
+                'random_seed': samples_params['random_seed'],
+                'git_commit': get_git_commit(),
+            },
+            'created_at': datetime.now().isoformat(),
+        }
+
+        tmp_bundle = bundle_path.with_suffix(bundle_path.suffix + '.tmp')
+        with gzip.open(tmp_bundle, 'wb') as f:
+            pickle.dump({'manifest': manifest, 'surfaces': surfaces}, f, protocol=pickle.HIGHEST_PROTOCOL)
+        tmp_bundle.replace(bundle_path)
+
+        tmp_manifest = manifest_path.with_suffix(manifest_path.suffix + '.tmp')
+        with open(tmp_manifest, 'w') as f:
+            json.dump(manifest, f, indent=2)
+        tmp_manifest.replace(manifest_path)
+
+        if self.object_store:
+            try:
+                bundle_key = self.object_store.upload_file(bundle_path)
+                manifest_key = self.object_store.upload_file(manifest_path)
+                print(
+                    f"  [{self.machine_id}] Uploaded bundle s3://{self.object_store.config.bucket}/{bundle_key} "
+                    f"and manifest {manifest_key}"
+                )
+            except Exception as e:
+                print(f"  [{self.machine_id}] Bundle upload failed: {e}")
+                return False
+
+        if self.completion_registry:
+            try:
+                for surface_id in surface_ids:
+                    self.lock_backend.mark_completed(self.completion_registry, surface_id)
+            except Exception as e:
+                print(f"  [{self.machine_id}] Warning: could not mark bundled surfaces complete: {e}")
+                return False
+
+        print(f"  [{self.machine_id}] Bundled {len(surface_ids)} surfaces into {bundle_name}")
+        return True
 
     def _process_chunk(self, chunk_start_idx: int, chunk_size: int, samples_params: Dict) -> Tuple[int, int, float]:
         """Process a single chunk of parameter combinations."""
@@ -801,6 +1013,10 @@ class ChunkedGridComputer:
                         surfaces_computed += 1
                         print(f"    Completed in {samples_time:.1f}s")
 
+        if self.pipeline and self.bundle_output:
+            if not self._bundle_chunk_outputs(chunk_id, chunk_start_idx, chunk_end_idx, samples_params):
+                print(f"[{self.machine_id}] {chunk_id} bundle was not completed")
+
         chunk_time = time.time() - chunk_start_time
         label = 'surfaces' if self.pipeline else 'samples'
         print(f"[{self.machine_id}] {chunk_id} completed:")
@@ -815,15 +1031,21 @@ class ChunkedGridComputer:
         """Save progress summary for this machine."""
         summary_file = self.output_dir / f"progress_summary_{self.machine_id}.json"
         progress = load_progress_state(self.output_dir)
+        if self.pipeline:
+            completed_count = len(self._get_completed_keys())
+            total_count = self.total_groups
+        else:
+            completed_count = len(progress['completed_hashes'])
+            total_count = self.total_combinations
 
         summary = {
             'machine_id': self.machine_id,
             'platform': self.platform,
             'timestamp': datetime.now().isoformat(),
             'session_stats': session_stats,
-            'total_combinations': self.total_combinations,
-            'completed_count': len(progress['completed_hashes']),
-            'completion_rate': len(progress['completed_hashes']) / self.total_combinations * 100,
+            'total_combinations': total_count,
+            'completed_count': completed_count,
+            'completion_rate': completed_count / total_count * 100 if total_count else 0,
             'grid_params': {
                 'param_range_low': config.param_range_low,
                 'param_range_high': config.param_range_high,
@@ -838,7 +1060,8 @@ class ChunkedGridComputer:
                      feat_diff_range: Tuple[int, int] = (4, 180),
                      mu1_bias_range: Tuple[int, int] = (-180, 180),
                      mu2_bias_range: Tuple[int, int] = (-498, 498),
-                     n_simulations: int = 1000, n_samples: int = 100, random_seed: int = 42) -> Dict:
+                     n_simulations: int = 1000, n_samples: int = 100, random_seed: int = 42,
+                     max_chunks: Optional[int] = None) -> Dict:
         """Main computation loop with dynamic chunking."""
 
         samples_params = {
@@ -860,6 +1083,10 @@ class ChunkedGridComputer:
 
         # Main processing loop
         while True:
+            if max_chunks is not None and session_stats['chunks_processed'] >= max_chunks:
+                print(f"\n[{self.machine_id}] Reached max_chunks={max_chunks}, stopping")
+                break
+
             chunk_start, chunk_size = self._find_available_chunk()
             if chunk_start is None:
                 print(f"\n[{self.machine_id}] No more work available")
@@ -1110,7 +1337,12 @@ def run_chunked_computation(machine_id: str = "PC1", grid_level: int = 1,
                             lock_backend: str = 'auto', lock_ttl: int = 1800,
                             pipeline: bool = False, save_samples: bool = False,
                             averaged_surfaces_dir: Optional[str] = None,
+                            completion_registry: Optional[str] = None,
+                            bundle_output: bool = False,
+                            bundle_dir: Optional[str] = None,
                             bias_bandwidth: float = 0.075, feat_bandwidth: float = 3.0,
+                            chunk_size: Optional[int] = None,
+                            max_chunks: Optional[int] = None,
                             **samples_params) -> Dict:
     """
     Run the enhanced chunked computation system with multi-level refinement.
@@ -1150,7 +1382,11 @@ def run_chunked_computation(machine_id: str = "PC1", grid_level: int = 1,
             lock_backend=lb, lock_ttl=lock_ttl,
             pipeline=pipeline, save_samples=save_samples,
             averaged_surfaces_dir=Path(averaged_surfaces_dir) if averaged_surfaces_dir else None,
+            completion_registry=completion_registry,
+            bundle_output=bundle_output,
+            bundle_dir=Path(bundle_dir) if bundle_dir else None,
             bias_bandwidth=bias_bandwidth, feat_bandwidth=feat_bandwidth,
+            chunk_size=chunk_size,
         )
 
     # If using custom param list, skip grid level management
@@ -1165,9 +1401,13 @@ def run_chunked_computation(machine_id: str = "PC1", grid_level: int = 1,
             lock_backend=lb, lock_ttl=lock_ttl,
             pipeline=pipeline, save_samples=save_samples,
             averaged_surfaces_dir=Path(averaged_surfaces_dir) if averaged_surfaces_dir else None,
+            completion_registry=completion_registry,
+            bundle_output=bundle_output,
+            bundle_dir=Path(bundle_dir) if bundle_dir else None,
             bias_bandwidth=bias_bandwidth, feat_bandwidth=feat_bandwidth,
+            chunk_size=chunk_size,
         )
-        result = computer.compute_grid(**samples_params)
+        result = computer.compute_grid(max_chunks=max_chunks, **samples_params)
         return {'custom_params': result}
 
     # Standard grid level computation
@@ -1188,8 +1428,12 @@ def run_chunked_computation(machine_id: str = "PC1", grid_level: int = 1,
 
         # Run computation for current level
         computer = _make_computer(current_level)
-        level_result = computer.compute_grid(**samples_params)
+        level_result = computer.compute_grid(max_chunks=max_chunks, **samples_params)
         all_results[f'level_{current_level}'] = level_result
+
+        if max_chunks is not None and level_result.get('chunks_processed', 0) >= max_chunks:
+            print(f"\nReached max_chunks={max_chunks}; not advancing to another grid level")
+            break
 
         # Check if auto-advance is enabled and this level is now complete
         if auto_advance:
@@ -1500,6 +1744,10 @@ def print_runtime_configuration(args, n_simulations: int, n_samples: int, output
     print(f"Pipeline Mode        : {boolean_flag(args.pipeline)}")
     if args.pipeline:
         print(f"Save Samples         : {boolean_flag(args.save_samples)}")
+        print(f"Completion Registry : {args.completion_registry or 'auto with object storage; disabled otherwise'}")
+        print(f"Bundle Output       : {boolean_flag(args.bundle_output)}")
+        if args.bundle_output:
+            print(f"Bundle Dir          : {args.bundle_dir or 'derived from averaged-surfaces dir'}")
         print(f"Bias Bandwidth       : {args.bias_bandwidth}")
         print(f"Feat Bandwidth       : {args.feat_bandwidth}")
     print(f"Output Folder        : {output_dir}")
@@ -1561,12 +1809,25 @@ def parse_arguments():
     parser.add_argument('--averaged-surfaces-dir', type=str, default=None,
                         help='Output directory for averaged surfaces in pipeline mode '
                              '(default: derived from samples folder name)')
+    parser.add_argument('--completion-registry', type=str, default=None,
+                        help='Redis completed-set registry name for pipeline mode '
+                             '(default: averaged-surfaces folder name)')
+    parser.add_argument('--bundle-output', action='store_true', default=False,
+                        help='In pipeline mode, upload one compressed bundle per chunk '
+                             'instead of individual surface files')
+    parser.add_argument('--bundle-dir', type=str, default=None,
+                        help='Local directory for chunk bundles '
+                             '(default: <averaged-surfaces-dir>_bundles)')
     parser.add_argument('--bias-bandwidth', type=float, default=0.075,
                         help='KDE bandwidth for bias dimension in pipeline mode (default: 0.075)')
     parser.add_argument('--feat-bandwidth', type=float, default=3.0,
                         help='KDE bandwidth for feat_diff dimension in pipeline mode (default: 3.0)')
     parser.add_argument('--lock-ttl', type=int, default=1800,
                         help='Lock TTL in seconds; heartbeat keeps it alive (default: 1800)')
+    parser.add_argument('--chunk-size', type=int, default=None,
+                        help='Override dynamic chunk size; useful for smoke tests')
+    parser.add_argument('--max-chunks', type=int, default=None,
+                        help='Stop after processing this many chunks; useful for smoke tests')
 
     args = parser.parse_args()
     active_n_simulations, active_n_samples = determine_run_dimensions(args)
@@ -1624,8 +1885,13 @@ def parse_arguments():
             pipeline=args.pipeline,
             save_samples=args.save_samples,
             averaged_surfaces_dir=args.averaged_surfaces_dir,
+            completion_registry=args.completion_registry,
+            bundle_output=args.bundle_output,
+            bundle_dir=args.bundle_dir,
             bias_bandwidth=args.bias_bandwidth,
             feat_bandwidth=args.feat_bandwidth,
+            chunk_size=args.chunk_size,
+            max_chunks=args.max_chunks,
             random_seed=args.random_seed,
         )
 
@@ -1646,7 +1912,13 @@ def parse_arguments():
             )
 
         print(f"\nSession completed. Final status:")
-        if not custom_params:
+        if args.pipeline:
+            print(
+                "Pipeline mode writes averaged surfaces/bundles; use "
+                "surface_computation/grid_status_monitor.py or cloud/cloud_status.py "
+                "for pipeline completion status."
+            )
+        elif not custom_params:
             print_grid_status()
 if __name__ == "__main__":
     parse_arguments()

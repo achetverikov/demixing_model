@@ -1,4 +1,5 @@
 /.env
+/.env.docker
 /venv/
 /fit_to_previous_data/
 /gist.githubusercontent.com/

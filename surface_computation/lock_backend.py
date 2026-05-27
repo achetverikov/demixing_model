@@ -42,6 +42,24 @@ class LockBackend(ABC):
     @abstractmethod
     def active_locks(self) -> Dict[str, dict]: ...
 
+    def completed_members(self, registry: str) -> set:
+        """Return completed item IDs for backends that support a durable registry."""
+        return set()
+
+    def mark_completed(self, registry: str, item_id: str) -> None:
+        """Mark one completed item. File locks intentionally make this a no-op."""
+        return None
+
+    def remove_completed(self, registry: str, item_id: str) -> None:
+        """Remove one completed item. File locks intentionally make this a no-op."""
+        return None
+
+    def clear_completed(self, registry: str, confirm: bool = False) -> int:
+        """Clear a completed registry for backends that support one."""
+        if not confirm:
+            raise RuntimeError("Pass confirm=True to clear a completed registry")
+        return 0
+
     @contextmanager
     def held(self, key: str, owner: str, ttl_seconds: int = 1800):
         """Acquire lock, heartbeat every ttl/3 seconds, release on exit.
@@ -92,6 +110,7 @@ class RedisLockBackend(LockBackend):
     def __init__(self, host: str, port: int, password: str,
                  username: str = 'default',
                  prefix: str = 'demixing:lock:',
+                 completed_prefix: str = 'demixing:completed:',
                  connect_timeout: int = 5):
         import redis as redis_lib
         self._r = redis_lib.Redis(
@@ -99,10 +118,14 @@ class RedisLockBackend(LockBackend):
             decode_responses=True, socket_connect_timeout=connect_timeout,
         )
         self._prefix = prefix
+        self._completed_prefix = completed_prefix
         self._r.ping()  # fail fast if misconfigured
 
     def _k(self, key: str) -> str:
         return f"{self._prefix}{key}"
+
+    def _completed_key(self, registry: str) -> str:
+        return f"{self._completed_prefix}{registry}"
 
     def acquire(self, key: str, owner: str, ttl_seconds: int = 1800) -> bool:
         return bool(self._r.set(self._k(key), owner, nx=True, ex=int(ttl_seconds)))
@@ -130,6 +153,20 @@ class RedisLockBackend(LockBackend):
             if cursor == 0:
                 break
         return result
+
+    def completed_members(self, registry: str) -> set:
+        return set(self._r.smembers(self._completed_key(registry)))
+
+    def mark_completed(self, registry: str, item_id: str) -> None:
+        self._r.sadd(self._completed_key(registry), item_id)
+
+    def remove_completed(self, registry: str, item_id: str) -> None:
+        self._r.srem(self._completed_key(registry), item_id)
+
+    def clear_completed(self, registry: str, confirm: bool = False) -> int:
+        if not confirm:
+            raise RuntimeError("Pass confirm=True to clear a completed registry")
+        return int(self._r.delete(self._completed_key(registry)))
 
     def clear_all(self, confirm: bool = False) -> int:
         """Delete all locks under this prefix. Pass confirm=True to proceed."""
@@ -254,9 +291,17 @@ def make_lock_backend(backend: str,
         port = int(redis_kwargs.get('port') or os.getenv('REDIS_PORT', 6379))
         password = redis_kwargs.get('password') or os.getenv('REDIS_PASSWORD', '')
         username = redis_kwargs.get('username') or os.getenv('REDIS_USERNAME', 'default')
+        prefix = redis_kwargs.get('prefix') or os.getenv('REDIS_LOCK_PREFIX', 'demixing:lock:')
+        completed_prefix = (
+            redis_kwargs.get('completed_prefix')
+            or os.getenv('REDIS_COMPLETED_PREFIX', 'demixing:completed:')
+        )
         if not host:
             raise ValueError("Redis host not configured (set REDIS_HOST or pass host=)")
-        return RedisLockBackend(host=host, port=port, password=password, username=username)
+        return RedisLockBackend(
+            host=host, port=port, password=password, username=username,
+            prefix=prefix, completed_prefix=completed_prefix,
+        )
 
     if backend == 'file':
         if lock_dir is None:

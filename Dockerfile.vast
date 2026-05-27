@@ -1,0 +1,31 @@
+FROM andreychetverikov/r-python-cuda
+
+WORKDIR /workspace
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    VIRTUAL_ENV=/opt/demixing-venv \
+    PYTHON_BIN=/opt/demixing-venv/bin/python
+ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates git openssh-client && \
+    rm -rf /var/lib/apt/lists/* && \
+    python3 -m venv "${VIRTUAL_ENV}" && \
+    "${VIRTUAL_ENV}/bin/python" -m pip install --upgrade pip setuptools wheel && \
+    "${VIRTUAL_ENV}/bin/python" -m pip install \
+      "jax[cuda12]==0.7.0" \
+      jaxlib==0.7.0 \
+      flax==0.10.7 \
+      optax==0.2.5 \
+      numpy==2.1.3 \
+      pandas==2.3.1 \
+      matplotlib==3.10.3 \
+      seaborn==0.13.2 \
+      pyarrow==21.0.0 \
+      boto3==1.34.162 \
+      redis==6.4.0 \
+      streamlit==1.47.0 \
+      plotly==6.2.0
+
+CMD ["bash", "-lc", "if [ -f cloud/vast_worker.sh ]; then bash cloud/vast_worker.sh; else sleep infinity; fi"]

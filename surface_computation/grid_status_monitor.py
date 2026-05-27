@@ -74,19 +74,39 @@ def _resolve_samples_dir(args) -> Path:
     return resolve_results_path(folder_name, args.results_dir)
 
 
-def _pipeline_level_status(averaged_surfaces_dir: Path) -> Dict:
+def _completed_surface_ids_from_bundles(bundle_dir: Optional[Path]) -> set:
+    """Read local chunk bundle manifests and return completed surface IDs."""
+    completed = set()
+    if not bundle_dir or not bundle_dir.exists():
+        return completed
+    for manifest_file in bundle_dir.glob("surface_bundle_*.manifest.json"):
+        try:
+            with open(manifest_file) as f:
+                manifest = json.load(f)
+            completed.update(manifest.get('surface_ids', []))
+        except (OSError, json.JSONDecodeError):
+            continue
+    return completed
+
+
+def _pipeline_level_status(averaged_surfaces_dir: Path,
+                           bundle_dir: Optional[Path] = None) -> Dict:
     """Progress dict (same shape as get_grid_status output) for pipeline mode.
 
-    Counts averaged_sf1_*.pkl files as completed surfaces and derives the
-    expected total from the L1 grid info (unique canonical pairs).
+    Counts individual averaged surface files plus any chunk bundle manifests.
+    The expected total comes from the canonical averaged-surface grid.
     """
-    from simulated_samples_grid import get_grid_level_info
-    grid_info = get_grid_level_info(level=1)
-    expected = grid_info.get('expected_total', 0)
+    cfg = Config()
+    step = cfg.param_step
+    vals = list(range(int(cfg.param_range_low), int(cfg.param_range_high) + int(step), int(step)))
+    n_vals = len(vals)
+    expected = n_vals * n_vals * (n_vals + 1) // 2
 
+    completed_ids = _completed_surface_ids_from_bundles(bundle_dir)
     completed = 0
     if averaged_surfaces_dir.exists():
         completed = sum(1 for _ in averaged_surfaces_dir.glob("averaged_sf1_*.pkl"))
+    completed = max(completed, len(completed_ids))
 
     missing = max(0, expected - completed)
     rate = completed / expected * 100 if expected > 0 else 0.0
@@ -99,13 +119,14 @@ def _pipeline_level_status(averaged_surfaces_dir: Path) -> Dict:
 
 
 def get_comprehensive_status(output_dir: Path,
-                              averaged_surfaces_dir: Optional[Path] = None) -> Dict:
+                              averaged_surfaces_dir: Optional[Path] = None,
+                              bundle_dir: Optional[Path] = None) -> Dict:
     """Collect progress, machine performance, timing, and recommendations."""
     _ssg.config.samples_folder = output_dir
     pipeline_mode = averaged_surfaces_dir is not None
 
     if pipeline_mode:
-        level1_status = _pipeline_level_status(averaged_surfaces_dir)
+        level1_status = _pipeline_level_status(averaged_surfaces_dir, bundle_dir=bundle_dir)
         level2_status = {'completed_count': 0, 'expected_total': 0,
                          'missing_count': 0, 'completion_rate': 0.0}
     else:
@@ -115,8 +136,8 @@ def get_comprehensive_status(output_dir: Path,
 
     active_work = _analyze_active_work(output_dir)
     machine_performance = _analyze_machine_performance(output_dir)
-    scan_dir = averaged_surfaces_dir if pipeline_mode else output_dir
-    scan_pattern = "averaged_sf1_*.pkl" if pipeline_mode else None
+    scan_dir = bundle_dir if pipeline_mode and bundle_dir else (averaged_surfaces_dir if pipeline_mode else output_dir)
+    scan_pattern = "surface_bundle_*.manifest.json" if pipeline_mode and bundle_dir else ("averaged_sf1_*.pkl" if pipeline_mode else None)
     time_analysis = _analyze_computation_timing(
         scan_dir, level1_status, level2_status, file_pattern=scan_pattern
     )
@@ -126,6 +147,7 @@ def get_comprehensive_status(output_dir: Path,
         'output_dir': str(output_dir),
         'pipeline_mode': pipeline_mode,
         'averaged_surfaces_dir': str(averaged_surfaces_dir) if pipeline_mode else None,
+        'bundle_dir': str(bundle_dir) if bundle_dir else None,
         'level1': level1_status,
         'level2': level2_status,
         'overall_progress': progress,
@@ -292,9 +314,12 @@ def print_comprehensive_status(
     output_dir: Path,
     show_details: bool = True,
     averaged_surfaces_dir: Optional[Path] = None,
+    bundle_dir: Optional[Path] = None,
 ) -> None:
     """Print a formatted status report to stdout."""
-    status = get_comprehensive_status(output_dir, averaged_surfaces_dir=averaged_surfaces_dir)
+    status = get_comprehensive_status(
+        output_dir, averaged_surfaces_dir=averaged_surfaces_dir, bundle_dir=bundle_dir
+    )
 
     print("=" * 70)
     print("GRID COMPUTATION STATUS")
@@ -303,6 +328,8 @@ def print_comprehensive_status(
     if status.get('pipeline_mode'):
         print(f"Mode   : pipeline")
         print(f"Surfaces: {status['averaged_surfaces_dir']}")
+        if status.get('bundle_dir'):
+            print(f"Bundles : {status['bundle_dir']}")
     else:
         print(f"Folder : {status['output_dir']}")
 
@@ -387,14 +414,16 @@ def print_comprehensive_status(
 
 def monitor_status_loop(output_dir: Path, refresh_seconds: int = 60,
                         show_details: bool = False,
-                        averaged_surfaces_dir: Optional[Path] = None) -> None:
+                        averaged_surfaces_dir: Optional[Path] = None,
+                        bundle_dir: Optional[Path] = None) -> None:
     """Refresh status on a fixed interval until Ctrl-C."""
     print(f"Continuous monitoring, refresh every {refresh_seconds}s. Ctrl-C to stop.")
     try:
         while True:
             print("\033[2J\033[H", end="")
             print_comprehensive_status(output_dir, show_details=show_details,
-                                       averaged_surfaces_dir=averaged_surfaces_dir)
+                                       averaged_surfaces_dir=averaged_surfaces_dir,
+                                       bundle_dir=bundle_dir)
             print(f"\nRefreshing in {refresh_seconds}s...")
             time.sleep(refresh_seconds)
     except KeyboardInterrupt:
@@ -402,9 +431,12 @@ def monitor_status_loop(output_dir: Path, refresh_seconds: int = 60,
 
 
 def export_status_json(output_dir: Path, output_file: Optional[str] = None,
-                       averaged_surfaces_dir: Optional[Path] = None) -> str:
+                       averaged_surfaces_dir: Optional[Path] = None,
+                       bundle_dir: Optional[Path] = None) -> str:
     """Write current status dict to a JSON file and return its path."""
-    status = get_comprehensive_status(output_dir, averaged_surfaces_dir=averaged_surfaces_dir)
+    status = get_comprehensive_status(
+        output_dir, averaged_surfaces_dir=averaged_surfaces_dir, bundle_dir=bundle_dir
+    )
     if output_file is None:
         output_file = f"grid_status_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     with open(output_file, 'w') as f:
@@ -425,6 +457,8 @@ def main() -> None:
                         help='Base results directory (default: results)')
     parser.add_argument('--averaged-surfaces-dir', type=str, default=None,
                         help='Path to averaged surfaces directory (enables pipeline mode tracking)')
+    parser.add_argument('--bundle-dir', type=str, default=None,
+                        help='Path to local surface bundle directory for pipeline bundle mode')
     # Parameters mirroring simulated_samples_grid.py for auto folder detection
     parser.add_argument('--n-simulations', type=int, default=10000)
     parser.add_argument('--n-samples', type=int, default=100)
@@ -449,22 +483,26 @@ def main() -> None:
 
     output_dir = _resolve_samples_dir(args)
     avg_dir = Path(args.averaged_surfaces_dir) if args.averaged_surfaces_dir else None
+    bundle_dir = Path(args.bundle_dir) if args.bundle_dir else None
 
     if not output_dir.exists():
         print(f"Samples directory not found: {output_dir}")
         sys.exit(1)
 
     if args.export:
-        export_status_json(output_dir, args.output, averaged_surfaces_dir=avg_dir)
+        export_status_json(output_dir, args.output, averaged_surfaces_dir=avg_dir,
+                           bundle_dir=bundle_dir)
         return
 
     if args.monitor or args.refresh != 60:
         monitor_status_loop(output_dir, refresh_seconds=args.refresh,
-                            show_details=args.details, averaged_surfaces_dir=avg_dir)
+                            show_details=args.details, averaged_surfaces_dir=avg_dir,
+                            bundle_dir=bundle_dir)
         return
 
     if args.quiet:
-        status = get_comprehensive_status(output_dir, averaged_surfaces_dir=avg_dir)
+        status = get_comprehensive_status(output_dir, averaged_surfaces_dir=avg_dir,
+                                          bundle_dir=bundle_dir)
         l1 = status['level1']
         l2 = status['level2']
         if status.get('pipeline_mode'):
@@ -481,7 +519,7 @@ def main() -> None:
         return
 
     print_comprehensive_status(output_dir, show_details=args.details,
-                               averaged_surfaces_dir=avg_dir)
+                               averaged_surfaces_dir=avg_dir, bundle_dir=bundle_dir)
 
 if __name__ == "__main__":
     main()
