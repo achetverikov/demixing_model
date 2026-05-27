@@ -193,7 +193,7 @@ vastai create instance <offer-id> \
   --disk 40 \
   --ssh \
   --direct \
-  --env '-e GIT_REPO=https://github.com/achetverikov/demixing_model.git -e GIT_REF=main -e REPO_DIR=/workspace/demixing_model -e REDIS_HOST=<redis-host> -e REDIS_PORT=6379 -e REDIS_USERNAME=default -e REDIS_PASSWORD=<redis-password> -e S3_BUCKET=demixing-model-20samples -e S3_PREFIX=demixing/vast_smoke -e S3_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com -e AWS_ACCESS_KEY_ID=<r2-key> -e AWS_SECRET_ACCESS_KEY=<r2-secret> -e AWS_DEFAULT_REGION=auto -e AVERAGED_SURFACES_DIR=results/averaged_surfaces_vast_smoke -e COMPLETION_REGISTRY=averaged_surfaces_vast_smoke -e BUNDLE_OUTPUT=1 -e BUNDLE_DIR=results/averaged_surfaces_vast_smoke_bundles -e N_SIMULATIONS=100 -e N_SAMPLES=20 -e GPU_WORKERS=0 -e EXTRA_ARGS="--grid-level 1 --chunk-size 5 --max-chunks 1"' \
+  --env '-e GIT_REPO=https://github.com/achetverikov/demixing_model.git -e GIT_REF=main -e REPO_DIR=/workspace/demixing_model -e REDIS_HOST=<redis-host> -e REDIS_PORT=6379 -e REDIS_USERNAME=default -e REDIS_PASSWORD=<redis-password> -e S3_BUCKET=demixing-model-20samples -e S3_PREFIX=demixing/vast_smoke -e S3_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com -e AWS_ACCESS_KEY_ID=<r2-key> -e AWS_SECRET_ACCESS_KEY=<r2-secret> -e AWS_DEFAULT_REGION=auto -e AVERAGED_SURFACES_DIR=results/averaged_surfaces_vast_smoke -e COMPLETION_REGISTRY=averaged_surfaces_vast_smoke -e BUNDLE_OUTPUT=1 -e BUNDLE_DIR=results/averaged_surfaces_vast_smoke_bundles -e N_SIMULATIONS=100 -e N_SAMPLES=20 -e GPU_WORKERS=0 -e GRID_LEVEL=1 -e CHUNK_SIZE=5 -e MAX_CHUNKS=1' \
   --onstart-cmd 'cd /workspace && git clone "$GIT_REPO" "$REPO_DIR" && cd "$REPO_DIR" && git checkout "$GIT_REF" && bash cloud/vast_worker.sh'
 ```
 
@@ -207,7 +207,7 @@ COMPLETION_REGISTRY=averaged_surfaces_vast
 BUNDLE_DIR=results/averaged_surfaces_vast_bundles
 N_SIMULATIONS=10000
 N_SAMPLES=100
-EXTRA_ARGS="--grid-level 1"
+GRID_LEVEL=1
 ```
 
 For Vast `onstart`, set `GIT_REPO`, secrets, and runtime vars from
@@ -234,7 +234,7 @@ export BUNDLE_DIR=results/averaged_surfaces_vast_bundles
 export N_SIMULATIONS=10000
 export N_SAMPLES=100
 export GPU_WORKERS=0,1
-export EXTRA_ARGS="--grid-level 1"
+export GRID_LEVEL=1
 ```
 
 With bundle output enabled, each worker writes individual surfaces locally while

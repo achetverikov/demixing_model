@@ -11,7 +11,9 @@ param(
     [int]$NSimulations = 100,
     [int]$NSamples = 20,
     [string]$GpuWorkers = "0",
-    [string]$ExtraArgs = "--grid-level 1 --chunk-size 5 --max-chunks 1"
+    [string]$GridLevel = "1",
+    [string]$ChunkSize = "5",
+    [string]$MaxChunks = "1"
 )
 
 $ErrorActionPreference = "Stop"
@@ -99,7 +101,9 @@ $vastEnv = @(
     "-e N_SIMULATIONS=$NSimulations",
     "-e N_SAMPLES=$NSamples",
     "-e GPU_WORKERS=$GpuWorkers",
-    "-e EXTRA_ARGS=`"$ExtraArgs`""
+    "-e GRID_LEVEL=$GridLevel",
+    "-e CHUNK_SIZE=$ChunkSize",
+    "-e MAX_CHUNKS=$MaxChunks"
 ) -join " "
 
 $onStart = 'cd /workspace && git clone "$GIT_REPO" "$REPO_DIR" && cd "$REPO_DIR" && git checkout "$GIT_REF" && bash cloud/vast_worker.sh'

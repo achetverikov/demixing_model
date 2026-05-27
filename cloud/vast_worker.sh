@@ -38,6 +38,9 @@ N_SAMPLES="${N_SAMPLES:-100}"
 LOCK_TTL="${LOCK_TTL:-1800}"
 BUNDLE_OUTPUT="${BUNDLE_OUTPUT:-1}"
 BUNDLE_DIR="${BUNDLE_DIR:-${AVERAGED_SURFACES_DIR}_bundles}"
+GRID_LEVEL="${GRID_LEVEL:-}"
+CHUNK_SIZE="${CHUNK_SIZE:-}"
+MAX_CHUNKS="${MAX_CHUNKS:-}"
 
 COMMON_ARGS=(
   surface_computation/simulated_samples_grid.py
@@ -52,6 +55,18 @@ COMMON_ARGS=(
 
 if [[ "$BUNDLE_OUTPUT" == "1" || "$BUNDLE_OUTPUT" == "true" || "$BUNDLE_OUTPUT" == "yes" ]]; then
   COMMON_ARGS+=(--bundle-output --bundle-dir "$BUNDLE_DIR")
+fi
+
+if [[ -n "$GRID_LEVEL" ]]; then
+  COMMON_ARGS+=(--grid-level "$GRID_LEVEL")
+fi
+
+if [[ -n "$CHUNK_SIZE" ]]; then
+  COMMON_ARGS+=(--chunk-size "$CHUNK_SIZE")
+fi
+
+if [[ -n "$MAX_CHUNKS" ]]; then
+  COMMON_ARGS+=(--max-chunks "$MAX_CHUNKS")
 fi
 
 if [[ -n "${EXTRA_ARGS:-}" ]]; then
