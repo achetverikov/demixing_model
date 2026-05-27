@@ -324,58 +324,51 @@ def process_single_surface(params_tuple, input_path, output_path, compiled_vmap_
         thread_id = threading.current_thread().ident
         print(f"[Thread {thread_id}] Processing ({sf1}, {sf2}, {sp})...")
         
-        # Find and load original sample file (sf1, sf2, sp)
-        original_file = find_sample_file(input_path, sf1, sf2, sp)
-        if not original_file:
-            print(f"[Thread {thread_id}] Original samples not found for ({sf1}, {sf2}, {sp})")
-            return False
-        
-        print(f"[Thread {thread_id}] Loading original samples from {original_file}")
-        original_samples = load_sample_data(original_file)
-
-        # Old sample files include feat_diff=0 as the first row; drop it.
         n_expected = len(feat_diff_steps)
-        if original_samples['mu1_samples'].shape[0] > n_expected:
-            original_samples = {**original_samples,
-                                'mu1_samples': original_samples['mu1_samples'][1:],
-                                'mu2_samples': original_samples['mu2_samples'][1:]}
-
-        # Find and load the second sample file:
-        # - Off-diagonal (sf1 != sf2): mirror file (sf2, sf1, sp); skip if absent.
-        # - Diagonal (sf1 == sf2): independent run-1 file (_r1 suffix); fall back
-        #   gracefully if not yet available (old files without run index still work).
         mirror_samples = None
         mirror_file = None
+
+        def _trim(data):
+            if data['mu1_samples'].shape[0] > n_expected:
+                return {**data,
+                        'mu1_samples': data['mu1_samples'][1:],
+                        'mu2_samples': data['mu2_samples'][1:]}
+            return data
+
         if sf1 != sf2:
+            # Off-diagonal: find canonical file + mirror file.
+            original_file = find_sample_file(input_path, sf1, sf2, sp)
+            if not original_file:
+                print(f"[Thread {thread_id}] Original samples not found for ({sf1}, {sf2}, {sp})")
+                return False
+            print(f"[Thread {thread_id}] Loading original samples from {original_file}")
+            original_samples = _trim(load_sample_data(original_file))
+
             mirror_file = find_sample_file(input_path, sf2, sf1, sp)
             if not mirror_file:
                 print(f"[Thread {thread_id}] Mirror file not yet available for ({sf1}, {sf2}, {sp}) — skipping")
                 return False
             print(f"[Thread {thread_id}] Loading mirror samples from {mirror_file}")
-            mirror_samples = load_sample_data(mirror_file)
-            if mirror_samples['mu1_samples'].shape[0] > n_expected:
-                mirror_samples = {**mirror_samples,
-                                  'mu1_samples': mirror_samples['mu1_samples'][1:],
-                                  'mu2_samples': mirror_samples['mu2_samples'][1:]}
+            mirror_samples = _trim(load_sample_data(mirror_file))
         else:
-            # Diagonal: look for a second independent run (_r0/_r1 pair).
+            # Diagonal: prefer the run-indexed pair (_r0/_r1); fall back to a
+            # single plain file for older data that has no run index.
             run_files = find_diagonal_run_files(input_path, sf1, sp)
             if len(run_files) >= 2:
-                # Use run_files[0] as canonical, run_files[1] as "mirror"
                 original_file = run_files[0]
-                original_samples = load_sample_data(original_file)
-                if original_samples['mu1_samples'].shape[0] > n_expected:
-                    original_samples = {**original_samples,
-                                        'mu1_samples': original_samples['mu1_samples'][1:],
-                                        'mu2_samples': original_samples['mu2_samples'][1:]}
+                print(f"[Thread {thread_id}] Loading original samples from {original_file}")
+                original_samples = _trim(load_sample_data(original_file))
                 mirror_file = run_files[1]
                 print(f"[Thread {thread_id}] Loading diagonal run-1 samples from {mirror_file}")
-                mirror_samples = load_sample_data(mirror_file)
-                if mirror_samples['mu1_samples'].shape[0] > n_expected:
-                    mirror_samples = {**mirror_samples,
-                                      'mu1_samples': mirror_samples['mu1_samples'][1:],
-                                      'mu2_samples': mirror_samples['mu2_samples'][1:]}
-            # else: only one file available (old format) — original_samples already loaded above
+                mirror_samples = _trim(load_sample_data(mirror_file))
+            else:
+                # Single plain file (old format).
+                original_file = find_sample_file(input_path, sf1, sf2, sp)
+                if not original_file:
+                    print(f"[Thread {thread_id}] Original samples not found for ({sf1}, {sf2}, {sp})")
+                    return False
+                print(f"[Thread {thread_id}] Loading original samples from {original_file}")
+                original_samples = _trim(load_sample_data(original_file))
         
         # Process samples and create surface directly
         print(f"[Thread {thread_id}] Creating averaged surface for ({sf1}, {sf2}, {sp})")

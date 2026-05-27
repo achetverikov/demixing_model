@@ -135,7 +135,8 @@ VAST_ENV=(
   -e "BENCHMARK_N_SAMPLES=$BENCHMARK_N_SAMPLES"
 )
 
-ONSTART='cd /workspace && git clone "$GIT_REPO" "$REPO_DIR" && cd "$REPO_DIR" && git checkout "$GIT_REF" && /opt/demixing-venv/bin/python cloud/benchmark_gpu_surfaces.py --gpu-name "$BENCHMARK_GPU_NAME" --offer-id "$BENCHMARK_OFFER_ID" --price-per-hour "$BENCHMARK_PRICE_PER_HOUR" --n-simulations "$BENCHMARK_N_SIMULATIONS" --n-samples ${BENCHMARK_N_SAMPLES//,/ } --surface-count "$BENCHMARK_SURFACE_COUNT" --seed "$BENCHMARK_SEED" --upload-prefix "$BENCHMARK_S3_PREFIX"'
+_N_SAMPLES_ARGS="${BENCHMARK_N_SAMPLES//,/ }"
+ONSTART='cd /workspace && git clone "$GIT_REPO" "$REPO_DIR" && cd "$REPO_DIR" && git checkout "$GIT_REF" && /opt/demixing-venv/bin/python cloud/benchmark_gpu_surfaces.py --gpu-name "$BENCHMARK_GPU_NAME" --offer-id "$BENCHMARK_OFFER_ID" --price-per-hour "$BENCHMARK_PRICE_PER_HOUR" --n-simulations "$BENCHMARK_N_SIMULATIONS" --n-samples '"$_N_SAMPLES_ARGS"' --surface-count "$BENCHMARK_SURFACE_COUNT" --seed "$BENCHMARK_SEED" --upload-prefix "$BENCHMARK_S3_PREFIX"'
 
 echo "Creating Vast benchmark instance from offer $OFFER_ID"
 echo "  GPU     : $GPU_NAME"

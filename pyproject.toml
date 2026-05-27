@@ -4,10 +4,10 @@ version = "0.0.0"
 description = "Demixing Model pipelines (simulation, NN training, fitting, browser)."
 requires-python = ">=3.10"
 dependencies = [
-  "jax==0.7.0",            # core compute — CPU build; for GPU use: pip install "jax[cuda12]==0.7.0"
-  "jaxlib==0.7.0",         # CPU runtime; replaced automatically by jax[cuda12]
-  "flax==0.10.7",
-  "optax==0.2.5",
+  "jax==0.10.1",
+  "jaxlib==0.10.1",        # CPU runtime; replaced automatically by jax[cuda13-local]
+  "flax>=0.10.7",
+  "optax>=0.2.5",
   "numpy==2.1.3",
   "pandas==2.3.1",
   "matplotlib==3.10.3",
@@ -22,5 +22,5 @@ dependencies = [
 [project.optional-dependencies]
 dev = []
 cuda = [
-  "jax[cuda12]==0.7.0",
+  "jax[cuda13-local]==0.10.1",
 ]

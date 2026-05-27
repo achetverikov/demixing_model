@@ -11,6 +11,20 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 # Ensure repo modules and training model module are importable when unpickling.
 export PYTHONPATH="${PYTHONPATH:-}:$ROOT:$ROOT/neural_network_optimization"
 
+# Require a GPU unless explicitly bypassed.
+ALLOW_CPU="${ALLOW_CPU:-0}"
+if [[ "$ALLOW_CPU" != "1" ]]; then
+  if ! "$PYTHON_BIN" - <<'EOF'
+import jax
+devs = jax.devices()
+if not any(d.platform == 'gpu' for d in devs):
+    raise SystemExit("No GPU device found. Set ALLOW_CPU=1 to run on CPU.")
+EOF
+  then
+    exit 1
+  fi
+fi
+
 TRIMMED_CSV="$ROOT/example_data/data_color_comb_color2_two_subjects.csv"
 
 # Step 0: Confirm trimmed example data exists

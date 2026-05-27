@@ -38,3 +38,4 @@ __pycache__/
 *backup*
 /scripts/
 Rplots.pdf
+.venv*
