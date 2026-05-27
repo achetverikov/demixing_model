@@ -368,8 +368,36 @@ class ChunkedGridComputer:
         Grouping guarantees that mirrors always fall in the same chunk.
         """
         if self.custom_param_list:
-            return [[(idx, idx, idx, float(sf1), float(sf2), float(sp), None)]
-                    for idx, (sf1, sf2, sp) in enumerate(self.custom_param_list)]
+            if not self.pipeline:
+                return [[(idx, idx, idx, float(sf1), float(sf2), float(sp), None)]
+                        for idx, (sf1, sf2, sp) in enumerate(self.custom_param_list)]
+
+            # Pipeline mode: group mirrors/diagonals into 2-entry groups.
+            # Off-diagonal (sf1 != sf2): canonical (min,max) + mirror (max,min).
+            # Diagonal (sf1 == sf2): two independent runs r0, r1.
+            # Deduplicate by canonical key so mirror entries in the list don't double-count.
+            seen: set = set()
+            groups: List[List[Tuple]] = []
+            for idx, (sf1, sf2, sp) in enumerate(self.custom_param_list):
+                sf1, sf2, sp = float(sf1), float(sf2), float(sp)
+                if sf1 == sf2:
+                    key = (sf1, sf2, sp)
+                    if key not in seen:
+                        seen.add(key)
+                        groups.append([
+                            (idx, idx, idx, sf1, sf2, sp, 0),
+                            (idx, idx, idx, sf1, sf2, sp, 1),
+                        ])
+                else:
+                    canon_sf1, canon_sf2 = min(sf1, sf2), max(sf1, sf2)
+                    key = (canon_sf1, canon_sf2, sp)
+                    if key not in seen:
+                        seen.add(key)
+                        groups.append([
+                            (idx, idx, idx, canon_sf1, canon_sf2, sp, None),
+                            (idx, idx, idx, canon_sf2, canon_sf1, sp, None),
+                        ])
+            return groups
 
         step_size = self.grid_info['step_size']
         fine_start = (config.param_range_low - step_size

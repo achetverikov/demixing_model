@@ -552,7 +552,6 @@ def create_all_averaged_surfaces(input_folder: str = None, output_folder: str = 
     
     # Setup grids and compute reference weight sum for bounded method
     feat_diff_grid = config.create_grid('feat_diff')
-    feat_diff_grid = feat_diff_grid[feat_diff_grid > 0]  # skip feat_diff=0 (trivially zero bias)
     mu1_bias_grid = config.create_grid('mu1_bias')
     mu2_bias_grid = config.create_grid('mu2_bias')
     feat_diff_steps = jnp.arange(len(feat_diff_grid))

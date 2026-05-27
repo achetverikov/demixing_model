@@ -37,7 +37,7 @@ class Config:
     feat_diff_step: int = 2
     mu1_bias_step: int = 2  
     mu2_bias_step: int = 6
-    feat_diff_range: Tuple[int, int] = (0, 180)
+    feat_diff_range: Tuple[int, int] = (2, 180)
     mu1_bias_range: Tuple[int, int] = (-180, 180)
     mu2_bias_range: Tuple[int, int] = (-498, 498)
 

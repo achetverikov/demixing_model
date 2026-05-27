@@ -798,7 +798,7 @@ class GridBasedMultiConditionOptimizer:
 
         # Vectorized density curve computation using vmap with core function directly
         from shared.utils import _compute_empirical_density_asymmetry_core
-        feat_diff_grid = config.create_grid('feat_diff')
+        feat_diff_grid = self.feat_diff_grid
 
         def density_curve_wrapper(feat_diff_vals, bias_vals, grid):
             """Wrapper to extract only asymmetry values from density computation."""
@@ -825,7 +825,7 @@ class GridBasedMultiConditionOptimizer:
         #                       to the empirical distribution.  Precomputed so the JIT branch is cheap.
         print("Precomputing empirical bias distributions for balanced CRPS...")
         D_np = np.array(self.D_circ_matrix)        # (n_bias, n_bias)
-        fd_grid_np = np.array(config.create_grid('feat_diff'))  # (n_feat,)
+        fd_grid_np = np.array(self.feat_diff_grid)  # (n_feat,)
         bias_low = config.mu1_bias_range[0]
         bias_step_val = config.mu1_bias_step
         n_feat_pts = len(fd_grid_np)

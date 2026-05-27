@@ -132,7 +132,6 @@ def make_averaging_functions(config, bias_bandwidth: float = 0.075,
         ref_sum
     """
     feat_diff_grid = config.create_grid('feat_diff')
-    feat_diff_grid = feat_diff_grid[feat_diff_grid > 0]
     mu1_bias_grid = config.create_grid('mu1_bias')
     mu2_bias_grid = config.create_grid('mu2_bias')
     feat_diff_steps = jnp.arange(len(feat_diff_grid))
