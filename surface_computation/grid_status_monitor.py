@@ -74,20 +74,58 @@ def _resolve_samples_dir(args) -> Path:
     return resolve_results_path(folder_name, args.results_dir)
 
 
-def get_comprehensive_status(output_dir: Path) -> Dict:
+def _pipeline_level_status(averaged_surfaces_dir: Path) -> Dict:
+    """Progress dict (same shape as get_grid_status output) for pipeline mode.
+
+    Counts averaged_sf1_*.pkl files as completed surfaces and derives the
+    expected total from the L1 grid info (unique canonical pairs).
+    """
+    from simulated_samples_grid import get_grid_level_info
+    grid_info = get_grid_level_info(level=1)
+    expected = grid_info.get('expected_total', 0)
+
+    completed = 0
+    if averaged_surfaces_dir.exists():
+        completed = sum(1 for _ in averaged_surfaces_dir.glob("averaged_sf1_*.pkl"))
+
+    missing = max(0, expected - completed)
+    rate = completed / expected * 100 if expected > 0 else 0.0
+    return {
+        'completed_count': completed,
+        'expected_total': expected,
+        'missing_count': missing,
+        'completion_rate': rate,
+    }
+
+
+def get_comprehensive_status(output_dir: Path,
+                              averaged_surfaces_dir: Optional[Path] = None) -> Dict:
     """Collect progress, machine performance, timing, and recommendations."""
     _ssg.config.samples_folder = output_dir
-    level1_status = get_grid_status(grid_level=1)
-    level2_status = get_grid_status(grid_level=2)
+    pipeline_mode = averaged_surfaces_dir is not None
+
+    if pipeline_mode:
+        level1_status = _pipeline_level_status(averaged_surfaces_dir)
+        level2_status = {'completed_count': 0, 'expected_total': 0,
+                         'missing_count': 0, 'completion_rate': 0.0}
+    else:
+        level1_status = get_grid_status(grid_level=1)
+        level2_status = get_grid_status(grid_level=2)
     progress = load_progress_state(output_dir)
 
     active_work = _analyze_active_work(output_dir)
     machine_performance = _analyze_machine_performance(output_dir)
-    time_analysis = _analyze_computation_timing(output_dir, level1_status, level2_status)
+    scan_dir = averaged_surfaces_dir if pipeline_mode else output_dir
+    scan_pattern = "averaged_sf1_*.pkl" if pipeline_mode else None
+    time_analysis = _analyze_computation_timing(
+        scan_dir, level1_status, level2_status, file_pattern=scan_pattern
+    )
 
     return {
         'timestamp': datetime.now().isoformat(),
         'output_dir': str(output_dir),
+        'pipeline_mode': pipeline_mode,
+        'averaged_surfaces_dir': str(averaged_surfaces_dir) if pipeline_mode else None,
         'level1': level1_status,
         'level2': level2_status,
         'overall_progress': progress,
@@ -172,9 +210,13 @@ def _analyze_machine_performance(output_dir: Path) -> Dict:
 
 
 def _analyze_computation_timing(
-    output_dir: Path, level1_status: Dict, level2_status: Dict
+    output_dir: Path, level1_status: Dict, level2_status: Dict,
+    file_pattern: Optional[str] = None,
 ) -> Dict:
-    """Estimate throughput and completion time from recent file activity."""
+    """Estimate throughput and completion time from recent file activity.
+
+    file_pattern: glob pattern to match output files (default: sample files).
+    """
     timing_analysis: Dict = {
         'surfaces_per_hour': 0,
         'estimated_completion': {},
@@ -182,16 +224,31 @@ def _analyze_computation_timing(
         'bottlenecks': [],
     }
 
+    if not output_dir or not output_dir.exists():
+        return timing_analysis
+
     cutoff_time = time.time() - 3600
     recent_count = 0
-    with os.scandir(output_dir) as entries:
-        for entry in entries:
-            if re.match(r"(surface|samples)_sf1_.*\.pkl", entry.name):
+    if file_pattern:
+        # Pipeline mode: glob for averaged surface files
+        try:
+            for entry in output_dir.glob(file_pattern):
                 try:
                     if entry.stat().st_mtime > cutoff_time:
                         recent_count += 1
                 except OSError:
                     continue
+        except OSError:
+            pass
+    else:
+        with os.scandir(output_dir) as entries:
+            for entry in entries:
+                if re.match(r"(surface|samples)_sf1_.*\.pkl", entry.name):
+                    try:
+                        if entry.stat().st_mtime > cutoff_time:
+                            recent_count += 1
+                    except OSError:
+                        continue
 
     timing_analysis['recent_activity']['active'] = recent_count > 0
     if recent_count > 0:
@@ -234,31 +291,40 @@ def _analyze_computation_timing(
 def print_comprehensive_status(
     output_dir: Path,
     show_details: bool = True,
+    averaged_surfaces_dir: Optional[Path] = None,
 ) -> None:
     """Print a formatted status report to stdout."""
-    status = get_comprehensive_status(output_dir)
+    status = get_comprehensive_status(output_dir, averaged_surfaces_dir=averaged_surfaces_dir)
 
     print("=" * 70)
     print("GRID COMPUTATION STATUS")
     print("=" * 70)
     print(f"Time   : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Folder : {status['output_dir']}")
+    if status.get('pipeline_mode'):
+        print(f"Mode   : pipeline")
+        print(f"Surfaces: {status['averaged_surfaces_dir']}")
+    else:
+        print(f"Folder : {status['output_dir']}")
 
     level1 = status['level1']
     level2 = status['level2']
+    pipeline_mode = status.get('pipeline_mode', False)
 
     print(f"\nPROGRESS")
     print("-" * 40)
-    for label, s in (("Level 1 (coarse)", level1), ("Level 2 (fine)  ", level2)):
-        bar = "█" * int(s['completion_rate'] // 5) + "░" * (20 - int(s['completion_rate'] // 5))
-        print(f"  {label}: {s['completed_count']:>6,}/{s['expected_total']:,} "
-              f"({s['completion_rate']:.1f}%)  [{bar}]  {s['missing_count']:,} remaining")
-
-    total_done = level1['completed_count'] + level2['completed_count']
-    total_exp = level1['expected_total'] + level2['expected_total']
-    if total_exp > 0:
-        print(f"  Total          : {total_done:>6,}/{total_exp:,} "
-              f"({total_done / total_exp * 100:.1f}%)")
+    bar = "█" * int(level1['completion_rate'] // 5) + "░" * (20 - int(level1['completion_rate'] // 5))
+    l1_label = "Averaged surfaces" if pipeline_mode else "Level 1 (coarse) "
+    print(f"  {l1_label}: {level1['completed_count']:>6,}/{level1['expected_total']:,} "
+          f"({level1['completion_rate']:.1f}%)  [{bar}]  {level1['missing_count']:,} remaining")
+    if not pipeline_mode:
+        bar2 = "█" * int(level2['completion_rate'] // 5) + "░" * (20 - int(level2['completion_rate'] // 5))
+        print(f"  Level 2 (fine)  : {level2['completed_count']:>6,}/{level2['expected_total']:,} "
+              f"({level2['completion_rate']:.1f}%)  [{bar2}]  {level2['missing_count']:,} remaining")
+        total_done = level1['completed_count'] + level2['completed_count']
+        total_exp = level1['expected_total'] + level2['expected_total']
+        if total_exp > 0:
+            print(f"  Total           : {total_done:>6,}/{total_exp:,} "
+                  f"({total_done / total_exp * 100:.1f}%)")
 
     active = status['active_work']
     print(f"\nACTIVE WORK")
@@ -319,22 +385,26 @@ def print_comprehensive_status(
     print("=" * 70)
 
 
-def monitor_status_loop(output_dir: Path, refresh_seconds: int = 60, show_details: bool = False) -> None:
+def monitor_status_loop(output_dir: Path, refresh_seconds: int = 60,
+                        show_details: bool = False,
+                        averaged_surfaces_dir: Optional[Path] = None) -> None:
     """Refresh status on a fixed interval until Ctrl-C."""
     print(f"Continuous monitoring, refresh every {refresh_seconds}s. Ctrl-C to stop.")
     try:
         while True:
             print("\033[2J\033[H", end="")
-            print_comprehensive_status(output_dir, show_details=show_details)
+            print_comprehensive_status(output_dir, show_details=show_details,
+                                       averaged_surfaces_dir=averaged_surfaces_dir)
             print(f"\nRefreshing in {refresh_seconds}s...")
             time.sleep(refresh_seconds)
     except KeyboardInterrupt:
         print("\nMonitoring stopped.")
 
 
-def export_status_json(output_dir: Path, output_file: Optional[str] = None) -> str:
+def export_status_json(output_dir: Path, output_file: Optional[str] = None,
+                       averaged_surfaces_dir: Optional[Path] = None) -> str:
     """Write current status dict to a JSON file and return its path."""
-    status = get_comprehensive_status(output_dir)
+    status = get_comprehensive_status(output_dir, averaged_surfaces_dir=averaged_surfaces_dir)
     if output_file is None:
         output_file = f"grid_status_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     with open(output_file, 'w') as f:
@@ -353,6 +423,8 @@ def main() -> None:
                         help='Explicit path to samples output directory (overrides auto-detection)')
     parser.add_argument('--results-dir', type=str, default='results',
                         help='Base results directory (default: results)')
+    parser.add_argument('--averaged-surfaces-dir', type=str, default=None,
+                        help='Path to averaged surfaces directory (enables pipeline mode tracking)')
     # Parameters mirroring simulated_samples_grid.py for auto folder detection
     parser.add_argument('--n-simulations', type=int, default=10000)
     parser.add_argument('--n-samples', type=int, default=100)
@@ -376,33 +448,40 @@ def main() -> None:
     args = parser.parse_args()
 
     output_dir = _resolve_samples_dir(args)
+    avg_dir = Path(args.averaged_surfaces_dir) if args.averaged_surfaces_dir else None
 
     if not output_dir.exists():
         print(f"Samples directory not found: {output_dir}")
         sys.exit(1)
 
     if args.export:
-        export_status_json(output_dir, args.output)
+        export_status_json(output_dir, args.output, averaged_surfaces_dir=avg_dir)
         return
 
     if args.monitor or args.refresh != 60:
-        monitor_status_loop(output_dir, refresh_seconds=args.refresh, show_details=args.details)
+        monitor_status_loop(output_dir, refresh_seconds=args.refresh,
+                            show_details=args.details, averaged_surfaces_dir=avg_dir)
         return
 
     if args.quiet:
-        status = get_comprehensive_status(output_dir)
+        status = get_comprehensive_status(output_dir, averaged_surfaces_dir=avg_dir)
         l1 = status['level1']
         l2 = status['level2']
-        total_done = l1['completed_count'] + l2['completed_count']
-        total_exp  = l1['expected_total'] + l2['expected_total']
-        pct = total_done / total_exp * 100 if total_exp else 0.0
-        print(f"Overall: {total_done}/{total_exp} ({pct:.1f}%)  "
-              f"L1: {l1['completion_rate']:.1f}%  L2: {l2['completion_rate']:.1f}%  "
-              f"Active: {len(status['active_work']['total_active_machines'])} machines")
+        if status.get('pipeline_mode'):
+            pct = l1['completion_rate']
+            print(f"Pipeline: {l1['completed_count']}/{l1['expected_total']} ({pct:.1f}%)  "
+                  f"Active: {len(status['active_work']['total_active_machines'])} machines")
+        else:
+            total_done = l1['completed_count'] + l2['completed_count']
+            total_exp  = l1['expected_total'] + l2['expected_total']
+            pct = total_done / total_exp * 100 if total_exp else 0.0
+            print(f"Overall: {total_done}/{total_exp} ({pct:.1f}%)  "
+                  f"L1: {l1['completion_rate']:.1f}%  L2: {l2['completion_rate']:.1f}%  "
+                  f"Active: {len(status['active_work']['total_active_machines'])} machines")
         return
 
-    print_comprehensive_status(output_dir, show_details=args.details)
-
+    print_comprehensive_status(output_dir, show_details=args.details,
+                               averaged_surfaces_dir=avg_dir)
 
 if __name__ == "__main__":
     main()
