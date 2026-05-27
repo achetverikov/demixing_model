@@ -85,7 +85,8 @@ def get_grid_level_info(level: int = 1) -> Dict:
         description = f"Coarse grid (step={step_size})"
         # Level 1: all surfaces at step_size intervals
         param_vals = np.arange(config.param_range_low, config.param_range_high + step_size, step_size)
-        expected_total = len(param_vals) ** 3
+        n = len(param_vals)
+        expected_total = n ** 3 + n ** 2  # cube + one extra run per diagonal (sf1==sf2)
     elif level == 2:
         step_size = config.param_step // 2
         description = f"Fine grid (step={step_size})"
@@ -94,8 +95,10 @@ def get_grid_level_info(level: int = 1) -> Dict:
         fine_param_vals = np.arange(fine_start, config.param_range_high + step_size, step_size)
         coarse_param_vals = np.arange(config.param_range_low, config.param_range_high + config.param_step, config.param_step)
 
-        total_fine_surfaces = len(fine_param_vals) ** 3
-        total_coarse_surfaces = len(coarse_param_vals) ** 3
+        n_fine = len(fine_param_vals)
+        n_coarse = len(coarse_param_vals)
+        total_fine_surfaces = n_fine ** 3 + n_fine ** 2
+        total_coarse_surfaces = n_coarse ** 3 + n_coarse ** 2
         expected_total = total_fine_surfaces - total_coarse_surfaces
     else:
         raise ValueError(f"Unsupported grid level: {level}")
@@ -605,8 +608,6 @@ class ChunkedGridComputer:
         samples_computed = samples_skipped = 0
         feat_diff_vals = config.create_grid('feat_diff')
         feat_diff_vals = feat_diff_vals[feat_diff_vals > 0]  # feat_diff=0 is trivially 0 bias
-        key = config.seed.get_jax_key(purpose='generating samples')
-
         num_scan_loops = 10
         num_sims_per_loop = samples_params['n_simulations'] // num_scan_loops
 
@@ -659,6 +660,10 @@ class ChunkedGridComputer:
                 all_mu1_results = []
                 all_mu2_results = []
                 all_full_results = [] if self.save_full_results else None
+
+                base_key = jax.random.PRNGKey(samples_params['random_seed'])
+                param_key = jax.random.fold_in(base_key, int(param_hash, 16))
+                key = jax.random.fold_in(param_key, run_index if run_index is not None else 0)
 
                 for rep in range(num_scan_loops):
                     key, *subkeys = jax.random.split(key, len(feat_diff_vals) + 1)
@@ -869,7 +874,7 @@ def get_grid_status(grid_level: int = None) -> Dict:
 
     # Strict pattern: only canonical filenames with 8-char hex hash and .pkl.gz extension.
     # Excludes OneDrive conflict copies, .tmp files, and other spurious matches.
-    pattern = re.compile(r"samples_sf1_(?P<sf1>[\d.]+)_sf2_(?P<sf2>[\d.]+)_sp_(?P<sp>[\d.]+)_[a-f0-9]{8}\.pkl\.gz$")
+    pattern = re.compile(r"samples_sf1_(?P<sf1>[\d.]+)_sf2_(?P<sf2>[\d.]+)_sp_(?P<sp>[\d.]+)(?:_r\d+)?_[a-f0-9]{8}\.pkl\.gz$")
 
     if grid_level == 1:
         # Level 1: count surfaces at coarse step intervals
@@ -1372,6 +1377,7 @@ def print_runtime_configuration(args, n_simulations: int, n_samples: int, output
     print(f"Recover Machine      : {args.recover_machine or 'None'}")
     print(f"N Simulations        : {n_simulations}")
     print(f"N Samples            : {n_samples}")
+    print(f"Random Seed          : {args.random_seed}")
     print(f"Output Folder        : {output_dir}")
     print("================================\n")
 
@@ -1419,6 +1425,8 @@ def parse_arguments():
                         help='Number of simulations per surface (default: 10000)')
     parser.add_argument('--n-samples', type=int, default=None,
                         help='Samples per simulation (default: config value = 100)')
+    parser.add_argument('--random-seed', type=int, default=42,
+                        help='Base random seed for reproducible simulations (default: 42)')
 
     args = parser.parse_args()
     active_n_simulations, active_n_samples = determine_run_dimensions(args)
@@ -1474,7 +1482,8 @@ def parse_arguments():
                 fix_weights=args.fix_weights,
                 algorithm=args.algorithm,
                 feat_diff_step=4, mu1_bias_step=4, mu2_bias_step=12,
-                n_simulations=active_n_simulations, n_samples=active_n_samples
+                n_simulations=active_n_simulations, n_samples=active_n_samples,
+                random_seed=args.random_seed,
             )
         else:
             print("Running full computation")
@@ -1489,7 +1498,8 @@ def parse_arguments():
                 fix_weights=args.fix_weights,
                 algorithm=args.algorithm,
                 n_simulations=active_n_simulations,
-               n_samples=active_n_samples
+                n_samples=active_n_samples,
+                random_seed=args.random_seed,
             )
 
         print(f"\nSession completed. Final status:")
