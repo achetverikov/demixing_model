@@ -17,7 +17,7 @@ import argparse
 import sys
 from pathlib import Path
 import pickle
-from typing import Tuple
+from typing import Optional, Tuple
 
 from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
     GridBasedMultiConditionOptimizer,
@@ -26,12 +26,11 @@ from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
     _generate_nn_bias_curve_batch,
 )
 from shared.config import config
-from shared.utils import AveragedSurface, resolve_input_path
+from shared.utils import AveragedSurface, SurfaceUnpickler, resolve_input_path
 
 RESULTS_DIR = "results"
 CHECKPOINT_PREFIX = "neural_net_checkpoints"
 CHECKPOINT_EPOCH = 1500
-AVERAGED_SURFACES_DIR_TEMPLATE = "averaged_surfaces_10k_{n_samples}samples"
 
 def _generate_mu2_bias_curve_batch(mu2_surfaces_batch: jnp.ndarray, target_feat_indices: jnp.ndarray) -> jnp.ndarray:
     """Generate mu2 bias curves for batch of mu2 surfaces using linear integration (not circular)."""
@@ -169,37 +168,39 @@ def compute_predicted_sd_curves_batch(log_surfaces_batch, feat_vals):
     return circular_sds
 
 
-def load_averaged_surface(sd_feat1: float, sd_feat2: float, sd_spat: float, n_samples: int) -> Tuple[jnp.ndarray, jnp.ndarray]:
+def load_averaged_surface(sd_feat1: float, sd_feat2: float, sd_spat: float, n_samples: int,
+                          surfaces_dir: str) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Load averaged surfaces from file for given parameters.
     Surfaces are stored in canonical form (sf1 <= sf2) with:
     - mu1_comp1_surface: lower-noise component bias surface
     - mu1_comp2_surface: higher-noise component bias surface
-    
+
     Args:
         sd_feat1, sd_feat2, sd_spat: Parameter values
         n_samples: Number of samples used for training
-        
+        surfaces_dir: Path to the averaged surfaces directory.
+
     Returns:
         Tuple of (mu1_surface, mu2_surface) as JAX arrays (appropriate components based on parameter ordering)
-        
+
     Raises:
         FileNotFoundError: If surface file doesn't exist
     """
-    # Use canonical ordering for filename
-    canonical_sf1 = min(sd_feat1, sd_feat2)
-    canonical_sf2 = max(sd_feat1, sd_feat2)
-    
-    filename = f"averaged_sf1_{canonical_sf1}_sf2_{canonical_sf2}_sp_{sd_spat}.pkl"
-    surface_dir = AVERAGED_SURFACES_DIR_TEMPLATE.format(n_samples=n_samples)
-    file_path = resolve_input_path(str(Path(surface_dir) / filename), RESULTS_DIR)
-    
+    # Use canonical ordering for filename; ensure .0 suffix matches saved filenames
+    canonical_sf1 = float(min(sd_feat1, sd_feat2))
+    canonical_sf2 = float(max(sd_feat1, sd_feat2))
+    sd_spat_f = float(sd_spat)
+
+    filename = f"averaged_sf1_{canonical_sf1}_sf2_{canonical_sf2}_sp_{sd_spat_f}.pkl"
+    file_path = Path(surfaces_dir) / filename
+
     if not file_path.exists():
         raise FileNotFoundError(f"No averaged surface found for parameters sf1={sd_feat1}, sf2={sd_feat2}, sp={sd_spat} with n_samples={n_samples}. Expected file: {file_path}")
     
     try:
         with open(file_path, 'rb') as f:
-            surface_data = pickle.load(f)
+            surface_data = SurfaceUnpickler(f).load()
         
         surface_obj = surface_data['surface']
         
@@ -219,11 +220,12 @@ def load_averaged_surface(sd_feat1: float, sd_feat2: float, sd_spat: float, n_sa
         raise RuntimeError(f"Failed to load surface from {file_path}: {e}")
 
 
-def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: str, 
-                              skip_motor_noise: bool = False, use_nn_surfaces: bool = True):
+def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: str,
+                              skip_motor_noise: bool = False, use_nn_surfaces: bool = True,
+                              averaged_surfaces_dir: Optional[str] = None):
     """
     Read parameters from CSV/Arrow file, simulate surfaces, and save results.
-    
+
     Args:
         input_path: Path to CSV/Arrow file with parameters
         n_samples: Number of samples used for training (determines checkpoint path)
@@ -258,6 +260,9 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
         print(f"Available columns: {list(params_df.columns)}")
         sys.exit(1)
     
+    if not use_nn_surfaces and not averaged_surfaces_dir:
+        raise ValueError("averaged_surfaces_dir is required when use_nn_surfaces=False")
+
     # Convert to JAX array and handle motor noise
     if skip_motor_noise:
         # Add sd_motor column with zeros when motor noise is skipped
@@ -266,16 +271,13 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
     else:
         parameters_array = jnp.array(params_df[required_cols].values, dtype=jnp.float32)
     
-    # Construct checkpoint path based on training configuration
-    base_checkpoint_path = CHECKPOINT_PREFIX
-    checkpoint_path = f'{base_checkpoint_path}_{n_samples}samples/model_epoch_{CHECKPOINT_EPOCH:04d}.pkl'
+    checkpoint_path = f'{CHECKPOINT_PREFIX}_{n_samples}samples/model_epoch_{CHECKPOINT_EPOCH:04d}.pkl'
     resolved_checkpoint_path = resolve_input_path(checkpoint_path, RESULTS_DIR)
-    
-    print(f"Using checkpoint: {resolved_checkpoint_path}")
-    
+
     # Initialize optimizer for simulation only (no datasets needed) - but only if using NN surfaces
     if use_nn_surfaces:
         try:
+            print(f"Using checkpoint: {resolved_checkpoint_path}")
             optimizer = GridBasedMultiConditionOptimizer(
                 checkpoint_path=str(resolved_checkpoint_path),
                 condition_datasets=None,  # No datasets needed for simulation
@@ -317,7 +319,7 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
         
         for i, (sf1, sf2, sp) in enumerate(zip(sd_feat1, sd_feat2, sd_spat)):
             try:
-                mu1_surface, mu2_surface = load_averaged_surface(float(sf1), float(sf2), float(sp), n_samples)
+                mu1_surface, mu2_surface = load_averaged_surface(float(sf1), float(sf2), float(sp), n_samples, surfaces_dir=averaged_surfaces_dir)
                 mu1_surfaces_list.append(mu1_surface)
                 mu2_surfaces_list.append(mu2_surface)
             except FileNotFoundError as e:
@@ -436,23 +438,29 @@ def main():
     parser.add_argument('output_path', help='Path to save results (Arrow/CSV file)')
     parser.add_argument('--skip-motor-noise', action='store_true', 
                        help='Skip motor noise computation (sd_motor = 0)')
-    parser.add_argument('--use-nn-surfaces', action='store_false', dest='use_nn_surfaces', default=True,
-                       help='Use averaged surfaces from files instead of NN predictions')
-    
+    parser.add_argument('--surface-source', choices=['nn', 'raw'], default='nn',
+                       help='nn: use NN approximation of averaged surfaces (default); raw: load averaged surfaces directly from files')
+    parser.add_argument('--averaged-surfaces-dir',
+                       help='Path to averaged surfaces directory (required with --surface-source raw).')
+
     args = parser.parse_args()
-    
+
+    if args.surface_source == 'raw' and not args.averaged_surfaces_dir:
+        parser.error('--averaged-surfaces-dir is required when --surface-source raw')
+
     # Validate inputs
     if not Path(args.input_path).exists():
         print(f"Error: Input file not found: {args.input_path}")
         sys.exit(1)
-    
+
     # Run simulation
     simulate_surfaces_from_file(
-        args.input_path, 
+        args.input_path,
         args.n_samples,
         args.output_path,
         args.skip_motor_noise,
-        args.use_nn_surfaces
+        use_nn_surfaces=args.surface_source == 'nn',
+        averaged_surfaces_dir=args.averaged_surfaces_dir,
     )
 
 

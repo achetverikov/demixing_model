@@ -1,12 +1,22 @@
 #' Surface Simulator R Interface
-#' 
-#' This R script provides an interface to simulate surfaces using the Python 
-#' GridBasedMultiConditionOptimizer through WSL. It creates parameter files,
-#' runs Python simulation, and loads the results back into R.
+#'
+#' Wraps surface_simulator.py: writes a parameter Arrow file, calls Python,
+#' reads back the long-format results.
 
 library(arrow)
 library(stringr)
 library(data.table)
+
+# Locate the Python script and repo root once, at source time.
+# .sim_script_dir  — directory containing this R file and surface_simulator.py
+# .sim_repo_root   — parent directory (repo root); Python is run from here so
+#                    that relative paths like "results/" resolve correctly.
+.sim_script_dir <- tryCatch(
+  normalizePath(dirname(sys.frame(1)$ofile)),
+  error = function(e) getwd()
+)
+.sim_py_script <- file.path(.sim_script_dir, "surface_simulator.py")
+.sim_repo_root <- normalizePath(dirname(.sim_script_dir))
 
 #' Simulate surfaces for given parameter combinations
 #'
@@ -16,82 +26,65 @@ library(data.table)
 #' @param skip_motor_noise Whether to skip motor noise computation (default: FALSE)
 #' @param use_nn_surfaces Whether to use NN predictions (TRUE) or averaged surfaces from files (FALSE) (default: TRUE)
 #'                       Note: NN surfaces only provide mu1 bias curves. For mu2 bias curves, use averaged surfaces (FALSE)
+#' @param averaged_surfaces_dir Path to the averaged surfaces directory (required when use_nn_surfaces=FALSE)
 #' @param cleanup Whether to clean up temporary files (default: TRUE)
-#' @return Data frame containing simulation results with columns: sd_feat1, sd_feat2, sd_spat, sd_motor, 
-#'         feat_diff, mu1_density_asymmetry, mu2_density_asymmetry (if available), mu1_expectation, 
+#' @param work_dir Directory for temporary input/output Arrow files (default: getwd()).
+#'                 Any path conversion needed to reach the Python process (e.g. WSL
+#'                 mnt paths) should be handled by the caller before passing work_dir.
+#' @return Data frame containing simulation results with columns: sd_feat1, sd_feat2, sd_spat, sd_motor,
+#'         feat_diff, mu1_density_asymmetry, mu2_density_asymmetry (if available), mu1_expectation,
 #'         mu2_expectation (if available), sd_curve
-simulate_surfaces <- function(parameters, 
-                             n_samples,
-                             skip_motor_noise = FALSE,
-                             use_nn_surfaces = TRUE,
-                             cleanup = TRUE) {
-  
-  # Hardcoded paths
-  win_path_to_wsl <- function(path) {
-    stringr::str_replace( path, "(C|c):", "/mnt/c")
-  }
-  work_dir = win_path_to_wsl(getwd())
-  print(work_dir)
-    
+simulate_surfaces <- function(parameters,
+                              n_samples,
+                              skip_motor_noise      = FALSE,
+                              use_nn_surfaces       = TRUE,
+                              averaged_surfaces_dir = NULL,
+                              cleanup               = TRUE,
+                              work_dir              = getwd()) {
+
+  session_id    <- format(Sys.time(), "%Y%m%d_%H%M%S")
+  input_file_r  <- file.path(work_dir, paste0("params_",  session_id, ".arrow"))
+  output_file_r <- file.path(work_dir, paste0("results_", session_id, ".arrow"))
+
+  cat("work_dir:", work_dir, "\n")
+
   # Validate inputs
+  if (!use_nn_surfaces && is.null(averaged_surfaces_dir)) {
+    stop("averaged_surfaces_dir is required when use_nn_surfaces = FALSE")
+  }
+
   if (skip_motor_noise) {
     required_cols <- c("sd_feat1", "sd_feat2", "sd_spat")
   } else {
     required_cols <- c("sd_feat1", "sd_feat2", "sd_spat", "sd_motor")
   }
-  
+
   missing_cols <- setdiff(required_cols, names(parameters))
   if (length(missing_cols) > 0) {
     stop("Missing required columns in parameters: ", paste(missing_cols, collapse = ", "))
   }
-  
-  # Generate unique file names for this session
-  session_id <- format(Sys.time(), "%Y%m%d_%H%M%S")
-  input_file_name <- paste0("params_", session_id, ".arrow")
-  output_file_name <- paste0("results_", session_id, ".arrow")
-  
-  # Convert WSL paths to Windows paths for R file operations
-  input_file_win <- gsub("^/mnt/c", "C:", file.path(work_dir, input_file_name))
-  output_file_win <- gsub("^/mnt/c", "C:", file.path(work_dir, output_file_name))
-  
-  cat("Creating parameter file:", input_file_win, "\n")
-  
-  # Write parameters to Arrow file
-  write_parquet(parameters, input_file_win)
-  
-  # Build Python command arguments (just file names since we'll cd to work_dir)
+
+  cat("Creating parameter file:", input_file_r, "\n")
+  write_parquet(parameters, input_file_r)
+
+  # Build Python command — absolute paths for I/O, cd to repo root so that
+  # "results/" and other relative paths in surface_simulator.py resolve correctly.
   cmd_args <- c(
-    input_file_name,
+    shQuote(input_file_r),
     n_samples,
-    output_file_name
+    shQuote(output_file_r),
+    if (skip_motor_noise) "--skip-motor-noise",
+    "--surface-source", if (use_nn_surfaces) "nn" else "raw",
+    if (!use_nn_surfaces) c("--averaged-surfaces-dir", shQuote(averaged_surfaces_dir))
   )
-  
-  if (skip_motor_noise) {
-    cmd_args <- c(cmd_args, "--skip-motor-noise")
-  }
-  
-  if (!use_nn_surfaces) {
-    cmd_args <- c(cmd_args, "--use-nn-surfaces")
-  }
-  
-  # Create full command with cd and quoted paths
+
   full_cmd <- paste(
-    "source ~/jax_env/bin/activate && cd", 
-    shQuote(work_dir),
-    "&& python surface_simulator.py", 
-    paste(cmd_args, collapse = " ")
+    "cd", shQuote(.sim_repo_root), "&&",
+    "python", shQuote(.sim_py_script), paste(cmd_args, collapse = " ")
   )
-  
-  cat("Running simulation...\n")
-  cat("Command:", full_cmd, "\n")
-  
-  # Execute command through WSL
-  result <- shell(
-    shell = 'wsl',
-    cmd = full_cmd,
-    flag = '',
-    intern = TRUE
-  )
+
+  cat("Running:", full_cmd, "\n")
+  result <- system(full_cmd, intern = TRUE)
   
   # Check if command executed successfully
   exit_code <- attr(result, "status")
@@ -107,15 +100,15 @@ simulate_surfaces <- function(parameters,
   Sys.sleep(2)
   
   # Check if output file exists
-  if (!file.exists(output_file_win)) {
-    stop("Output file not found: ", output_file_win)
+  if (!file.exists(output_file_r)) {
+    stop("Output file not found: ", output_file_r)
   }
   
-  cat("Loading results from:", output_file_win, "\n")
+  cat("Loading results from:", output_file_r, "\n")
   
   # Load Arrow results
   tryCatch({
-    sim_results <- read_parquet(output_file_win)
+    sim_results <- read_parquet(output_file_r)
     
     # Extract metadata from first row (where it's not NULL)
     metadata <- list(
@@ -205,8 +198,8 @@ simulate_surfaces <- function(parameters,
     
     # Cleanup temporary files if requested
     if (cleanup) {
-      unlink(output_file_win)
-      unlink(input_file_win)
+      unlink(output_file_r)
+      unlink(input_file_r)
       cat("Cleaned up temporary files\n")
     }
     
@@ -217,37 +210,48 @@ simulate_surfaces <- function(parameters,
   })
 }
 
-simulate_unequal_noise2 <- function(sd_feat_range = seq(10,60, 10), sd_spat = 42, n_samples = 20, use_nn_surfaces = TRUE){
-  par_grid <- expand.grid(sd_feat1= sd_feat_range, sd_feat2 = sd_feat_range, sd_spat = sd_spat)
+simulate_unequal_noise2 <- function(sd_feat_range         = seq(10, 60, 10),
+                                    sd_spat               = 42,
+                                    n_samples             = 20,
+                                    use_nn_surfaces       = TRUE,
+                                    averaged_surfaces_dir = NULL,
+                                    work_dir              = getwd()) {
+  par_grid <- expand.grid(sd_feat1 = sd_feat_range, sd_feat2 = sd_feat_range, sd_spat = sd_spat)
   res <- simulate_surfaces(par_grid,
-                           n_samples = n_samples,
-                           skip_motor_noise = TRUE,
-                           use_nn_surfaces = use_nn_surfaces)
+                           n_samples             = n_samples,
+                           skip_motor_noise      = TRUE,
+                           use_nn_surfaces       = use_nn_surfaces,
+                           averaged_surfaces_dir = averaged_surfaces_dir,
+                           work_dir              = work_dir)
   setDT(res)
-  res[,sd_feat_ratio:=sd_feat1/sd_feat2]
-  res[,lower_item_noise:=pmin(sd_feat1, sd_feat2)]
-  res[,higher_item_noise:=pmax(sd_feat1, sd_feat2)]
-  res[sd_feat1<=sd_feat2, bias_type:='lower_noise_bias']
-  res[sd_feat1>sd_feat2, bias_type:='higher_noise_bias']
-  
+  res[, sd_feat_ratio   := sd_feat1 / sd_feat2]
+  res[, lower_item_noise  := pmin(sd_feat1, sd_feat2)]
+  res[, higher_item_noise := pmax(sd_feat1, sd_feat2)]
+  res[sd_feat1 <= sd_feat2, bias_type := "lower_noise_bias"]
+  res[sd_feat1 >  sd_feat2, bias_type := "higher_noise_bias"]
   res
 }
 
 
-
-simulate_equal_noise <- function(sd_feat_range = seq(10,60, 10), sd_spat = 42, n_samples = 20, use_nn_surfaces = TRUE){
+simulate_equal_noise <- function(sd_feat_range         = seq(10, 60, 10),
+                                 sd_spat               = 42,
+                                 n_samples             = 20,
+                                 use_nn_surfaces       = TRUE,
+                                 averaged_surfaces_dir = NULL,
+                                 work_dir              = getwd()) {
   par_grid <- expand.grid(sd_feat1 = sd_feat_range, sd_feat2 = sd_feat_range, sd_spat = sd_spat)
-  par_grid <- par_grid[par_grid$sd_feat1==par_grid$sd_feat2,]
+  par_grid <- par_grid[par_grid$sd_feat1 == par_grid$sd_feat2, ]
   res <- simulate_surfaces(par_grid,
-                           n_samples = n_samples,
-                           skip_motor_noise = TRUE,
-                           use_nn_surfaces = use_nn_surfaces)
+                           n_samples             = n_samples,
+                           skip_motor_noise      = TRUE,
+                           use_nn_surfaces       = use_nn_surfaces,
+                           averaged_surfaces_dir = averaged_surfaces_dir,
+                           work_dir              = work_dir)
   setDT(res)
-  res[,sd_feat_ratio:=sd_feat1/sd_feat2]
-  res[,lower_item_noise:=sd_feat1]
-  res[,higher_item_noise:=sd_feat2]
-  res[sd_feat1<=sd_feat2, bias_type:='lower_noise_bias']
-  res[sd_feat1>sd_feat2, bias_type:='higher_noise_bias']
-  
+  res[, sd_feat_ratio   := sd_feat1 / sd_feat2]
+  res[, lower_item_noise  := sd_feat1]
+  res[, higher_item_noise := sd_feat2]
+  res[sd_feat1 <= sd_feat2, bias_type := "lower_noise_bias"]
+  res[sd_feat1 >  sd_feat2, bias_type := "higher_noise_bias"]
   res
 }
