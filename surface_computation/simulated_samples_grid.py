@@ -1349,7 +1349,8 @@ def determine_run_dimensions(args) -> Tuple[int, int]:
     """Determine the number of simulations and samples per simulation for this run."""
     if args.test_mode:
         return 100, 50
-    return args.n_simulations, config.n_samples
+    n_samples = args.n_samples if args.n_samples is not None else config.n_samples
+    return args.n_simulations, n_samples
 
 
 def print_runtime_configuration(args, n_simulations: int, n_samples: int, output_dir: Path) -> None:
@@ -1416,6 +1417,8 @@ def parse_arguments():
                         help='Base directory for outputs (relative paths are placed here)')
     parser.add_argument('--n-simulations', type=int, default=10000,
                         help='Number of simulations per surface (default: 10000)')
+    parser.add_argument('--n-samples', type=int, default=None,
+                        help='Samples per simulation (default: config value = 100)')
 
     args = parser.parse_args()
     active_n_simulations, active_n_samples = determine_run_dimensions(args)
