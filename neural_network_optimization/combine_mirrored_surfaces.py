@@ -139,7 +139,7 @@ def create_averaged_surface(original_file: Path, mirror_file: Optional[Path] = N
         mu1_comp2_surface=averaged_mu1_comp2,
         mu2_comp1_surface=averaged_mu2,
         mu2_comp2_surface=averaged_mu2,  # Same as comp1 for mu2
-        n_surfaces_averaged=surfaces_count,
+        n_sample_files_used=surfaces_count,
         averaged_from_params=params_used
     )
 
@@ -184,7 +184,7 @@ def save_averaged_surface(averaged_surface: AveragedSurface, sf1: float, sf2: fl
     with open(output_file, 'wb') as f:
         pickle.dump(averaged_data, f)
     
-    print(f"Saved: {filename} (averaged from {averaged_surface.n_surfaces_averaged} surfaces)")
+    print(f"Saved: {filename} (averaged from {averaged_surface.n_sample_files_used} surfaces)")
 
 
 def combine_all_surfaces(input_folder: str = None, output_folder: str = None) -> None:
@@ -273,7 +273,7 @@ def verify_averaged_surfaces(output_folder: str = "combined_mirrored_surfaces_10
             
             print(f"\nFile {i+1}: {file.name}")
             print(f"  Parameters: sf1={params['sd_feat1']}, sf2={params['sd_feat2']}, sp={params['sd_spat']}")
-            print(f"  Surfaces averaged: {averaged_surface.n_surfaces_averaged}")
+            print(f"  Surfaces averaged: {averaged_surface.n_sample_files_used}")
             print(f"  Averaged from: {averaged_surface.averaged_from_params}")
             print(f"  Surface shapes: {averaged_surface.mu1_comp1_surface.shape}")
             

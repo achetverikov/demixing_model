@@ -6,8 +6,10 @@ import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
 import itertools
+import numpy as np
 from flax.training import train_state
 import inspect, pickle
 from shared.surface_folder_parsing import load_surface
@@ -386,12 +388,6 @@ def load_variables(filename):
     frame.f_globals.update(var_dict)
 
 
-import jax.numpy as jnp
-import numpy as np
-from typing import Tuple, List, Dict
-from dataclasses import dataclass
-
-
 @dataclass
 class Surface:
     """
@@ -476,19 +472,40 @@ class Surface:
 @dataclass
 class AveragedSurface(Surface):
     """
-    Subclass of Surface for averaged mirrored surfaces.
-    Contains higher-quality surfaces created by averaging log-likelihoods.
+    Subclass of Surface for averaged surfaces created from samples.
+    Contains higher-quality surfaces created using 2D normal weighted KDE.
     """
-    
-    # Additional metadata for averaged surfaces
-    n_surfaces_averaged: int = 0
+
+    n_sample_files_used: int = 0
     averaged_from_params: List[Tuple[float, float, float]] = None
-    
+    kde_parameters: Dict = None
+
     def __post_init__(self):
-        """Initialize averaged_from_params if not provided."""
         if self.averaged_from_params is None:
             self.averaged_from_params = []
+        if self.kde_parameters is None:
+            self.kde_parameters = {}
         super().__post_init__()
+
+
+class SurfaceUnpickler(pickle.Unpickler):
+    """Remaps legacy AveragedSurface module paths to shared.utils.
+
+    Pickle files produced before the class was centralised store the class as
+    ``__main__.AveragedSurface`` or under the neural_network_optimization
+    sub-module path. Both are redirected to shared.utils.AveragedSurface.
+    """
+    _LEGACY_MODULES = {
+        '__main__',
+        'neural_network_optimization.create_averaged_surfaces_from_samples',
+        'create_averaged_surfaces_from_samples',
+    }
+
+    def find_class(self, module, name):
+        if name == 'AveragedSurface' and module in self._LEGACY_MODULES:
+            return AveragedSurface
+        return super().find_class(module, name)
+
 
 def compute_single_bias_curve(log_surfaces: jnp.ndarray, target_feat_indices: jnp.ndarray, mu1_bias_grid: jnp.ndarray) -> jnp.ndarray:
     """
@@ -819,5 +836,3 @@ def filter_data_for_fitting(data, feat_diff_col=None, bias_col=None, verbose=Tru
     return clean_data
 
 
-if __name__=='__main__':
-    plot_model_preds('checkpoints_probabilistic_full/model_epoch_0250.pkl')

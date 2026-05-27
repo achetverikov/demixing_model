@@ -47,10 +47,10 @@ class Config:
 
     @property
     def data_range(self):
-        """Return the configured data range bounds."""
-        return (self.data_range_low, self.data_range_high)
-    
-    @property 
+        """Return the configured parameter range bounds."""
+        return (self.param_range_low, self.param_range_high)
+
+    @property
     def feat_diff_grid_size(self) -> int:
         """Number of feature difference grid points."""
         return (self.feat_diff_range[1] - self.feat_diff_range[0]) // self.feat_diff_step + 1

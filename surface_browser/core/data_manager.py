@@ -19,30 +19,7 @@ parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-# Import Surface classes to make them available for unpickling
-from shared.utils import Surface
-
-# Import AveragedSurface from the correct path
-try:
-    sys.path.insert(0, parent_dir)
-    from create_averaged_surfaces_from_samples import AveragedSurface
-    # Make it available globally for pickle unpickling
-    globals()['AveragedSurface'] = AveragedSurface
-    # Also add to sys.modules to handle different import paths
-    import sys
-    if 'create_averaged_surfaces_from_samples' in sys.modules:
-        sys.modules['__main__'].AveragedSurface = AveragedSurface
-except ImportError as e:
-    # Create a dummy AveragedSurface class if import fails
-    class AveragedSurface(Surface):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.n_sample_files_used = kwargs.get('n_sample_files_used', 0)
-            self.averaged_from_params = kwargs.get('averaged_from_params', [])
-            self.kde_parameters = kwargs.get('kde_parameters', {})
-    
-    globals()['AveragedSurface'] = AveragedSurface
-    print(f"Warning: Could not import AveragedSurface, using fallback class. Error: {e}")
+from shared.utils import Surface, AveragedSurface, SurfaceUnpickler
 
 
 class SurfaceDataManager:
@@ -139,15 +116,8 @@ class SurfaceDataManager:
             return self._surface_cache[file_path]
 
         try:
-            # Custom unpickler to handle AveragedSurface import issues
-            class CustomUnpickler(pickle.Unpickler):
-                def find_class(self, module, name):
-                    if name == 'AveragedSurface':
-                        return AveragedSurface
-                    return super().find_class(module, name)
-            
             with open(surface_row['file'], 'rb') as f:
-                data = CustomUnpickler(f).load()
+                data = SurfaceUnpickler(f).load()
 
             # Extract the Surface object from the checkpoint data
             if isinstance(data, dict) and 'surface' in data:

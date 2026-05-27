@@ -25,7 +25,7 @@ from typing import Dict, Tuple, List, Optional
 import re
 import gzip
 from dataclasses import dataclass
-from shared.utils import Surface, resolve_input_path, resolve_results_path, get_git_commit
+from shared.utils import Surface, AveragedSurface, resolve_input_path, resolve_results_path, get_git_commit
 from shared.config import Config
 from jax.scipy.stats import gaussian_kde
 from concurrent.futures import ThreadPoolExecutor
@@ -150,25 +150,6 @@ def weighted_kde_single_step_bounded(i, samples, bias_grid, feat_diff_steps, bia
         return kde.logpdf(bias_grid)
 
 
-@dataclass
-class AveragedSurface(Surface):
-    """
-    Subclass of Surface for averaged surfaces created from samples.
-    Contains higher-quality surfaces created using 2D normal weighted KDE.
-    """
-    
-    # Additional metadata for averaged surfaces
-    n_sample_files_used: int = 0
-    averaged_from_params: List[Tuple[float, float, float]] = None
-    kde_parameters: Dict = None
-    
-    def __post_init__(self):
-        """Initialize metadata if not provided."""
-        if self.averaged_from_params is None:
-            self.averaged_from_params = []
-        if self.kde_parameters is None:
-            self.kde_parameters = {}
-        super().__post_init__()
 
 def find_sample_file(folder: Path, sf1: float, sf2: float, sp: float) -> Optional[Path]:
     """Find sample file matching the given parameters.
