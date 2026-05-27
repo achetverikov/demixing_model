@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# Verify that standard and pipeline approaches produce averaged surfaces that:
-#   1. Have the correct shape (181 mu1_bias points × 90 feat_diff points)
-#   2. Contain finite log-density values (no NaN / Inf)
-#   3. For off-diagonal pairs (sf1 != sf2) where both paths combine canonical+mirror,
-#      mu1 log-density surfaces agree within atol=0.5.
+# Verify that standard and pipeline approaches produce statistically equivalent
+# averaged surfaces when given the same random seed.
 #
-# Note: exact numerical agreement is NOT expected.  The two paths use different RNG
-# sequences (standard runs parameters in a flat list; pipeline groups mirror pairs and
-# runs two legs per group), so even with the same base seed the actual samples drawn
-# differ.  Diagonal surfaces additionally differ in sample count (standard uses 1 run,
-# pipeline uses 2).  The mu2 spatial KDE is also too sensitive at its extreme grid
-# points (±498) with only 50 samples to be compared tightly.
+# Both approaches use parameter-hash-based seeding (see create_param_identifier +
+# jax.random.fold_in in simulated_samples_grid.py), so the same (sf1,sf2,sp) draws
+# IDENTICAL float32 samples in both modes.  The only source of numerical difference
+# is that the standard path stores samples on disk as float16 (~0.18° quantisation
+# for values near ±180°) before the KDE step.  This introduces log-density errors
+# up to ~0.1 nats in the mu1 surfaces; the comparison below checks max_diff ≤ 0.15.
+#
+# Only off-diagonal pairs are tested: both paths combine two simulations
+# (canonical + mirror), so sample counts are equal.  Diagonal pairs differ in
+# structure (standard: 1 file, pipeline: 2 runs) and are out of scope here.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,7 +26,7 @@ PARAM_DIR="$ROOT/tests/param_list_compare"
 rm -rf "$PARAM_DIR"
 mkdir -p "$PARAM_DIR"
 
-# One off-diagonal pair (canonical + mirror) — the case where both paths are comparable.
+# One off-diagonal pair: canonical (10,20) + mirror (20,10).
 for combo in \
   "samples_sf1_10.0_sf2_20.0_sp_10.0.csv" \
   "samples_sf1_20.0_sf2_10.0_sp_10.0.csv"; do
@@ -94,19 +95,15 @@ if std_names != pipe_names:
 
 MU1_FIELDS   = ["mu1_comp1_surface", "mu1_comp2_surface"]
 OTHER_FIELDS = ["mu2_comp1_surface", "mu2_comp2_surface"]
-# mu1 log-densities are well-constrained; mu2 at extreme grid points can diverge
-# wildly with few samples, so we only check finite-ness for mu2.
-MU1_ATOL = 0.5
+# Tolerance reflects float16 quantisation of stored samples (max ~0.1 log-density error).
+MU1_ATOL = 0.15
 
 all_ok = True
 for fname in sorted(std_names):
     with open(std_dir / fname, "rb") as f:
-        std_obj  = pickle.load(f)
+        std_surf  = pickle.load(f)["surface"]
     with open(pipe_dir / fname, "rb") as f:
-        pipe_obj = pickle.load(f)
-
-    std_surf  = std_obj["surface"]
-    pipe_surf = pipe_obj["surface"]
+        pipe_surf = pickle.load(f)["surface"]
 
     # 1. Shape check — mu1: (181, 90), mu2: (167, 90)
     expected = {f: (181, 90) for f in MU1_FIELDS}
@@ -124,7 +121,7 @@ for fname in sorted(std_names):
         else:
             print(f"  OK    {fname}/{field}: shape {a.shape}")
 
-    # 2. Finite-ness check (both paths)
+    # 2. Finite-ness check
     for tag, surf in [("std", std_surf), ("pipe", pipe_surf)]:
         for field in MU1_FIELDS + OTHER_FIELDS:
             arr = np.asarray(getattr(surf, field), dtype=np.float32)
@@ -133,7 +130,7 @@ for fname in sorted(std_names):
                 print(f"  FAIL  {fname}/{field} [{tag}]: {n_bad} non-finite values")
                 all_ok = False
 
-    # 3. mu1 value-agreement check
+    # 3. mu1 value-agreement: should match within float16 quantisation noise
     for field in MU1_FIELDS:
         a = np.asarray(getattr(std_surf,  field), dtype=np.float32)
         b = np.asarray(getattr(pipe_surf, field), dtype=np.float32)
