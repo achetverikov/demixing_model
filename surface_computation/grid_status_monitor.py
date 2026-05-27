@@ -364,7 +364,7 @@ def main() -> None:
                         help='Continuous monitoring mode')
     parser.add_argument('--refresh', type=int, default=60,
                         help='Refresh interval in seconds (default: 60)')
-    parser.add_argument('--details', action='store_true',
+    parser.add_argument('--details', '--detailed', action='store_true',
                         help='Show per-chunk details')
     parser.add_argument('--export', action='store_true',
                         help='Export status to a JSON file and exit')
