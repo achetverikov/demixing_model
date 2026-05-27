@@ -199,6 +199,52 @@ for fname in sorted(std_names):
         plt.close()
         print(f"Saved: {out}")
 
+    # ── expected-bias plot: E[bias] vs feat_diff for all mu1 fields ──────
+    fig, axes = plt.subplots(len(MU1_FIELDS), 1, figsize=(10, 4 * len(MU1_FIELDS)), squeeze=False)
+    fig.suptitle(f"{stem}\nExpected mu1 bias vs feat_diff")
+
+    def expected_bias(surface, bias_grid):
+        """Circular mean of bias for each feat_diff column.
+        Uses atan2(E[sin], E[cos]) to handle the ±180° wrap-around correctly."""
+        log_p = surface.astype(np.float64)
+        log_p -= log_p.max(axis=0, keepdims=True)   # numerical stability
+        p = np.exp(log_p)
+        p /= p.sum(axis=0, keepdims=True)
+        rad = np.deg2rad(bias_grid[:, None])
+        mean_sin = (np.sin(rad) * p).sum(axis=0)
+        mean_cos = (np.cos(rad) * p).sum(axis=0)
+        return np.rad2deg(np.arctan2(mean_sin, mean_cos))  # (n_feat_diff,)
+
+    for ax, field in zip(axes[:, 0], MU1_FIELDS):
+        a = np.asarray(getattr(std_surf,  field), dtype=np.float32)
+        b = np.asarray(getattr(pipe_surf, field), dtype=np.float32)
+        fd_grid   = np.asarray(std_surf.feat_diff_grid)
+        bias_grid = np.asarray(std_surf.mu1_bias_grid)
+
+        ea = expected_bias(a, bias_grid)
+        eb = expected_bias(b, bias_grid)
+
+        ax.plot(fd_grid, ea, label="standard (float16→KDE)", lw=2)
+        ax.plot(fd_grid, eb, label="pipeline (float32→KDE)", lw=1.5, ls="--")
+        ax.set_title(field)
+        ax.set_xlabel("feat_diff (°)")
+        ax.set_ylabel("E[mu1_bias] (°)")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        ax2 = ax.twinx()
+        ax2.plot(fd_grid, eb - ea, color="gray", lw=1, alpha=0.6, label="difference")
+        ax2.axhline(0, color="gray", lw=0.5, ls=":")
+        ax2.set_ylabel("Δ E[bias] (°)", color="gray")
+        ax2.tick_params(axis="y", colors="gray")
+        ax2.legend(loc="upper right")
+
+    plt.tight_layout()
+    out = plot_dir / f"{stem}_expected_bias.png"
+    plt.savefig(out, dpi=120)
+    plt.close()
+    print(f"Saved: {out}")
+
 print(f"Plots saved to: {plot_dir}")
 
 sys.exit(0 if all_ok else 1)
