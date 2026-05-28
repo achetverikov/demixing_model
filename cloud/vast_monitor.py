@@ -146,7 +146,7 @@ def search_offers(gpu_name: str, disk_gb: int) -> list[dict]:
     """Search for on-demand offers for a given GPU (internal name, e.g. RTX_4090)."""
     gpu_search = gpu_name.replace('_', ' ')
     query = (f'gpu_name="{gpu_search}" num_gpus=1 '
-             f'disk_space>={disk_gb} reliability>0.8')
+             f'disk_space>={disk_gb} reliability>0.8 cuda_vers>=13.0')
     data = _run_vastai('search', 'offers', '--raw', '--type', 'on-demand', query)
     if isinstance(data, dict):
         return data.get('offers', [])
@@ -727,7 +727,7 @@ def main() -> int:
                     help='Samples per surface (default: 20)')
     ap.add_argument('--image',
                     default=os.environ.get('VAST_IMAGE',
-                                           'andreychetverikov/demixing-vast:latest'),
+                                           'andreychetverikov/demixing-vast-nv:latest'),
                     help='Docker image for workers')
     ap.add_argument('--disk', type=int, default=60,
                     help='Disk GB per instance (default: 60)')
