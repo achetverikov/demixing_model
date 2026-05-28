@@ -129,8 +129,8 @@ def prepare_mirror_aware_data(surfaces_list: List[Dict]) -> Tuple[jnp.ndarray, j
             # target = entropy_smooth_columns_with_mask(target_surface, sigma=2)
             targets.append(target_surface)
     
-    inputs = jnp.array(inputs)
-    targets = jnp.stack(targets, axis=0)
+    inputs = np.array(inputs)
+    targets = np.stack([np.asarray(t) for t in targets], axis=0)
     
     print(f"Data preparation complete. Inputs: {inputs.shape}, Targets: {targets.shape}")
     print(f"Used mu1_comp1_surface for {comp1_count} cases (sf1 <= sf2)")
@@ -231,6 +231,8 @@ def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_
     resolved_surfaces_folder = resolve_input_path(surfaces_folder, results_dir)
     resolved_save_dir = resolve_results_path(save_dir, results_dir)
 
+    # param_low extends one half-step below param_range_low (e.g. 5 when step=10)
+    # so L2 grid surfaces (sp=5, sf=5, etc.) are included automatically.
     surfaces_list = load_averaged_surfaces(
         folder=str(resolved_surfaces_folder),
         param_low=config.param_range_low - config.param_step // 2,
@@ -307,25 +309,24 @@ def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_
         perm = all_perms[epoch]
         batched_indices = perm[:n_batches * batch_size].reshape(n_batches, batch_size)
         
-        # Training metrics
-        total_loss = 0.0
-        total_loss_components = {'mse': 0.0, 'kl': 0.0, 'expectation': 0.0, 'smoothness': 0.0, 'total': 0.0}
-        
+        # Training metrics — accumulated as JAX arrays to avoid per-step GPU→CPU sync
+        acc_loss = jnp.zeros(())
+        acc_components = {'mse': jnp.zeros(()), 'kl': jnp.zeros(()), 'expectation': jnp.zeros(()), 'smoothness': jnp.zeros(()), 'total': jnp.zeros(())}
+
         # Training loop
         for batch_idx in range(n_batches):
             batch_inputs = inputs[batched_indices[batch_idx]]
             batch_targets = targets[batched_indices[batch_idx]]
-            
+
             state, loss, loss_components = mirror_aware_train_step(state, batch_inputs, batch_targets)
-            
-            total_loss += float(loss) * batch_size
-            for key in total_loss_components:
-                total_loss_components[key] += float(loss_components[key]) * batch_size
-        
-        # Average losses
-        epoch_loss = total_loss / (n_batches * batch_size)
-        for key in total_loss_components:
-            total_loss_components[key] /= (n_batches * batch_size)
+
+            acc_loss += loss
+            for key in acc_components:
+                acc_components[key] += loss_components[key]
+
+        # Single float() conversion per epoch — one GPU→CPU sync
+        epoch_loss = float(acc_loss) / n_batches
+        total_loss_components = {key: float(acc_components[key]) / n_batches for key in acc_components}
         
         epoch_time = time.time() - epoch_start_time
         
