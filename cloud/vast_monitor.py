@@ -55,7 +55,10 @@ _FATAL_PATTERNS = [
     r'docker login failed',
     r'Error: GPU error',
     r'CUDA_ERROR_NO_DEVICE',
+    r'CUDA_ERROR_COMPAT_NOT_SUPPORTED_ON_DEVICE',
     r'Failed to pull image',
+    r'Jax is running on device \[CpuDevice',   # GPU init failed, fell back to CPU
+    r'Falling back to cpu',
 ]
 _FATAL_RE = re.compile('|'.join(_FATAL_PATTERNS), re.IGNORECASE)
 
