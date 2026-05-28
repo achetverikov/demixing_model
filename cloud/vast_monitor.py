@@ -130,11 +130,12 @@ def _run_vastai(*args, timeout: int = 30) -> Optional[object]:
 
 
 def get_instances() -> list[dict]:
-    data = _run_vastai('show', 'instances', '--raw')
+    data = _run_vastai('show', 'instances-v1', '--raw')
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        return list(data.values())
+        # instances-v1 returns {"instances": [...], ...}
+        return data.get('instances', list(data.values()))
     return []
 
 
