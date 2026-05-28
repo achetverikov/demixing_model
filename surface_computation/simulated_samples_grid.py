@@ -145,6 +145,32 @@ def create_surface_identifier(sd_feat1: float, sd_feat2: float, sd_spat: float) 
     return f"{canonical_sf1:.1f}|{canonical_sf2:.1f}|{sd_spat:.1f}"
 
 
+def create_pipeline_surface_ids_for_level(level: int) -> set:
+    """Return canonical averaged-surface IDs that belong to a grid level.
+
+    Pipeline mode tracks one completion per canonical averaged surface. This is
+    different from standard sample-file accounting, where diagonal runs and
+    mirrors are separate sample combinations.
+    """
+    grid_info = get_grid_level_info(level)
+    step_size = grid_info['step_size']
+    fine_start = (config.param_range_low - step_size
+                  if level == 2 else config.param_range_low)
+    param_vals = np.arange(fine_start, config.param_range_high + step_size, step_size)
+    ids = {
+        create_surface_identifier(float(sf1), float(sf2), float(sp))
+        for sf1 in param_vals
+        for sf2 in param_vals
+        for sp in param_vals
+        if sf1 <= sf2
+    }
+
+    if level == 2:
+        ids -= create_pipeline_surface_ids_for_level(1)
+
+    return ids
+
+
 def save_samples_checkpoint(output_dir: Path,
                             mu1_samples: Array,
                             mu2_samples: Array,
@@ -1296,7 +1322,8 @@ def print_grid_status(grid_level: int = None) -> None:
         print("\nNo active chunks")
 
 
-def check_grid_level_readiness(target_level: int) -> Dict:
+def check_grid_level_readiness(target_level: int,
+                               prerequisite_completion_rate: Optional[float] = None) -> Dict:
     """
     Check if the grid is ready for the target refinement level.
 
@@ -1304,6 +1331,10 @@ def check_grid_level_readiness(target_level: int) -> Dict:
     -----------
     target_level : int
         Target grid level to check readiness for
+    prerequisite_completion_rate : Optional[float]
+        Known completion percentage for the prerequisite level. Pipeline mode
+        passes Redis/object-store based completion here because local sample
+        files are intentionally absent.
 
     Returns:
     --------
@@ -1318,11 +1349,14 @@ def check_grid_level_readiness(target_level: int) -> Dict:
         }
 
     elif target_level == 2:
-        # Check if level 1 is complete.  get_grid_status() scans local sample
-        # files which don't exist in pipeline mode; accept an already-known rate
-        # via the 'level1_completion_rate' keyword, or fall back to file scan.
-        level1_status = get_grid_status(grid_level=1)
-        completion_rate = level1_status['completion_rate']
+        # Check if level 1 is complete. Standard mode can scan local sample
+        # files. Pipeline mode should pass a Redis/object-store based rate
+        # because sample files are intentionally not written there.
+        if prerequisite_completion_rate is None:
+            level1_status = get_grid_status(grid_level=1)
+            completion_rate = level1_status['completion_rate']
+        else:
+            completion_rate = prerequisite_completion_rate
         level1_complete = completion_rate >= 99.0
 
         return {
@@ -1384,15 +1418,71 @@ def run_chunked_computation(machine_id: str = "PC1", grid_level: int = 1,
         Surface computation parameters passed to compute_grid()
     """
 
+    coordination_backend = make_lock_backend(lock_backend,
+                                             lock_dir=Path(config.samples_folder))
+
+    def _pipeline_registry_name() -> Optional[str]:
+        if completion_registry:
+            return completion_registry
+        if not pipeline:
+            return None
+        if averaged_surfaces_dir:
+            return Path(averaged_surfaces_dir).name
+        folder_name = Path(config.samples_folder).name
+        return folder_name.replace('sim_samples_', 'averaged_surfaces_', 1)
+
+    def _pipeline_prerequisite_completion_rate(target_level: int) -> Optional[float]:
+        if not pipeline or target_level != 2:
+            return None
+
+        completed_keys = set()
+        registry = _pipeline_registry_name()
+        if registry:
+            try:
+                completed_keys.update(coordination_backend.completed_members(registry))
+            except Exception as e:
+                print(f"[{machine_id}] Warning: could not read completion registry for readiness: {e}")
+
+        avg_dir = (Path(averaged_surfaces_dir) if averaged_surfaces_dir else None)
+        if avg_dir is None:
+            folder_name = Path(config.samples_folder).name
+            parent = Path(config.samples_folder).parent
+            avg_dir = parent / folder_name.replace('sim_samples_', 'averaged_surfaces_', 1)
+        local_bundle_dir = (Path(bundle_dir) if bundle_dir else avg_dir.parent / (avg_dir.name + '_bundles'))
+
+        if local_bundle_dir.exists():
+            for manifest_file in local_bundle_dir.glob('surface_bundle_*.manifest.json'):
+                try:
+                    with open(manifest_file) as f:
+                        manifest = json.load(f)
+                    completed_keys.update(manifest.get('surface_ids', []))
+                except (OSError, json.JSONDecodeError):
+                    continue
+
+        if avg_dir.exists():
+            import re
+            pat = re.compile(
+                r"averaged_sf1_(?P<sf1>[\d.]+)_sf2_(?P<sf2>[\d.]+)_sp_(?P<sp>[\d.]+)\.pkl$"
+            )
+            for surface_file in avg_dir.glob('averaged_sf1_*.pkl'):
+                match = pat.match(surface_file.name)
+                if match:
+                    completed_keys.add(create_surface_identifier(
+                        float(match['sf1']), float(match['sf2']), float(match['sp'])
+                    ))
+
+        level1_ids = create_pipeline_surface_ids_for_level(1)
+        if not level1_ids:
+            return 0.0
+        return 100.0 * len(completed_keys & level1_ids) / len(level1_ids)
+
     def _make_computer(level):
-        lb = make_lock_backend(lock_backend,
-                               lock_dir=Path(config.samples_folder))
         return ChunkedGridComputer(
             machine_id, level,
             save_full_results=save_full_results, save_csv=save_csv,
             diagonal_covariance=diagonal_covariance, fix_weights=fix_weights,
             algorithm=algorithm,
-            lock_backend=lb, lock_ttl=lock_ttl,
+            lock_backend=coordination_backend, lock_ttl=lock_ttl,
             pipeline=pipeline, save_samples=save_samples,
             averaged_surfaces_dir=Path(averaged_surfaces_dir) if averaged_surfaces_dir else None,
             completion_registry=completion_registry,
@@ -1405,13 +1495,12 @@ def run_chunked_computation(machine_id: str = "PC1", grid_level: int = 1,
     # If using custom param list, skip grid level management
     if custom_param_list:
         print(f"✅ Using custom parameter list ({len(custom_param_list)} combinations)")
-        lb = make_lock_backend(lock_backend, lock_dir=Path(config.samples_folder))
         computer = ChunkedGridComputer(
             machine_id, grid_level, custom_param_list=custom_param_list,
             save_full_results=save_full_results, save_csv=save_csv,
             diagonal_covariance=diagonal_covariance, fix_weights=fix_weights,
             algorithm=algorithm,
-            lock_backend=lb, lock_ttl=lock_ttl,
+            lock_backend=coordination_backend, lock_ttl=lock_ttl,
             pipeline=pipeline, save_samples=save_samples,
             averaged_surfaces_dir=Path(averaged_surfaces_dir) if averaged_surfaces_dir else None,
             completion_registry=completion_registry,
@@ -1428,8 +1517,12 @@ def run_chunked_computation(machine_id: str = "PC1", grid_level: int = 1,
     all_results = {}
 
     while True:
-        # Check if current level is ready
-        readiness = check_grid_level_readiness(current_level)
+        # Check if current level is ready. In pipeline mode, use the
+        # Redis/object-store completion view instead of local sample files.
+        prerequisite_rate = _pipeline_prerequisite_completion_rate(current_level)
+        readiness = check_grid_level_readiness(
+            current_level, prerequisite_completion_rate=prerequisite_rate
+        )
         if not readiness['ready']:
             print(f"❌ {readiness['message']}")
             if readiness['prerequisite_level']:
