@@ -156,7 +156,7 @@ VAST_ENV=(
   -e "MAX_CHUNKS=$MAX_CHUNKS"
 )
 
-ONSTART='cd /workspace && git clone "$GIT_REPO" "$REPO_DIR" && cd "$REPO_DIR" && git checkout "$GIT_REF" && bash cloud/vast_worker.sh; vastai destroy instance $CONTAINER_ID'
+ONSTART='cd /workspace && git clone "$GIT_REPO" "$REPO_DIR" && cd "$REPO_DIR" && git checkout "$GIT_REF" && bash cloud/vast_worker.sh; echo y | vastai destroy instance $CONTAINER_ID'
 
 echo "Creating Vast smoke instance from offer $OFFER_ID"
 echo "  Image   : $VAST_IMAGE"

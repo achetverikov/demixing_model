@@ -107,7 +107,7 @@ fi
 
 GIT_REPO="${GIT_REPO:-https://github.com/achetverikov/demixing_model.git}"
 GIT_REF="${GIT_REF:-main}"
-VAST_IMAGE="${VAST_IMAGE:-andreychetverikov/demixing-vast:latest}"
+VAST_IMAGE="${VAST_IMAGE:-andreychetverikov/demixing-vast-nv:latest}"
 VAST_DISK="${VAST_DISK:-60}"  # image alone is ~4-5GB; offers with <60GB disk fail to start
 BENCHMARK_S3_PREFIX="${BENCHMARK_S3_PREFIX:-demixing/benchmarks/gpu_surface_timing}"
 BENCHMARK_SURFACE_COUNT="${BENCHMARK_SURFACE_COUNT:-20}"
@@ -138,7 +138,7 @@ VAST_ENV=(
 )
 
 _N_SAMPLES_ARGS="${BENCHMARK_N_SAMPLES//,/ }"
-ONSTART='cd /workspace && git clone "$GIT_REPO" "$REPO_DIR" && cd "$REPO_DIR" && git checkout "$GIT_REF" && mkdir -p logs && "$PYTHON_BIN" cloud/benchmark_gpu_surfaces.py --gpu-name "$BENCHMARK_GPU_NAME" --offer-id "$BENCHMARK_OFFER_ID" --price-per-hour "$BENCHMARK_PRICE_PER_HOUR" --n-simulations "$BENCHMARK_N_SIMULATIONS" --n-samples '"$_N_SAMPLES_ARGS"' --surface-count "$BENCHMARK_SURFACE_COUNT" --seed "$BENCHMARK_SEED" --upload-prefix "$BENCHMARK_S3_PREFIX" 2>&1 | tee logs/vast_benchmark.log; vastai destroy instance $CONTAINER_ID'
+ONSTART='cd /workspace && git clone "$GIT_REPO" "$REPO_DIR" && cd "$REPO_DIR" && git checkout "$GIT_REF" && mkdir -p logs && "$PYTHON_BIN" cloud/benchmark_gpu_surfaces.py --gpu-name "$BENCHMARK_GPU_NAME" --offer-id "$BENCHMARK_OFFER_ID" --price-per-hour "$BENCHMARK_PRICE_PER_HOUR" --n-simulations "$BENCHMARK_N_SIMULATIONS" --n-samples '"$_N_SAMPLES_ARGS"' --surface-count "$BENCHMARK_SURFACE_COUNT" --seed "$BENCHMARK_SEED" --upload-prefix "$BENCHMARK_S3_PREFIX" 2>&1 | tee logs/vast_benchmark.log; echo y | vastai destroy instance $CONTAINER_ID'
 
 echo "Creating Vast benchmark instance from offer $OFFER_ID"
 echo "  GPU     : $GPU_NAME"

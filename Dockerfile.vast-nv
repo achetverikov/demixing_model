@@ -1,0 +1,19 @@
+FROM ghcr.io/nvidia/jax:jax-2026-05-20
+
+WORKDIR /workspace
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_ROOT_USER_ACTION=ignore \
+    PYTHON_BIN=python3
+
+RUN pip install \
+      matplotlib==3.10.3 \
+      seaborn==0.13.2 \
+      boto3==1.34.162 \
+      redis==6.4.0 \
+      streamlit==1.47.0 \
+      plotly==6.2.0 \
+      vastai
+
+CMD ["bash", "-lc", "if [ -f cloud/vast_worker.sh ]; then bash cloud/vast_worker.sh; else sleep infinity; fi"]
