@@ -457,20 +457,35 @@ def run_loop(args: argparse.Namespace) -> None:
                 print(f"  [billing warn] {e}")
         billed = {int(k): v for k, v in state.get('_billed', {}).items()}
 
-        # Running estimate: dph * age for instances still live
-        running_est = 0.0
+        # Running estimate: dph * age for instances still live. Vast invoice
+        # charges can include live instances, so do not add billed + estimated
+        # for the same instance. Count each live instance as the larger of the
+        # invoice amount already seen and the elapsed-time estimate.
+        live_est_by_iid: dict[int, float] = {}
         for inst in instances.values():
             if str(inst['id']) not in state['spawned']:
                 continue
             start_ts = inst.get('start_date') or inst.get('start_time') or 0
             if start_ts:
                 age_h = (now.timestamp() - float(start_ts)) / 3600.0
-                running_est += float(inst.get('dph_total') or 0) * age_h
+                live_est_by_iid[int(inst['id'])] = (
+                    float(inst.get('dph_total') or 0) * age_h
+                )
 
         total_billed  = sum(billed.values())
-        total_spend   = total_billed + running_est
+        live_iids = set(live_est_by_iid)
+        live_spend = sum(
+            max(billed.get(iid, 0.0), live_est)
+            for iid, live_est in live_est_by_iid.items()
+        )
+        closed_billed = sum(
+            amount for iid, amount in billed.items()
+            if iid not in live_iids
+        )
+        total_spend = closed_billed + live_spend
+        unbilled_est = max(0.0, total_spend - total_billed)
         budget_pct    = 100 * total_spend / args.budget
-        print(f"  Budget     : ${total_billed:.2f} billed  +  ~${running_est:.2f} running"
+        print(f"  Budget     : ${total_billed:.2f} billed  +  ~${unbilled_est:.2f} unbilled"
               f"  =  ~${total_spend:.2f} / ${args.budget:.0f}"
               f"  ({budget_pct:.0f}%)")
 
