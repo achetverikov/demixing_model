@@ -39,3 +39,4 @@ __pycache__/
 /scripts/
 Rplots.pdf
 .venv*
+/logs/
