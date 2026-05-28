@@ -436,6 +436,8 @@ def run_loop(args: argparse.Namespace) -> None:
             print(f"  Throughput : no surface activity in last "
                   f"{args.throughput_window:.0f} min")
 
+        do_log_check = (poll % args.log_check_every == 0)
+
         # ── Actual spend (fetched every log_check_every polls) ───────────
         if do_log_check:
             our_ids = {int(iid) for iid in state['spawned']}
@@ -483,7 +485,6 @@ def run_loop(args: argparse.Namespace) -> None:
         print(f"\n  Instances ({len(instances)})  "
               f"[throughput = last {args.throughput_window:.0f} min]:")
         active_count = 0
-        do_log_check = (poll % args.log_check_every == 0)
 
         for iid, inst in sorted(instances.items()):
             # Vast raw JSON uses actual_status / cur_state, not 'status'
