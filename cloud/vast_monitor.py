@@ -56,9 +56,18 @@ _FATAL_PATTERNS = [
     r'Error: GPU error',
     r'CUDA_ERROR_NO_DEVICE',
     r'Failed to pull image',
-    r'permission denied',
 ]
 _FATAL_RE = re.compile('|'.join(_FATAL_PATTERNS), re.IGNORECASE)
+
+# SSH/network noise that should be ignored in log health checks
+_SSH_NOISE_RE = re.compile(
+    r'ssh.*connection.*refused|'
+    r'ssh.*timed out|'
+    r'connection closed|'
+    r'kex_exchange_identification|'
+    r'unable to connect',
+    re.IGNORECASE,
+)
 
 # Log patterns that signal active surface computation
 _ACTIVE_PATTERNS = re.compile(
@@ -522,10 +531,12 @@ def run_loop(args: argparse.Namespace) -> None:
                 # Running — check logs if it's time
                 elif status == 'running' and do_log_check:
                     logs = fetch_logs(iid, log_dir=ROOT / 'logs' / 'instance_logs')
-                    if _FATAL_RE.search(logs):
+                    # Ignore polls where vastai logs only returns SSH noise
+                    if _SSH_NOISE_RE.search(logs) and not _ACTIVE_PATTERNS.search(logs):
+                        pass  # container not yet reachable via SSH, skip check
+                    elif _FATAL_RE.search(logs):
                         kill_reason = 'fatal error in logs'
                     elif age_min > args.slowness_check:
-                        # Must have shown surface activity in recent logs
                         if not _ACTIVE_PATTERNS.search(logs):
                             kill_reason = (f'no surface activity after '
                                            f'{age_min:.0f} min runtime')

@@ -81,7 +81,7 @@ for gpu in "${GPU_IDS[@]}"; do
   log_file="logs/vast_${worker_id}.log"
   echo "Starting $worker_id on CUDA_VISIBLE_DEVICES=$gpu"
   CUDA_VISIBLE_DEVICES="$gpu" "$PYTHON_BIN" "${COMMON_ARGS[@]}" \
-    --machine-id "$worker_id" >"$log_file" 2>&1 &
+    --machine-id "$worker_id" 2>&1 | tee "$log_file" &
   pids+=("$!")
 done
 
