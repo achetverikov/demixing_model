@@ -512,10 +512,21 @@ def run_loop(args: argparse.Namespace) -> None:
 
             kill_reason: Optional[str] = None
 
+            # Snapshot prev_status before updating so we can detect transitions
+            prev_status = (state['spawned'].get(str(iid), {}).get('last_status', '')
+                           if is_ours else '')
+
             # Update last-known status so vanish messages are informative
             if is_ours:
                 state['spawned'][str(iid)]['last_status'] = status
                 state['spawned'][str(iid)]['last_age_min'] = round(age_min)
+
+            # Immediately fetch + print logs when instance first enters running state
+            if (is_ours and status == 'running'
+                    and prev_status not in ('running', '')):
+                print(f"    → {iid} transitioned {prev_status!r} → running — fetching logs")
+                fetch_logs(iid, log_dir=ROOT / 'logs' / 'instance_logs',
+                           print_tail=True)
 
             if is_ours or args.manage_all:
                 # Stuck loading / being created
@@ -530,7 +541,7 @@ def run_loop(args: argparse.Namespace) -> None:
                 elif status in ('exited', 'stopped', 'error', 'failed', 'dead'):
                     kill_reason = f'crashed (actual_status={actual_st!r})'
 
-                # Running — check logs if it's time
+                # Running — check logs every log_check_every polls
                 elif status == 'running' and do_log_check:
                     logs = fetch_logs(iid, log_dir=ROOT / 'logs' / 'instance_logs')
                     # Ignore polls where vastai logs only returns SSH noise
@@ -539,9 +550,23 @@ def run_loop(args: argparse.Namespace) -> None:
                     elif _FATAL_RE.search(logs):
                         kill_reason = 'fatal error in logs'
                     elif age_min > args.slowness_check:
-                        if not _ACTIVE_PATTERNS.search(logs):
-                            kill_reason = (f'no surface activity after '
-                                           f'{age_min:.0f} min runtime')
+                        # Use both SSH log AND S3 manifests as activity signals.
+                        # Kill only if neither source shows work; warn if they disagree
+                        # (log-active but no S3 → upload problem; S3-active but quiet
+                        # log → worker between chunks, not a kill condition).
+                        log_active = bool(_ACTIVE_PATTERNS.search(logs))
+                        s3_active  = (_sph_for(iid) or 0) > 0
+                        if not log_active and not s3_active:
+                            kill_reason = (f'no activity in log or S3 after '
+                                           f'{age_min:.0f} min')
+                        elif log_active and not s3_active:
+                            print(f"    ⚠  {iid}: log active but no S3 manifests "
+                                  f"in last {args.throughput_window:.0f} min "
+                                  f"(possible S3/Redis sync issue)")
+                        elif not log_active and s3_active:
+                            sph_val = _sph_for(iid)
+                            print(f"    ℹ  {iid}: S3={sph_val:.0f} sph but quiet log "
+                                  f"(likely between chunks)")
 
             if kill_reason:
                 fetch_logs(iid, log_dir=ROOT / 'logs' / 'instance_logs',
