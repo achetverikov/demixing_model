@@ -647,17 +647,27 @@ class ChunkedGridComputer:
         if not self.pipeline or not self.object_store or not self.completion_registry:
             return
         try:
-            completed = self.object_store.list_completed_surface_ids()
+            s3_completed = set(self.object_store.list_completed_surface_ids())
         except Exception as e:
             print(f"[{self.machine_id}] Warning: could not list object storage: {e}")
             return
-        if not completed:
+        if not s3_completed:
             return
-        for surface_id in completed:
-            self.lock_backend.mark_completed(self.completion_registry, surface_id)
+        # One SMEMBERS call to find what Redis already knows about
+        redis_completed = self.lock_backend.completed_members(self.completion_registry)
+        missing = s3_completed - redis_completed
+        if not missing:
+            print(
+                f"[{self.machine_id}] Reconciliation: Redis already has all "
+                f"{len(redis_completed)} S3 completions — skipping"
+            )
+            return
+        # Single SADD round-trip for all missing entries
+        added = self.lock_backend.mark_completed_batch(self.completion_registry, missing)
         print(
-            f"[{self.machine_id}] Reconciled {len(completed)} completed surfaces "
-            f"from object storage into {self.completion_registry}"
+            f"[{self.machine_id}] Reconciled {added} new completions into "
+            f"{self.completion_registry} (S3={len(s3_completed)}, "
+            f"Redis had {len(redis_completed)})"
         )
 
     def _group_is_complete(self, group: List[Tuple], completed_keys: set) -> bool:

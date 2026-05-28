@@ -160,6 +160,13 @@ class RedisLockBackend(LockBackend):
     def mark_completed(self, registry: str, item_id: str) -> None:
         self._r.sadd(self._completed_key(registry), item_id)
 
+    def mark_completed_batch(self, registry: str, item_ids) -> int:
+        """Add multiple completed items in a single round-trip. Returns number added."""
+        items = list(item_ids)
+        if not items:
+            return 0
+        return int(self._r.sadd(self._completed_key(registry), *items))
+
     def remove_completed(self, registry: str, item_id: str) -> None:
         self._r.srem(self._completed_key(registry), item_id)
 
