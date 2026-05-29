@@ -33,8 +33,12 @@ DATA_URL = (
     "07_Fischer_Whitney_2014b.csv"
 )
 PREPARED_CSV = REPO_ROOT / "example_data" / "fischer_whitney_prepared.csv"
-RESULTS_DIR  = "results/fischer_whitney"
-CHECKPOINT   = "pretrained/model_epoch1500_8ktrain_20samples.pkl"
+RESULTS_BASE = "results/fischer_whitney"
+
+CHECKPOINTS = [
+    ("20samples_circular",  "pretrained/model_epoch1500_10ktrain_20samples.pkl"),
+    ("100samples_circular", "pretrained/model_epoch1500_10ktrain_100samples.pkl"),
+]
 
 PYTHONPATH = ":".join([
     str(REPO_ROOT),
@@ -147,35 +151,36 @@ def prepare_data() -> Path:
 if __name__ == "__main__":
     csv_path = prepare_data()
 
-    log_path = REPO_ROOT / RESULTS_DIR / "run.log"
+    log_path = REPO_ROOT / RESULTS_BASE / "run.log"
     log_path.parent.mkdir(exist_ok=True, parents=True)
 
     with open(log_path, "w") as log:
-        announce("STEP 1 — Fit model", log)
-        run([
-            PYTHON, "model_fit_to_data/fit_model_to_data.py",
-            "--data-path",       str(csv_path),
-            "--checkpoint-path", CHECKPOINT,
-            "--output-dir",      RESULTS_DIR,
-        #    "--no-skip-motor-noise",
-            # "--include-outliers",
-            "--include-methods", "density", "expectation", "balanced_crps", "bias_weighted_crps",
-            "--circ-space",      "180",
-        ], cwd=REPO_ROOT, env=ENV, log=log)
+        for tag, ckpt in CHECKPOINTS:
+            out_dir = f"{RESULTS_BASE}_{tag}"
 
-        announce("STEP 2 — Generate plots", log)
-        run([
-            PYTHON, "model_fit_to_data/create_unified_subject_plots.py",
-            "--results-path",    f"{RESULTS_DIR}/extended_fit_results.pkl",
-            "--checkpoint-path", CHECKPOINT,
-            "--output-dir",      RESULTS_DIR,
-            "--individual-plots",
-            "--summary-plots",
-            "--csv-exports",
-            "--circ-space",      "180",
-        ], cwd=REPO_ROOT, env=ENV, log=log)
+            announce(f"STEP — Fit model [{tag}] → {out_dir}", log)
+            run([
+                PYTHON, "model_fit_to_data/fit_model_to_data.py",
+                "--data-path",       str(csv_path),
+                "--checkpoint-path", ckpt,
+                "--output-dir",      out_dir,
+                "--include-methods", "density", "expectation", "balanced_crps", "bias_weighted_crps",
+                "--circ-space",      "180",
+            ], cwd=REPO_ROOT, env=ENV, log=log)
 
-    print(f"\nDone.  Results → {RESULTS_DIR}/")
-    print(f"       Plots   → {RESULTS_DIR}/summary_plots/")
-    print(f"       CSVs    → {RESULTS_DIR}/csv_exports/")
-    print(f"       Log     → {log_path}")
+            announce(f"STEP — Generate plots [{tag}]", log)
+            run([
+                PYTHON, "model_fit_to_data/create_unified_subject_plots.py",
+                "--results-path",    f"{out_dir}/extended_fit_results.pkl",
+                "--checkpoint-path", ckpt,
+                "--output-dir",      out_dir,
+                "--individual-plots",
+                "--summary-plots",
+                "--csv-exports",
+                "--circ-space",      "180",
+            ], cwd=REPO_ROOT, env=ENV, log=log)
+
+    print(f"\nDone.")
+    for tag, _ in CHECKPOINTS:
+        print(f"  results/fischer_whitney_{tag}/  (fits, plots, CSVs)")
+    print(f"  Log: {log_path}")

@@ -9,7 +9,7 @@ Run from the repo root:
     PYTHONPATH=.:neural_network_optimization:model_fit_to_data \
         python plot_pdf_slices.py \
         --results-path results/fritsche/extended_fit_results.pkl \
-        --checkpoint-path pretrained/model_epoch1500_8ktrain_20samples.pkl \
+        --checkpoint-path pretrained/model_epoch1500_10ktrain_20samples.pkl \
         --output-dir results/fritsche \
         --circ-space 180
 """
@@ -41,7 +41,7 @@ def main():
     )
     parser.add_argument("--results-path", required=True,
                         help="Path to extended_fit_results.pkl.")
-    parser.add_argument("--checkpoint-path", default="pretrained/model_epoch1500_8ktrain_20samples.pkl",
+    parser.add_argument("--checkpoint-path", default="pretrained/model_epoch1500_10ktrain_20samples.pkl",
                         help="Path to trained NN checkpoint.")
     parser.add_argument("--output-dir", required=True,
                         help="Directory for output plots.")

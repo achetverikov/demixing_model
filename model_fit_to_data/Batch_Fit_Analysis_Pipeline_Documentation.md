@@ -46,7 +46,7 @@ Both scripts use the same underlying `GridBasedMultiConditionOptimizer` and prod
 │    Class: GridBasedMultiConditionOptimizer                       │
 │    File: grid_based_multi_condition_optimizer_jax_loops.py       │
 │                                                                  │
-│    - Loads checkpoint (default: pretrained/model_epoch1500_8ktrain_20samples.pkl) │
+│    - Loads checkpoint (default: pretrained/model_epoch1500_10ktrain_20samples.pkl) │
 │    - Uses dummy data for initial setup                           │
 └───────────────┬──────────────────────────────────────────────────┘
                 │
@@ -80,7 +80,7 @@ Both scripts use the same underlying `GridBasedMultiConditionOptimizer` and prod
 ## Default Settings (`fit_model_to_data.py`)
 
 - `--include-methods density`
-- `--checkpoint-path pretrained/model_epoch1500_8ktrain_20samples.pkl`
+- `--checkpoint-path pretrained/model_epoch1500_10ktrain_20samples.pkl`
 - `--min-trials 30`
 - Outliers excluded by default
 
@@ -103,7 +103,7 @@ Example:
 ```bash
 python model_fit_to_data/create_unified_subject_plots.py \
   --results-path <output-dir>/extended_fit_results.pkl \
-  --checkpoint-path pretrained/model_epoch1500_8ktrain_20samples.pkl \
+  --checkpoint-path pretrained/model_epoch1500_10ktrain_20samples.pkl \
   --summary-plots --csv-exports --no-individual-plots
 ```
 
