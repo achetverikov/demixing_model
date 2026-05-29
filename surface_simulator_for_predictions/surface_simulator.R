@@ -39,6 +39,7 @@ simulate_surfaces <- function(parameters,
                               skip_motor_noise      = FALSE,
                               use_nn_surfaces       = TRUE,
                               averaged_surfaces_dir = NULL,
+                              checkpoint_path       = NULL,
                               cleanup               = TRUE,
                               work_dir              = getwd()) {
 
@@ -75,7 +76,8 @@ simulate_surfaces <- function(parameters,
     shQuote(output_file_r),
     if (skip_motor_noise) "--skip-motor-noise",
     "--surface-source", if (use_nn_surfaces) "nn" else "raw",
-    if (!use_nn_surfaces) c("--averaged-surfaces-dir", shQuote(averaged_surfaces_dir))
+    if (!use_nn_surfaces) c("--averaged-surfaces-dir", shQuote(averaged_surfaces_dir)),
+    if (!is.null(checkpoint_path)) c("--checkpoint-path", shQuote(checkpoint_path))
   )
 
   full_cmd <- paste(
@@ -215,6 +217,7 @@ simulate_unequal_noise2 <- function(sd_feat_range         = seq(10, 60, 10),
                                     n_samples             = 20,
                                     use_nn_surfaces       = TRUE,
                                     averaged_surfaces_dir = NULL,
+                                    checkpoint_path       = NULL,
                                     work_dir              = getwd()) {
   par_grid <- expand.grid(sd_feat1 = sd_feat_range, sd_feat2 = sd_feat_range, sd_spat = sd_spat)
   res <- simulate_surfaces(par_grid,
@@ -222,6 +225,7 @@ simulate_unequal_noise2 <- function(sd_feat_range         = seq(10, 60, 10),
                            skip_motor_noise      = TRUE,
                            use_nn_surfaces       = use_nn_surfaces,
                            averaged_surfaces_dir = averaged_surfaces_dir,
+                           checkpoint_path       = checkpoint_path,
                            work_dir              = work_dir)
   setDT(res)
   res[, sd_feat_ratio   := sd_feat1 / sd_feat2]

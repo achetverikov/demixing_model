@@ -468,6 +468,11 @@ class GridBasedMultiConditionOptimizer:
 
     def _load_nn_model(self):
         """Load neural network model directly from checkpoint."""
+        import sys as _sys
+        _nn_opt_dir = str(Path(__file__).resolve().parents[1] / "neural_network_optimization")
+        if _nn_opt_dir not in _sys.path:
+            _sys.path.insert(0, _nn_opt_dir)
+
         print(f"Loading NN model from {self.checkpoint_path}...")
 
         try:

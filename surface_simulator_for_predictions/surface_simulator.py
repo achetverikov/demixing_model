@@ -222,7 +222,8 @@ def load_averaged_surface(sd_feat1: float, sd_feat2: float, sd_spat: float, n_sa
 
 def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: str,
                               skip_motor_noise: bool = False, use_nn_surfaces: bool = True,
-                              averaged_surfaces_dir: Optional[str] = None):
+                              averaged_surfaces_dir: Optional[str] = None,
+                              explicit_checkpoint_path: Optional[str] = None):
     """
     Read parameters from CSV/Arrow file, simulate surfaces, and save results.
 
@@ -271,8 +272,11 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
     else:
         parameters_array = jnp.array(params_df[required_cols].values, dtype=jnp.float32)
     
-    checkpoint_path = f'{CHECKPOINT_PREFIX}_{n_samples}samples/model_epoch_{CHECKPOINT_EPOCH:04d}.pkl'
-    resolved_checkpoint_path = resolve_input_path(checkpoint_path, RESULTS_DIR)
+    if explicit_checkpoint_path:
+        resolved_checkpoint_path = Path(explicit_checkpoint_path)
+    else:
+        checkpoint_path = f'{CHECKPOINT_PREFIX}_{n_samples}samples/model_epoch_{CHECKPOINT_EPOCH:04d}.pkl'
+        resolved_checkpoint_path = resolve_input_path(checkpoint_path, RESULTS_DIR)
 
     # Initialize optimizer for simulation only (no datasets needed) - but only if using NN surfaces
     if use_nn_surfaces:
@@ -393,9 +397,9 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
             'sd_spat': float(parameters_array[i, 2]),
             'sd_motor': float(parameters_array[i, 3]),
             'mu1_density_curve': density_curves[i].tolist(),  # Renamed for clarity 
-            'mu2_density_curve': mu2_density_curves[i].tolist() if mu2_density_curves is not None else None,
-            'mu1_expectation_curve': expectation_curves[i].tolist(),  # Renamed for clarity
-            'mu2_expectation_curve': mu2_expectation_curves[i].tolist() if mu2_expectation_curves is not None else None,
+            'mu2_density_curve': mu2_density_curves[i].tolist() if mu2_density_curves is not None else [float('nan')] * n_feat_points,
+            'mu1_expectation_curve': expectation_curves[i].tolist(),
+            'mu2_expectation_curve': mu2_expectation_curves[i].tolist() if mu2_expectation_curves is not None else [float('nan')] * n_feat_points,
             'sd_curve': sd_curves[i].tolist(),  # Store SD curve as list
             # Store config info in first row only to avoid duplication
             'feat_diff_grid': optimizer.feat_diff_grid.tolist() if i == 0 else None,
@@ -442,6 +446,9 @@ def main():
                        help='nn: use NN approximation of averaged surfaces (default); raw: load averaged surfaces directly from files')
     parser.add_argument('--averaged-surfaces-dir',
                        help='Path to averaged surfaces directory (required with --surface-source raw).')
+    parser.add_argument('--checkpoint-path',
+                       help='Explicit path to a model checkpoint .pkl file (overrides the path '
+                            'auto-derived from n_samples).')
 
     args = parser.parse_args()
 
@@ -461,6 +468,7 @@ def main():
         args.skip_motor_noise,
         use_nn_surfaces=args.surface_source == 'nn',
         averaged_surfaces_dir=args.averaged_surfaces_dir,
+        explicit_checkpoint_path=args.checkpoint_path,
     )
 
 
