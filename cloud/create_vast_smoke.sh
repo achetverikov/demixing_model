@@ -111,7 +111,7 @@ fi
 
 GIT_REPO="${GIT_REPO:-https://github.com/achetverikov/demixing_model.git}"
 GIT_REF="${GIT_REF:-main}"
-VAST_IMAGE="${VAST_IMAGE:-andreychetverikov/demixing-vast:latest}"
+VAST_IMAGE="${VAST_IMAGE:-andreychetverikov/demixing-vast-nv:latest}"
 VAST_DISK="${VAST_DISK:-60}"  # image alone is ~4-5GB; offers with <60GB disk fail to start
 S3_PREFIX="${VAST_SMOKE_S3_PREFIX:-demixing/vast_smoke}"
 COMPLETION_REGISTRY="${VAST_SMOKE_REGISTRY:-averaged_surfaces_vast_smoke}"

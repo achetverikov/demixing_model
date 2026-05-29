@@ -54,8 +54,8 @@ python cloud/smoke_object_store.py
 Verify the Docker image can import the cloud/GPU dependencies:
 
 ```bash
-docker run --rm andreychetverikov/demixing-vast:latest \
-  /opt/demixing-venv/bin/python -c "import boto3, redis, jax; print(jax.devices())"
+docker run --rm andreychetverikov/demixing-vast-nv:latest \
+  python3 -c "import boto3, redis, jax; print(jax.devices())"
 ```
 
 Check remote bundle/Redis progress:
@@ -118,16 +118,16 @@ demixing/benchmarks/gpu_surface_timing
 Build and push the runtime image from the repo root:
 
 ```bash
-docker build -f Dockerfile.vast -t demixing-vast:latest .
-docker tag demixing-vast:latest andreychetverikov/demixing-vast:latest
-docker push andreychetverikov/demixing-vast:latest
+docker build -f cloud/Dockerfile.vast-nv -t demixing-vast-nv:latest .
+docker tag demixing-vast-nv:latest andreychetverikov/demixing-vast-nv:latest
+docker push andreychetverikov/demixing-vast-nv:latest
 ```
 
 For a local GPU sanity check before pushing:
 
 ```bash
-docker run --rm --gpus all demixing-vast:latest \
-  /opt/demixing-venv/bin/python -c "import jax; print(jax.devices())"
+docker run --rm --gpus all demixing-vast-nv:latest \
+  python3 -c "import jax; print(jax.devices())"
 ```
 
 For a one-chunk container smoke test from the repo root:
@@ -143,8 +143,8 @@ docker run --rm --gpus all `
   -e BUNDLE_DIR=results/averaged_surfaces_docker_smoke_bundles `
   -e COMPLETION_REGISTRY=averaged_surfaces_docker_smoke `
   -e BUNDLE_OUTPUT=1 `
-  demixing-vast:latest `
-  /opt/demixing-venv/bin/python surface_computation/simulated_samples_grid.py `
+  demixing-vast-nv:latest `
+  python3 surface_computation/simulated_samples_grid.py `
     --pipeline `
     --lock-backend redis `
     --averaged-surfaces-dir results/averaged_surfaces_docker_smoke `
@@ -167,8 +167,8 @@ docker run --rm `
   -e PYTHONPATH=/workspace:/workspace/neural_network_optimization:/workspace/surface_computation `
   -e S3_PREFIX=demixing/docker_smoke `
   -e COMPLETION_REGISTRY=averaged_surfaces_docker_smoke `
-  demixing-vast:latest `
-  /opt/demixing-venv/bin/python cloud/cloud_status.py --registry averaged_surfaces_docker_smoke
+  demixing-vast-nv:latest `
+  python3 cloud/cloud_status.py --registry averaged_surfaces_docker_smoke
 ```
 
 The image contains the Python/CUDA dependencies plus `git` so the Vast on-start
@@ -177,8 +177,34 @@ script can clone this public repo before launching workers.
 Use this image name in Vast:
 
 ```text
-andreychetverikov/demixing-vast:latest
+andreychetverikov/demixing-vast-nv:latest
 ```
+
+## Cost And Performance
+
+Vast.ai pricing and availability change over time, so treat the numbers below
+as a dated operating snapshot rather than fixed hardware constants. The plots
+were generated on 2026-05-29 from benchmark runs, saved monitor history, Vast
+price metadata, and S3 bundle manifests from the large-scale 20-sample surface
+run.
+
+The benchmark plot compares controlled runs across GPU types and sample counts.
+It is useful for checking broad hardware scaling, but it does not include all
+startup, scheduling, or host-specific variation from a full multi-machine run.
+
+![Vast GPU benchmark results](vast_cost_performance/vast_doc_benchmark_gpu_samples.png)
+
+The production-run plot uses actual completed surface batches from S3 for the
+large 20-sample run. Each point is a machine-price observation: higher is faster,
+farther right is more expensive. Larger points are based on more completed
+surfaces, and darker points are more precise because that machine worked longer.
+
+![Actual Vast throughput vs hourly price](vast_cost_performance/vast_doc_actual_sph_vs_dph.png)
+
+In this run, cheaper RTX 3090 instances often gave the best cost/performance.
+Fast cards were still useful for throughput, but expensive or slow-host 4090/A100
+instances could exceed the target budget once real surface throughput was used
+instead of benchmark expectations.
 
 ## CLI Launch
 
@@ -188,6 +214,65 @@ Install and configure the Vast CLI locally:
 python -m pip install vastai
 vastai set api-key <your-vast-api-key>
 ```
+
+## Multi-Machine Monitor
+
+For real multi-machine surface simulation runs, use `cloud/vast_monitor.py` as
+the main entry point. It keeps a target number of Vast instances running, scans
+the market for suitable GPUs, launches workers with the NV Docker image, watches
+container logs and S3 bundle manifests for progress, and destroys instances that
+are stuck, crashed, or inactive. It writes monitor state to
+`logs/vast_monitor_state.json` and fetched instance logs under
+`logs/instance_logs/`.
+
+The monitor loads `.env.docker` first and then `.env`, so keep the Redis, S3,
+Vast API, and optional Docker credentials there. At minimum, configure the Redis
+and S3 variables above plus `VAST_API_KEY` or `VASTAPIKEY`. Set `GIT_REPO` and
+`GIT_REF` if the workers should clone something other than `main` from the
+default repository.
+
+Start with a dry run to see which offers would be selected:
+
+```bash
+../.venv/bin/python cloud/vast_monitor.py \
+  --registry averaged_surfaces_vast \
+  --s3-prefix demixing/averaged_surfaces_vast \
+  --n-simulations 10000 \
+  --n-samples 100 \
+  --budget 30 \
+  --max-concurrent 10 \
+  --dry-run
+```
+
+Then remove `--dry-run` to let it create and manage instances:
+
+```bash
+../.venv/bin/python cloud/vast_monitor.py \
+  --registry averaged_surfaces_vast \
+  --s3-prefix demixing/averaged_surfaces_vast \
+  --n-simulations 10000 \
+  --n-samples 100 \
+  --budget 30 \
+  --max-concurrent 10
+```
+
+Useful controls:
+
+- `--budget`: maximum estimated full-pipeline cost per selected offer.
+- `--max-concurrent`: target number of active Vast instances.
+- `--image`: worker image; defaults to `andreychetverikov/demixing-vast-nv:latest`.
+- `--disk`: disk size in GB for each instance; defaults to 60.
+- `--poll-interval`: seconds between market/status checks; defaults to 60.
+- `--loading-timeout` and `--slowness-check`: when to recycle unhealthy workers.
+- `--manage-all`: apply health-kill logic to all visible Vast instances, not only
+  instances spawned by this monitor state file.
+
+Stopping the monitor with Ctrl+C stops the local monitoring loop; running Vast
+instances continue unless they finish, fail, or are destroyed separately. While
+it runs, use `cloud/cloud_status.py` to independently check Redis and object
+storage progress.
+
+## Manual One-Off Launch
 
 Find offers, then choose one offer ID:
 
@@ -215,13 +300,6 @@ If an already-running instance does not have the key attached:
 vastai attach ssh <instance-id> ~/.ssh/vast_demixing_ed25519.pub
 ```
 
-From PowerShell, launch a smoke instance using credentials from `.env` or
-`.env.docker`:
-
-```powershell
-.\cloud\create_vast_smoke.ps1 -OfferId <offer-id>
-```
-
 From Linux, WSL, or this dev container:
 
 ```bash
@@ -237,7 +315,7 @@ Create the instance from an offer ID:
 
 ```bash
 vastai create instance <offer-id> \
-  --image andreychetverikov/demixing-vast:latest \
+  --image andreychetverikov/demixing-vast-nv:latest \
   --disk 40 \
   --ssh \
   --direct \

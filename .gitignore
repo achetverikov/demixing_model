@@ -40,3 +40,8 @@ __pycache__/
 Rplots.pdf
 .venv*
 /logs/
+# Vast README cost/performance documentation artifacts
+!cloud/vast_cost_performance/
+!cloud/vast_cost_performance/*.png
+!cloud/vast_cost_performance/*.csv
+
