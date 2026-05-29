@@ -71,6 +71,24 @@ def smoothness_regularization(log_density):
     return jnp.mean(grad_mu1 ** 2) + jnp.mean(grad_feat ** 2)
 
 
+def surface_gradient_matching_loss(pred_log_density, target_log_density):
+    """Match finite-difference gradients within each surface (mu1_bias × feat_diff axes).
+
+    Penalises spurious local gradients (noise) in the predicted surface that are
+    absent from the smooth KDE target.
+
+    Args:
+        pred_log_density:   (batch, mu1_bias, feat_diff)
+        target_log_density: (batch, mu1_bias, feat_diff)
+    """
+    pred_g1 = jnp.diff(pred_log_density, axis=1)
+    tgt_g1  = jnp.diff(target_log_density, axis=1)
+    pred_g2 = jnp.diff(pred_log_density, axis=2)
+    tgt_g2  = jnp.diff(target_log_density, axis=2)
+    return (jnp.mean((pred_g1 - tgt_g1) ** 2) +
+            jnp.mean((pred_g2 - tgt_g2) ** 2))
+
+
 def combined_probabilistic_loss(pred_log_probs, target_log_probs,
                                 kl_weight=0.4, expectation_weight=0.3,
                                 mse_weight=0.2, smooth_weight=0.1):

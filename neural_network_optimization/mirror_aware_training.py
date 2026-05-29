@@ -26,55 +26,104 @@ from shared.utils import save_checkpoint, cleanup_old_checkpoints, save_training
 # from shared.surface_functions import entropy_smooth_columns_with_mask
 from shared.utils import AveragedSurface
 
-def load_averaged_surfaces(folder: str = "combined_mirrored_surfaces_10k", 
-                          param_low: float = None, param_high: float = None) -> List[Dict]:
-    """
-    Load averaged mirrored surfaces from combined folder.
-    
+def _is_valid_surface(data: Dict, filename: str) -> bool:
+    """Return True if data has the expected averaged-surface structure."""
+    if 'surface' not in data or 'parameters' not in data:
+        print(f"Warning: Invalid data structure in {filename}")
+        return False
+    if not hasattr(data['surface'], 'mu1_comp1_surface'):
+        print(f"Warning: Invalid surface structure in {filename}")
+        return False
+    return True
+
+
+def _in_param_range(sf1: float, sf2: float, sp: float,
+                    param_low: float, param_high: float) -> bool:
+    return all((param_low - 1e-2) <= v <= (param_high + 1e-2) for v in (sf1, sf2, sp))
+
+
+def _load_from_bundles(folder_path: Path, param_low: float, param_high: float) -> List[Dict]:
+    """Load averaged surfaces from surface_bundle_*.pkl.gz files."""
+    import gzip as _gzip
+    pattern = re.compile(r"averaged_sf1_([\d.]+)_sf2_([\d.]+)_sp_([\d.]+)\.pkl")
+    surfaces_list = []
+    bundle_paths = sorted(folder_path.glob("surface_bundle_*.pkl.gz"))
+    for bundle_path in bundle_paths:
+        try:
+            with _gzip.open(bundle_path, "rb") as f:
+                bundle = pickle.load(f)
+            if not isinstance(bundle, dict) or "surfaces" not in bundle:
+                print(f"Warning: unexpected bundle format in {bundle_path.name}")
+                continue
+            for filename, raw_bytes in bundle["surfaces"].items():
+                match = pattern.match(filename)
+                if not match:
+                    continue
+                sf1, sf2, sp = map(float, match.groups())
+                if not _in_param_range(sf1, sf2, sp, param_low, param_high):
+                    continue
+                try:
+                    data = pickle.loads(raw_bytes)
+                    if _is_valid_surface(data, filename):
+                        surfaces_list.append(data)
+                except Exception as e:
+                    print(f"Error deserializing {filename} from {bundle_path.name}: {e}")
+        except Exception as e:
+            print(f"Error loading bundle {bundle_path.name}: {e}")
+    return surfaces_list
+
+
+def _load_from_files(folder_path: Path, param_low: float, param_high: float) -> List[Dict]:
+    """Load averaged surfaces from individual averaged_sf1_*.pkl files."""
+    pattern = re.compile(r"averaged_sf1_([\d.]+)_sf2_([\d.]+)_sp_([\d.]+)\.pkl")
+    surfaces_list = []
+    for file in folder_path.glob("averaged_sf1_*_sf2_*_sp_*.pkl"):
+        match = pattern.match(file.name)
+        if not match:
+            continue
+        sf1, sf2, sp = map(float, match.groups())
+        if not _in_param_range(sf1, sf2, sp, param_low, param_high):
+            continue
+        try:
+            with open(file, 'rb') as f:
+                data = pickle.load(f)
+            if _is_valid_surface(data, file.name):
+                surfaces_list.append(data)
+        except Exception as e:
+            print(f"Error loading {file.name}: {e}")
+    return surfaces_list
+
+
+def load_averaged_surfaces(folder: str = "combined_mirrored_surfaces_10k",
+                           param_low: float = None, param_high: float = None) -> List[Dict]:
+    """Load averaged mirrored surfaces from a folder.
+
+    Accepts either a directory of individual ``averaged_sf1_*.pkl`` files or a
+    directory of ``surface_bundle_*.pkl.gz`` bundle files (auto-detected).
+
     Args:
-        folder: Folder containing averaged surface files
-        param_low: Lower bound for parameter filtering
-        param_high: Upper bound for parameter filtering
-        
+        folder: Folder containing averaged surface files or bundle files.
+        param_low: Lower bound for parameter filtering.
+        param_high: Upper bound for parameter filtering.
+
     Returns:
-        List of surface data dictionaries
+        List of surface data dictionaries.
     """
     if param_low is None:
         param_low = config.param_range_low
     if param_high is None:
         param_high = config.param_range_high
-    
+
     folder_path = Path(folder)
     if not folder_path.exists():
         raise FileNotFoundError(f"Averaged surfaces folder not found: {folder}")
-    
-    # Import AveragedSurface to enable pickle deserialization
 
-    pattern = re.compile(r"averaged_sf1_([\d.]+)_sf2_([\d.]+)_sp_([\d.]+)\.pkl")
-    surfaces_list = []
-    
-    for file in folder_path.glob("averaged_sf1_*_sf2_*_sp_*.pkl"):
-        match = pattern.match(file.name)
-        if match:
-            sf1, sf2, sp = map(float, match.groups())
-            if all((param_low-1e-2) <= val <= (param_high+1e-2) for val in (sf1, sf2, sp)):
-                try:
-                    with open(file, 'rb') as f:
-                        data = pickle.load(f)
-                    
-                    # Verify surface structure
-                    if 'surface' in data and 'parameters' in data:
-                        surface_obj = data['surface']
-                        if hasattr(surface_obj, 'mu1_comp1_surface'):
-                            surfaces_list.append(data)
-                        else:
-                            print(f"Warning: Invalid surface structure in {file.name}")
-                    else:
-                        print(f"Warning: Invalid data structure in {file.name}")
-                        
-                except Exception as e:
-                    print(f"Error loading {file.name}: {e}")
-    
+    if any(folder_path.glob("surface_bundle_*.pkl.gz")):
+        print(f"Loading from bundles in: {folder}")
+        surfaces_list = _load_from_bundles(folder_path, param_low, param_high)
+    else:
+        surfaces_list = _load_from_files(folder_path, param_low, param_high)
+
     print(f"Loaded {len(surfaces_list)} averaged surfaces from {folder}")
     return surfaces_list
 
@@ -140,13 +189,13 @@ def prepare_mirror_aware_data(surfaces_list: List[Dict]) -> Tuple[jnp.ndarray, j
     return inputs, targets
 
 
-def create_mirror_aware_train_state(key: jax.random.PRNGKey, 
+def create_mirror_aware_train_state(key: jax.random.PRNGKey,
                                    learning_rate: float = 1e-3,
                                    warmup_steps: int = 1000,
                                    total_steps: int = 10000,
                                    weight_decay: float = 1e-4) -> train_state.TrainState:
     """Create training state for mirror-aware model."""
-    
+
     # Initialize model
     model = MirrorAwareMu1Predictor()
     
@@ -179,23 +228,23 @@ def create_mirror_aware_train_state(key: jax.random.PRNGKey,
 
 
 @jax.jit
-def mirror_aware_train_step(state: train_state.TrainState, 
-                           batch_inputs: jnp.ndarray, 
+def mirror_aware_train_step(state: train_state.TrainState,
+                           batch_inputs: jnp.ndarray,
                            batch_targets: jnp.ndarray) -> Tuple[train_state.TrainState, float, Dict]:
     """Training step for mirror-aware model."""
-    
+
     def loss_fn(params):
         """Compute total loss and loss components for one batch."""
         # Get predictions from mirror-aware model
         preds = state.apply_fn(params, batch_inputs)
-        
+
         # The model already handles normalization, so preds are normalized log densities
         loss, loss_components = combined_probabilistic_loss(preds, batch_targets)
         return loss, (preds, loss_components)
-    
+
     (loss, (preds, loss_components)), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
     state = state.apply_gradients(grads=grads)
-    
+
     return state, loss, loss_components
 
 
@@ -268,7 +317,7 @@ def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_
         total_steps=total_steps,
         weight_decay=weight_decay
     )
-    
+
     # Pre-compile the training step to avoid slow first iteration
     # print("Pre-compiling training step...")
     # dummy_inputs = jnp.ones((batch_size, 3))

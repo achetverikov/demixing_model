@@ -1,5 +1,7 @@
 #!/usr/bin/env Rscript
 
+print('Checking for missing R packages...')
+
 cran_repo <- Sys.getenv("R_CRAN_REPO", "https://cloud.r-project.org")
 
 cran_packages <- c(

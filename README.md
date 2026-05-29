@@ -13,7 +13,7 @@ This repo implements the modeling pipeline for the Demixing Model (Chetverikov, 
 ## Requirements
 
 - Python 3 environment with the ability to install packages (virtualenv or conda recommended).
-- NVIDIA GPU with a CUDA-enabled JAX build (`jax`/`jaxlib`; see JAX and CUDA docs for instructions); CPU runs are likely possible but extremely slow.
+- NVIDIA GPU with a CUDA-enabled JAX build (`jax`/`jaxlib`; see JAX and CUDA docs for instructions); CPU runs are likely possible but _extremely_ slow.
 - Core Python packages used across the pipeline: `flax`, `optax`, `numpy`, `pandas`, `matplotlib`, `seaborn`, `pyarrow`.
 - Surface browser dependencies: `streamlit` and `plotly` (see browser requirement below).
 - Optional R interface: `arrow`, `stringr`, and `data.table` for `surface_simulator_for_predictions/surface_simulator.R`.
