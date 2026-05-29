@@ -25,6 +25,7 @@ __pycache__/
 !pretrained/*.pkl
 *.arrow
 *.json
+!.devcontainer/*.json
 *.backup
 *.gz
 *temp*

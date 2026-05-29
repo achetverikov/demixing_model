@@ -1,0 +1,90 @@
+FROM ghcr.io/nvidia/jax:jax-2026-05-20
+
+ARG R_VERSION=4.6.0
+ARG DEBIAN_FRONTEND=noninteractive
+
+WORKDIR /workspace
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_ROOT_USER_ACTION=ignore \
+    PYTHON_BIN=python3 \
+    R_HOME=/opt/R/${R_VERSION}/lib/R \
+    PATH=/opt/R/${R_VERSION}/bin:${PATH}
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3-venv \
+      cmake \
+      gfortran \
+      libblas-dev \
+      libcairo2-dev \
+      libcurl4-openssl-dev \
+      libfontconfig1-dev \
+      libfreetype6-dev \
+      libfribidi-dev \
+      libgdal-dev \
+      libgeos-dev \
+      libglpk-dev \
+      libharfbuzz-dev \
+      libicu-dev \
+      libjpeg-dev \
+      libnode-dev \
+      libpng-dev \
+      libproj-dev \
+      libprotobuf-dev \
+      libprotoc-dev \
+      libsodium-dev \
+      libssl-dev \
+      libtiff-dev \
+      libudunits2-dev \
+      libxml2-dev \
+      pandoc \
+      protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN if ! command -v locale-gen >/dev/null 2>&1; then \
+      apt-get update && apt-get install -y --no-install-recommends locales \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi \
+    && echo "en_US.UTF-8 UTF-8" > /etc/locale.gen \
+    && locale-gen
+
+ENV LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8
+
+RUN set -eux; \
+    . /etc/os-release; \
+    os_id="${ID}-${VERSION_ID}"; \
+    case "$os_id" in \
+      ubuntu-22.04) posit_os="ubuntu-2204"; ppm_os="jammy" ;; \
+      ubuntu-24.04) posit_os="ubuntu-2404"; ppm_os="noble" ;; \
+      *) echo "Unsupported base OS for this Posit R binary install: $os_id" >&2; exit 1 ;; \
+    esac; \
+    arch="$(dpkg --print-architecture)"; \
+    deb="r-${R_VERSION}_1_${arch}.deb"; \
+    curl -fsSLo "/tmp/${deb}" "https://cdn.posit.co/r/${posit_os}/pkgs/${deb}"; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends "/tmp/${deb}"; \
+    ln -sf "/opt/R/${R_VERSION}/bin/R" /usr/local/bin/R; \
+    ln -sf "/opt/R/${R_VERSION}/bin/Rscript" /usr/local/bin/Rscript; \
+    echo "options(repos = c(CRAN = 'https://packagemanager.posit.co/cran/__linux__/${ppm_os}/latest'))" \
+      > "/opt/R/${R_VERSION}/lib/R/etc/Rprofile.site"; \
+    rm -f "/tmp/${deb}"; \
+    rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m pip install \
+      matplotlib==3.10.3 \
+      seaborn==0.13.2 \
+      boto3==1.34.162 \
+      redis==6.4.0 \
+      streamlit==1.47.0 \
+      plotly==6.2.0 \
+      vastai
+
+COPY .devcontainer/install_r_packages_if_missing.R /tmp/install_r_packages_if_missing.R
+RUN set -eux; \
+    ppm_repo="$(Rscript -e "cat(getOption('repos')[['CRAN']])")"; \
+    R_CRAN_REPO="$ppm_repo" Rscript /tmp/install_r_packages_if_missing.R; \
+    rm /tmp/install_r_packages_if_missing.R
+
+CMD ["bash", "-lc", "if [ -f cloud/vast_worker.sh ]; then bash cloud/vast_worker.sh; else sleep infinity; fi"]

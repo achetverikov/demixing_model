@@ -34,6 +34,39 @@ This repo implements the modeling pipeline for the Demixing Model (Chetverikov, 
 
 ## Installation
 
+### Option A: Dev Container (recommended)
+
+The repo ships a VS Code Dev Container that provides a fully configured environment with CUDA-enabled JAX, R, and all required Python packages.
+
+**Prerequisites**
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker Engine on Linux) with the NVIDIA Container Toolkit installed and GPU access enabled.
+- VS Code with the [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) extension.
+
+**Steps**
+
+1. Clone the repo and open it in VS Code.
+2. When prompted, click **Reopen in Container** (or run **Dev Containers: Reopen in Container** from the command palette).
+3. VS Code pulls `andreychetverikov/demixing-jax-r:latest`, mounts the workspace, and runs `postCreateCommand` which:
+   - Creates `/workspaces/.venv` (inheriting global site-packages so CUDA JAX is available immediately).
+   - Installs or upgrades any missing/mismatched Python packages listed in `.devcontainer/install_python_packages_if_missing.py`.
+   - Installs R packages listed in `.devcontainer/install_r_packages_if_missing.R`.
+
+The Python interpreter is pre-configured to `/workspaces/.venv/bin/python`.
+
+**Rebuilding the Docker image**
+
+The image is built from `.devcontainer/Dockerfile.jax-r`. To rebuild and push after changing it:
+
+```bash
+docker build -f .devcontainer/Dockerfile.jax-r -t andreychetverikov/demixing-jax-r:latest .
+docker push andreychetverikov/demixing-jax-r:latest
+```
+
+---
+
+### Option B: Manual installation
+
 1) **Clone or download**  
    ```bash
    git clone https://github.com/<your-org>/demixing_model.git

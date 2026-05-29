@@ -1,0 +1,58 @@
+{
+  "name": "demixing-jax-r",
+  "image": "andreychetverikov/demixing-jax-r:latest",
+  //"mounts": [
+  //  "source=${localEnv:USERPROFILE}/docker/r-lib-4.6,target=/usr/local/lib/R/site-library,type=bind",
+  //  "source=${localEnv:USERPROFILE}/docker/r-mcp-state,target=/root/.cache,type=bind"
+  //],
+  "mounts": [
+    "source=r-lib-4.6,target=/home/vscode/R/library,type=volume",
+    "source=r-mcp-state,target=/root/.cache,type=volume",
+    "source=demixing-model-venv,target=/workspaces/.venv,type=volume",
+    "source=${localEnv:USERPROFILE}/OneDrive - University of Bergen/PycharmProjects/gmm2,target=/gmm2,type=bind",
+    "source=${localEnv:USERPROFILE}/OneDrive - University of Bergen/repulsive/,target=/repulsive,type=bind",
+    "source=claude-vscode-global-${devcontainerId},target=/home/vscode/.vscode/globalStorage/anthropic.claude-code,type=volume",
+    "source=claude-config-${devcontainerId},target=/home/vscode/.claude,type=volume",
+    "source=chatgpt-config-${devcontainerId},target=/home/vscode/.codex,type=volume"        
+  ],
+  "runArgs": ["--gpus", "all"],
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2.5.9": {
+      "username": "vscode"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code",
+        "openai.chatgpt",
+        "ms-python.python",
+        "quarto.quarto",
+        "reditorsupport.r"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/workspaces/.venv/bin/python"
+      }
+    }
+  },
+  "remoteEnv": {
+    "PYTHONPATH": "/workspaces/demixing_model",
+    "R_LIBS_USER": "/home/vscode/R/library"
+  },
+  "forwardPorts": [1455],
+
+  "portsAttributes": {
+    "1455": {
+      "label": "Codex auth callback",
+      "onAutoForward": "silent",
+      "requireLocalPort": true
+    }
+  },
+
+  "remoteUser": "vscode",
+  "postCreateCommand": "sudo mkdir -p /home/vscode/R/library && sudo chown -R vscode:vscode /home/vscode/R /workspaces/.venv /home/vscode/.vscode/globalStorage/anthropic.claude-code /home/vscode/.claude /workspaces/demixing_model && python3 .devcontainer/install_python_packages_if_missing.py && Rscript .devcontainer/install_r_packages_if_missing.R"
+  // "containerEnv": {
+  //   "OPENBLAS_NUM_THREADS": "4",
+  //   "OMP_NUM_THREADS": "4"
+  // }
+}
