@@ -30,20 +30,41 @@ PINNED_PACKAGES = (
 )
 
 
-def ensure_venv():
-    if PYTHON.exists():
-        return
-
-    print(f"Virtualenv not found at {VENV_DIR}, creating...")
-    result = subprocess.run([sys.executable, "-m", "venv", "--system-site-packages", str(VENV_DIR)])
-    if result.returncode != 0:
-        print("python3-venv not available, installing via apt...")
+def _install_venv_apt_package():
+    subprocess.check_call(["sudo", "apt-get", "update", "-qq"])
+    ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+    if subprocess.run(
+        ["sudo", "apt-get", "install", "-y", "--no-install-recommends", f"python{ver}-venv"]
+    ).returncode != 0:
         subprocess.check_call(
             ["sudo", "apt-get", "install", "-y", "--no-install-recommends", "python3-venv"]
         )
+
+
+def ensure_venv():
+    pip = VENV_DIR / "bin" / "pip"
+
+    if PYTHON.exists() and pip.exists():
+        return
+
+    if PYTHON.exists() and not pip.exists():
+        print(f"Venv at {VENV_DIR} is missing pip, recreating...", flush=True)
+        import shutil
+        shutil.rmtree(VENV_DIR)
+    else:
+        print(f"Virtualenv not found at {VENV_DIR}, creating...", flush=True)
+
+    result = subprocess.run([sys.executable, "-m", "venv", "--system-site-packages", str(VENV_DIR)])
+    if result.returncode != 0:
+        print("python3-venv not available, installing via apt...", flush=True)
+        _install_venv_apt_package()
         subprocess.check_call([sys.executable, "-m", "venv", "--system-site-packages", str(VENV_DIR)])
 
-    print(f"Created virtualenv at {VENV_DIR}")
+    if not pip.exists():
+        print("Bootstrapping pip into venv...", flush=True)
+        subprocess.check_call([str(PYTHON), "-m", "ensurepip", "--upgrade"])
+
+    print(f"Virtualenv ready at {VENV_DIR}", flush=True)
 
 
 def installed_versions(package_names):
@@ -78,11 +99,11 @@ def main():
         spec for name, spec in BUILD_TOOLS if build_versions.get(name) is None
     ]
     if missing_build_tools:
-        print("Missing Python build tools:", ", ".join(missing_build_tools))
-        print("Installing missing Python build tools...")
+        print("Missing Python build tools:", ", ".join(missing_build_tools), flush=True)
+        print("Installing missing Python build tools...", flush=True)
         pip_install(missing_build_tools)
     else:
-        print("No missing Python build tools.")
+        print("No missing Python build tools.", flush=True)
 
     package_names = [name for name, _, _ in PINNED_PACKAGES]
     versions = installed_versions(package_names)
@@ -91,14 +112,14 @@ def main():
         installed_version = versions.get(name)
         if installed_version != required_version:
             status = "missing" if installed_version is None else f"installed {installed_version}"
-            print(f"Python package needs install: {spec} ({status}, required {required_version})")
+            print(f"Python package needs install: {spec} ({status}, required {required_version})", flush=True)
             install_specs.append(spec)
 
     if install_specs:
-        print("Installing missing or mismatched Python packages:", ", ".join(install_specs))
+        print("Installing missing or mismatched Python packages:", ", ".join(install_specs), flush=True)
         pip_install(install_specs)
     else:
-        print("No missing or mismatched Python packages.")
+        print("No missing or mismatched Python packages.", flush=True)
 
 
 if __name__ == "__main__":

@@ -50,7 +50,7 @@
   },
 
   "remoteUser": "vscode",
-  "postCreateCommand": "sudo mkdir -p /home/vscode/R/library && sudo chown -R vscode:vscode /home/vscode/R /workspaces/.venv /home/vscode/.vscode/globalStorage/anthropic.claude-code /home/vscode/.claude /workspaces/demixing_model && python3 .devcontainer/install_python_packages_if_missing.py && Rscript .devcontainer/install_r_packages_if_missing.R"
+  "postCreateCommand": "sudo mkdir -p /home/vscode/R/library && sudo chown -R vscode:vscode /home/vscode/R /workspaces/.venv /home/vscode/.vscode/globalStorage/anthropic.claude-code /home/vscode/.claude /workspaces/demixing_model && python3 -u .devcontainer/install_python_packages_if_missing.py && Rscript .devcontainer/install_r_packages_if_missing.R"
   // "containerEnv": {
   //   "OPENBLAS_NUM_THREADS": "4",
   //   "OMP_NUM_THREADS": "4"
