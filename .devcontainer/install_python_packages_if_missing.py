@@ -47,23 +47,22 @@ def ensure_venv():
 
 
 def installed_versions(package_names):
-    code = "\n".join((
-        "import importlib.metadata as metadata",
-        "import json",
-        "import sys",
-        "versions = {}",
-        "for name in sys.argv[1:]:",
-        "    try:",
-        "        versions[name] = metadata.version(name)",
-        "    except metadata.PackageNotFoundError:",
-        "        versions[name] = None",
-        "print(json.dumps(versions))",
-    ))
-    output = subprocess.check_output(
-        [str(PYTHON), "-c", code, *package_names],
-        text=True,
+    pip = VENV_DIR / "bin" / "pip"
+    result = subprocess.run(
+        [str(pip), "show", *package_names],
+        capture_output=True, text=True,
     )
-    return json.loads(output)
+    versions = {name: None for name in package_names}
+    current_name = None
+    for line in result.stdout.splitlines():
+        if line.startswith("Name: "):
+            current_name = line[6:].strip()
+        elif line.startswith("Version: ") and current_name is not None:
+            for name in package_names:
+                if name.lower() == current_name.lower():
+                    versions[name] = line[9:].strip()
+            current_name = None
+    return versions
 
 
 def pip_install(specs):
