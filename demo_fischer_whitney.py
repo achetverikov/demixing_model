@@ -124,16 +124,29 @@ def prepare_data() -> Path:
     df["bias_to_distr_corr"] = np.where(df["delta"] > 0, df["be_c"], -df["be_c"])
     df["abs_td_dist"] = df["delta"].abs()
 
+    # Trial-level columns for the alt_models serial fitter (one row per trial):
+    # ori = current orientation, response = ori + be_c, shift1 = current − previous
+    # (= −delta), block/trial give presentation order. The curve columns above are
+    # unchanged, so the demixing curve-fit is unaffected.
     out = df.assign(
         expName="Fischer_Whitney_2014b",
         subject=df["obs"],
         condition="orientation",
-    )[["expName", "subject", "condition", "abs_td_dist", "bias_to_distr_corr", "is_outlier"]]
+        is_combined=False,
+        ori=df["theta"].astype(float),
+        shift1=-df["delta"].astype(float),
+        block=df["block"].astype(int),
+        trial=df["trial"].astype(int),
+    )[["expName", "subject", "condition", "is_combined", "block", "trial",
+       "ori", "shift1", "abs_td_dist", "bias_to_distr_corr", "be_c", "is_outlier"]]
 
-    # Add a "combined" pseudo-subject: pool all trials so the model can be fit
-    # to the average observer.  Excluded from summary plots by downstream code.
+    # Add a "combined" pseudo-subject: pool all trials so the demixing model can be
+    # fit to the average observer.  Flagged is_combined=True so the serial fitter
+    # (serial_common.load_sequences) drops it; downstream demixing code ignores it
+    # in summary plots.
     combined = out.copy()
     combined["subject"] = "combined"
+    combined["is_combined"] = True
     out = pd.concat([out, combined], ignore_index=True)
 
     PREPARED_CSV.parent.mkdir(exist_ok=True)
