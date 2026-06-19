@@ -142,7 +142,7 @@ def prepare_data() -> Path:
 
     # Add a "combined" pseudo-subject: pool all trials so the demixing model can be
     # fit to the average observer.  Flagged is_combined=True so the serial fitter
-    # (serial_common.load_sequences) drops it; downstream demixing code ignores it
+    # (observer_common.load_sequences) drops it; downstream demixing code ignores it
     # in summary plots.
     combined = out.copy()
     combined["subject"] = "combined"

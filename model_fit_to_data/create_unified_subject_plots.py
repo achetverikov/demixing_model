@@ -870,6 +870,10 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                     # Curve data
                     opt_bias_data = stage_bias_curves[opt][:n_subjects]
                     opt_asymm_data = stage_asymm_curves[opt][:n_subjects]
+                    if opt in stage_sd_curves and len(stage_sd_curves[opt]) > 0:
+                        opt_sd_data = stage_sd_curves[opt][:n_subjects]
+                    else:
+                        opt_sd_data = np.full((n_subjects, n_feat_points), np.nan)
 
                     opt_curve_df = pd.DataFrame({
                         'subject': np.repeat(subjects, n_feat_points),
@@ -878,6 +882,7 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                         'optimizer': opt,
                         'feat_diff': np.tile(display_feat_vals, n_subjects),
                         'mu_bias': (opt_bias_data * angle_display_scale).flatten(),
+                        'sd_deg': (opt_sd_data * angle_display_scale).flatten(),
                         'density_asymmetry': opt_asymm_data.flatten()
                     })
 
@@ -1326,7 +1331,7 @@ def export_fitted_parameters_csv(parameter_data: List[Dict], output_dir: str = '
 
 
 def export_fitted_curves_csv(curve_data: List[Dict], output_dir: str = 'model_fit_to_data_results_v2') -> None:
-    """Export fitted bias curves and density asymmetry to CSV in long format using pre-collected data."""
+    """Export fitted bias, SD, and density asymmetry curves to CSV in long format."""
 
     print("Exporting fitted curves to CSV...")
 

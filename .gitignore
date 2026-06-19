@@ -46,3 +46,6 @@ Rplots.pdf
 !cloud/vast_cost_performance/*.png
 !cloud/vast_cost_performance/*.csv
 
+pretrained/model_epoch1500_8ktrain_100samples_old.pkl
+neural_network_optimization/mirror_aware_training_v2.py
+pretrained/model_epoch1500_8ktrain_20samples_old.pkl
