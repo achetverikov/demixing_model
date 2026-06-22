@@ -659,20 +659,27 @@ def _compute_empirical_density_asymmetry_core(real_feat_diff, real_bias, feat_di
 
 
 
-def filter_data_for_fitting(data, feat_diff_col=None, bias_col=None, verbose=True):
+def filter_data_for_fitting(data, feat_diff_col=None, bias_col=None, verbose=True,
+                            min_diss=4.0, max_diss=180.0):
     """
     Filter and clean data for GMM fitting by removing invalid values and applying range constraints.
-    
+
     Handles both numpy arrays and pandas DataFrames:
     - For 2-column arrays: assumes first column is feat_diff, second is bias
     - For DataFrames: uses specified column names
-    
+
     Args:
         data: Either a 2-column numpy array or pandas DataFrame
         feat_diff_col: Column name for feature differences (required for DataFrame)
         bias_col: Column name for bias values (required for DataFrame)
         verbose: Whether to print filtering statistics
-        
+        min_diss: Dissimilarity floor in the INPUT (raw, pre-scaling) space; values
+            below it are clamped up. max_diss: dissimilarity ceiling; values above it
+            are dropped. Defaults (4, 180) preserve the legacy raw-space clamp. The
+            demixing fitter passes period/scale-aware bounds (feat_diff_range / scale)
+            so the effective clamp is the model-space grid range for every dataset —
+            see codex_audit.md report-level #3.
+
     Returns:
         Cleaned data in the same format as input
     """
@@ -737,20 +744,20 @@ def filter_data_for_fitting(data, feat_diff_col=None, bias_col=None, verbose=Tru
         original_feat_diff = clean_data[:, 0].copy()
     
     # Check feat_diff range constraints
-    feat_below_min = feat_diff_vals < 4
-    feat_above_max = feat_diff_vals > 180
+    feat_below_min = feat_diff_vals < min_diss
+    feat_above_max = feat_diff_vals > max_diss
     feat_below_count = feat_below_min.sum()
     feat_above_count = feat_above_max.sum()
-    
+
     if feat_below_count > 0 and verbose:
-        print(f"Found {feat_below_count} feat_diff values < 4 - will clamp to 4")
+        print(f"Found {feat_below_count} feat_diff values < {min_diss:g} - will clamp to {min_diss:g}")
         below_vals = feat_diff_vals[feat_below_min]
-        print(f"  Values < 4: min={below_vals.min():.2f}, examples={list(below_vals.head(3) if hasattr(below_vals, 'head') else below_vals[:3].round(2))}")
-    
+        print(f"  Values < {min_diss:g}: min={below_vals.min():.2f}, examples={list(below_vals.head(3) if hasattr(below_vals, 'head') else below_vals[:3].round(2))}")
+
     if feat_above_count > 0 and verbose:
-        print(f"Found {feat_above_count} feat_diff values > 180 - will remove")
+        print(f"Found {feat_above_count} feat_diff values > {max_diss:g} - will remove")
         above_vals = feat_diff_vals[feat_above_max]
-        print(f"  Values > 180: max={above_vals.max():.2f}, examples={list(above_vals.head(3) if hasattr(above_vals, 'head') else above_vals[:3].round(2))}")
+        print(f"  Values > {max_diss:g}: max={above_vals.max():.2f}, examples={list(above_vals.head(3) if hasattr(above_vals, 'head') else above_vals[:3].round(2))}")
         
     # Save clamping examples before filtering removes them
     clamp_examples_orig = None
@@ -768,13 +775,13 @@ def filter_data_for_fitting(data, feat_diff_col=None, bias_col=None, verbose=Tru
     
     # Apply feat_diff constraints
     if is_dataframe:
-        clean_data[feat_diff_col] = np.clip(clean_data[feat_diff_col], 4, None)  # Clamp minimum to 4
-        clean_data = clean_data[clean_data[feat_diff_col] <= 180].copy().reset_index(drop=True)  # Remove values > 180
+        clean_data[feat_diff_col] = np.clip(clean_data[feat_diff_col], min_diss, None)  # Clamp minimum
+        clean_data = clean_data[clean_data[feat_diff_col] <= max_diss].copy().reset_index(drop=True)  # Remove above max
         feat_diff_vals = clean_data[feat_diff_col]
         bias_vals = clean_data[bias_col]
     else:
-        clean_data[:, 0] = np.clip(clean_data[:, 0], 4, None)  # Clamp minimum to 4
-        clean_data = clean_data[clean_data[:, 0] <= 180]  # Remove values > 180
+        clean_data[:, 0] = np.clip(clean_data[:, 0], min_diss, None)  # Clamp minimum
+        clean_data = clean_data[clean_data[:, 0] <= max_diss]  # Remove above max
         feat_diff_vals = clean_data[:, 0]
         bias_vals = clean_data[:, 1]
     

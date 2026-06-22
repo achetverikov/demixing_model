@@ -278,10 +278,21 @@ def process_subject(
     log(f"\nProcessing {subject_id}: {len(subject_conditions)} condition(s)" +
         (f" (adding: {', '.join(methods_to_run)})" if missing_methods else ""), "bold cyan")
 
+    # Clamp dissimilarity in the input space to the MODEL-space grid range so the
+    # effective floor/ceiling is identical across datasets (the legacy raw-space
+    # 4/180 made the floor period-dependent: 8° model for 180° data, 4° for 360°).
+    # clip commutes with the positive angle scaling applied just below, so raw
+    # bounds = model bounds / scale == clamping model-space to feat_diff_range.
+    # See codex_audit.md report-level #3.
+    from shared.config import config as _cfg
+    min_diss = _cfg.feat_diff_range[0] / angle_scale_to_model
+    max_diss = _cfg.feat_diff_range[1] / angle_scale_to_model
+
     # Filter and convert each condition to a JAX array
     condition_datasets = {}
     for cond_key, cond_df in subject_conditions.items():
-        clean = filter_data_for_fitting(cond_df, feat_diff_col=x_col, bias_col=y_col, verbose=False)
+        clean = filter_data_for_fitting(cond_df, feat_diff_col=x_col, bias_col=y_col, verbose=False,
+                                        min_diss=min_diss, max_diss=max_diss)
         if len(clean) < 10:
             log(f"  Skipping {cond_key}: only {len(clean)} valid trials after filtering.", "yellow")
             continue
@@ -524,8 +535,19 @@ def run_fitting(
                 else:
                     subject_existing = {k: v for k, v in existing_results.items()
                                          if k.startswith(f"{subject_id}#")}
+                    expected_condition_keys = set(subject_conditions)
+                    existing_condition_keys = set(subject_existing)
+                    conditions_missing = bool(expected_condition_keys - existing_condition_keys)
+                    # A method is missing if it is absent from ANY of the subject's
+                    # expected condition entries — not just one sampled condition. Include
+                    # conditions that have no saved entry at all, as can happen when a
+                    # condition is added after the original fit or an incomplete save omits
+                    # it. See codex_audit.md recovery #2.
                     missing = [m for m in methods
-                               if sample is None or f'{m}_fitted_params' not in sample]
+                               if not subject_existing
+                               or conditions_missing
+                               or any(f'{m}_fitted_params' not in entry
+                                      for entry in subject_existing.values())]
                     missing_evaluations = [
                         m for m in methods
                         if sample is not None

@@ -801,7 +801,14 @@ class GridBasedMultiConditionOptimizer:
         vectorized_bias_compute = jax.vmap(compute_target_bias_curve_core, in_axes=(0, 0, 0))
         feat_indices, target_bias, weights = vectorized_bias_compute(padded_feat_diff, padded_bias_values, trial_counts)
 
-        # Vectorized density curve computation using vmap with core function directly
+        # Density curve computation over the REAL (unpadded) per-condition data.
+        # Unlike the bias core, _compute_empirical_density_asymmetry_core has no
+        # trial-count mask, so vmapping it over the rectangular padded arrays would
+        # feed the repeated last-observation pad rows into the empirical density —
+        # both as a mass clump at the last trial's coordinates and via the
+        # std/quantile/n bandwidth terms. This is a one-time precompute (not in the
+        # JIT objective), so we loop over the real condition arrays instead, exactly
+        # as the balanced-CRPS block below does. See codex_audit.md #3.
         from shared.utils import _compute_empirical_density_asymmetry_core
         feat_diff_grid = self.feat_diff_grid
 
@@ -810,8 +817,12 @@ class GridBasedMultiConditionOptimizer:
             distances, asymmetry_values = _compute_empirical_density_asymmetry_core(feat_diff_vals, bias_vals, grid, weights_sd=self.emp_density_weights_sd)
             return asymmetry_values
 
-        vectorized_density_compute = jax.vmap(density_curve_wrapper, in_axes=(0, 0, None))
-        density_curves = vectorized_density_compute(padded_feat_diff, padded_bias_values, feat_diff_grid)
+        density_curves = jnp.stack([
+            density_curve_wrapper(condition_dataframes[i][:, 0],
+                                  condition_dataframes[i][:, 1],
+                                  feat_diff_grid)
+            for i in range(len(self.condition_names))
+        ])
 
         # Store unified results
         self.unified_feat_indices = feat_indices[0]  # Same for all conditions
@@ -866,8 +877,9 @@ class GridBasedMultiConditionOptimizer:
             support_mask = (w_c > support_threshold).astype(np.float32)
             fd_weights_list.append(support_mask)
 
-            # Bias-weighted CRPS: weight each fd point by |mean_bias| so that
-            # feat_diff ranges with large observed bias contribute more to the loss.
+            # Bias-weighted CRPS: weight each fd point by the squared smoothed
+            # signed mean bias. Squaring discards the sign, so feat_diff ranges
+            # with large-magnitude observed mean bias contribute more to the loss.
             mean_bias = (gw @ bias_vals) / np.maximum(w_c, 1e-10)   # (n_feat,)
             fd_bias_weights_list.append(mean_bias ** 2 * support_mask)
 
@@ -1007,8 +1019,8 @@ class GridBasedMultiConditionOptimizer:
 
         elif fitting_method == "bias_weighted_crps":
             # Same energy-score formula as balanced_crps but fd points are weighted
-            # by |mean_bias| instead of a binary support mask, so feat_diff ranges
-            # with larger observed bias contribute more to the loss.
+            # by squared smoothed mean bias instead of a binary support mask, so
+            # feat_diff ranges with larger-magnitude observed bias contribute more.
 
             log_prob_norm = surfaces - jax.scipy.special.logsumexp(surfaces, axis=1, keepdims=True)
             prob_surfaces = jnp.exp(log_prob_norm)  # (n_unique, n_bias, n_feat)
