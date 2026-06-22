@@ -20,7 +20,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = []
+dev = [
+  "pytest",
+  "sympy>=1.12",   # symbolic targets for bayesian_biases_zoo/tests/test_sympy_predictions.py
+  "mpmath",        # exact Bessel evaluation in the causal-inference symbolic chain
+]
 cuda = [
   "jax[cuda13-local]==0.10.1",
 ]
