@@ -177,7 +177,7 @@ if __name__ == "__main__":
                 "--data-path",       str(csv_path),
                 "--checkpoint-path", ckpt,
                 "--output-dir",      out_dir,
-                "--include-methods", "density", "expectation", "balanced_crps", "bias_weighted_crps",
+                "--include-methods", "density", "expectation", "balanced_crps", "bias_weighted_crps", "likelihood",
                 "--circ-space",      "180",
             ], cwd=REPO_ROOT, env=ENV, log=log)
 

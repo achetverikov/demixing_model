@@ -114,15 +114,19 @@ def prepare_condition_rows(
             f"condition={fit_row['condition']}"
         )
 
-    cleaned = filter_data_for_fitting(subset, feat_diff_col=x_col, bias_col=y_col, verbose=False)
+    # Match the fitter's model-space dissimilarity clamp (see fit_model_to_data /
+    # codex_audit.md report-level #3): raw bounds = feat_diff_range / scale.
+    scale = angle_scale_to_model(circ_space)
+    cleaned = filter_data_for_fitting(
+        subset, feat_diff_col=x_col, bias_col=y_col, verbose=False,
+        min_diss=config.feat_diff_range[0] / scale,
+        max_diss=config.feat_diff_range[1] / scale)
     if cleaned.empty:
         raise ValueError(
             "All rows were removed by filter_data_for_fitting for "
             f"subject={fit_row['subject']}, experiment={fit_row['experiment']}, "
             f"condition={fit_row['condition']}"
         )
-
-    scale = angle_scale_to_model(circ_space)
     cleaned = cleaned.reset_index(drop=True)
     cleaned["feat_diff_model_deg"] = cleaned[x_col].to_numpy(float) * scale
     cleaned["bias_model_deg"] = cleaned[y_col].to_numpy(float) * scale
@@ -189,11 +193,22 @@ def score_fit_row(
         circ_space=circ_space,
     )
     log_surface = predict_log_surface(optimizer, fit_row)
-    loglik_mass = log_surface[
+    # The NN surface is a continuous density per model-degree (see
+    # shared.surface_functions.normalize_to_density), not a discrete cell mass.
+    # Approximate the cell probability as density × cell width — a midpoint/rectangle
+    # rule at the cell centre, NOT the exact integral of the density over the cell.
+    # The log(cell width) term is a constant offset that cancels in AIC/BIC
+    # differences; "mass" here denotes this approximation. See codex_audit.md
+    # report-level #4.
+    loglik_density_model_deg = log_surface[
         scored["bias_idx"].to_numpy(int),
         scored["feat_idx"].to_numpy(int),
     ]
+    model_bin_width_deg = float(config.mu1_bias_step)
+    loglik_mass = loglik_density_model_deg + np.log(model_bin_width_deg)
     bin_width_deg = physical_bin_width_deg(circ_space)
+    scored["loglik_density_model_deg"] = loglik_density_model_deg
+    scored["nll_density_model_deg"] = -scored["loglik_density_model_deg"]
     scored["loglik_mass"] = loglik_mass
     scored["nll_mass"] = -scored["loglik_mass"]
     scored["loglik_density_deg"] = scored["loglik_mass"] - np.log(bin_width_deg)
@@ -208,7 +223,10 @@ def score_fit_row(
     scored["sd_spat"] = float(fit_row["sd_spat"])
     scored["sd_motor"] = float(fit_row["sd_motor"])
 
-    rescored_nll = float(scored["nll_mass"].sum())
+    # The fitter's stored eval_likelihood_loss indexes the NN log-density directly,
+    # so validate against density in model degrees, not the newly converted mass.
+    rescored_nll_density_model_deg = float(scored["nll_density_model_deg"].sum())
+    rescored_nll_mass = float(scored["nll_mass"].sum())
     stored_nll = float(fit_row["eval_likelihood_loss"])
     check = {
         "subject": fit_row["subject"],
@@ -216,9 +234,11 @@ def score_fit_row(
         "condition": fit_row["condition"],
         "optimizer": fit_row["optimizer"],
         "stored_eval_likelihood_loss": stored_nll,
-        "rescored_nll_mass": rescored_nll,
-        "abs_diff": abs(rescored_nll - stored_nll),
+        "rescored_nll_density_model_deg": rescored_nll_density_model_deg,
+        "rescored_nll_mass": rescored_nll_mass,
+        "abs_diff": abs(rescored_nll_density_model_deg - stored_nll),
         "n_obs_scored": int(len(scored)),
+        "model_bin_width_deg": model_bin_width_deg,
         "bin_width_deg": bin_width_deg,
     }
     return scored, check
