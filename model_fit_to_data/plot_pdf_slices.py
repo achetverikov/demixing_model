@@ -6,8 +6,8 @@ Rows = subjects (those with the clearest bias signal / dissociation selected aut
 Columns = feature difference values.
 
 Run from the repo root:
-    PYTHONPATH=.:neural_network_optimization:model_fit_to_data \
-        python plot_pdf_slices.py \
+    PYTHONPATH=.:neural_network_optimization \
+        python model_fit_to_data/plot_pdf_slices.py \
         --results-path results/fritsche/extended_fit_results.pkl \
         --checkpoint-path pretrained/model_epoch1500_10ktrain_20samples.pkl \
         --output-dir results/fritsche \
@@ -15,13 +15,12 @@ Run from the repo root:
 """
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
 import numpy as np
 
-REPO_ROOT = Path(__file__).parent.resolve()
+REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "neural_network_optimization"))
 sys.path.insert(0, str(REPO_ROOT / "model_fit_to_data"))
