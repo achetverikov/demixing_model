@@ -26,7 +26,8 @@ from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
     _generate_nn_bias_curve_batch,
 )
 from shared.config import config
-from shared.utils import AveragedSurface, SurfaceUnpickler, resolve_input_path
+from shared.utils import (AveragedSurface, SurfaceUnpickler, resolve_input_path,
+                          ensure_averaged_surface_file)
 
 RESULTS_DIR = "results"
 CHECKPOINT_PREFIX = "neural_net_checkpoints"
@@ -193,11 +194,10 @@ def load_averaged_surface(sd_feat1: float, sd_feat2: float, sd_spat: float, n_sa
     sd_spat_f = float(sd_spat)
 
     filename = f"averaged_sf1_{canonical_sf1}_sf2_{canonical_sf2}_sp_{sd_spat_f}.pkl"
-    file_path = Path(surfaces_dir) / filename
+    # Resolve the individual file, materialising it from a surface bundle when
+    # only the bundled form exists (raises FileNotFoundError if truly absent).
+    file_path = ensure_averaged_surface_file(surfaces_dir, filename)
 
-    if not file_path.exists():
-        raise FileNotFoundError(f"No averaged surface found for parameters sf1={sd_feat1}, sf2={sd_feat2}, sp={sd_spat} with n_samples={n_samples}. Expected file: {file_path}")
-    
     try:
         with open(file_path, 'rb') as f:
             surface_data = SurfaceUnpickler(f).load()

@@ -12,6 +12,7 @@ import itertools
 import numpy as np
 from flax.training import train_state
 import inspect, pickle
+import gzip
 from shared.surface_folder_parsing import load_surface
 from shared.config import config
 from shared.plotting import plot_surface_comparison
@@ -505,6 +506,71 @@ class SurfaceUnpickler(pickle.Unpickler):
         if name == 'AveragedSurface' and module in self._LEGACY_MODULES:
             return AveragedSurface
         return super().find_class(module, name)
+
+
+# Cache of per-directory {surface_filename -> bundle_path} indices, so the
+# manifest scan happens at most once per surfaces dir per process.
+_BUNDLE_INDEX_CACHE: Dict[str, Dict[str, Path]] = {}
+
+
+def _build_bundle_index(surfaces_dir: Path) -> Dict[str, Path]:
+    """Map each bundled surface filename to the bundle that contains it.
+
+    Uses the cheap per-bundle ``*.manifest.json`` files (``surface_ids`` are
+    ``"sf1|sf2|sp"``) so no ``.pkl.gz`` is decompressed during indexing.
+    """
+    index: Dict[str, Path] = {}
+    for manifest_path in sorted(surfaces_dir.glob("surface_bundle_*.manifest.json")):
+        try:
+            with open(manifest_path) as f:
+                manifest = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        bundle_path = manifest_path.with_name(
+            manifest_path.name.removesuffix(".manifest.json") + ".pkl.gz")
+        for surface_id in manifest.get("surface_ids", []):
+            sf1, sf2, sp = surface_id.split("|")
+            filename = f"averaged_sf1_{sf1}_sf2_{sf2}_sp_{sp}.pkl"
+            index.setdefault(filename, bundle_path)
+    return index
+
+
+def ensure_averaged_surface_file(surfaces_dir, filename: str) -> Path:
+    """Return the path to an individual averaged-surface ``.pkl``, materialising
+    it from a ``surface_bundle_*.pkl.gz`` bundle if only the bundled form exists.
+
+    This lets surface consumers request exactly the surfaces they need without a
+    separately maintained list of which surfaces to pre-extract: whatever the
+    caller asks for is resolved from the individual file or the bundles, and a
+    surface that exists in neither raises ``FileNotFoundError`` (rather than a
+    curve silently disappearing from a figure).
+    """
+    surfaces_dir = Path(surfaces_dir)
+    file_path = surfaces_dir / filename
+    if file_path.exists():
+        return file_path
+
+    key = str(surfaces_dir)
+    index = _BUNDLE_INDEX_CACHE.get(key)
+    if index is None:
+        index = _build_bundle_index(surfaces_dir)
+        _BUNDLE_INDEX_CACHE[key] = index
+
+    bundle_path = index.get(filename)
+    if bundle_path is None:
+        raise FileNotFoundError(
+            f"No averaged surface {filename!r} in {surfaces_dir} "
+            f"(checked individual file and {len(index)} bundled surfaces).")
+
+    with gzip.open(bundle_path, "rb") as f:
+        surfaces = pickle.load(f)["surfaces"]
+    content = surfaces[filename]
+
+    # Cache atomically so later requests (and reruns) reuse the individual file.
+    tmp = file_path.with_suffix(file_path.suffix + ".tmp")
+    tmp.write_bytes(content)
+    tmp.replace(file_path)
+    return file_path
 
 
 def compute_single_bias_curve(log_surfaces: jnp.ndarray, target_feat_indices: jnp.ndarray, mu1_bias_grid: jnp.ndarray) -> jnp.ndarray:

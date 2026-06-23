@@ -17,6 +17,7 @@ library(data.table)
 )
 .sim_py_script <- file.path(.sim_script_dir, "surface_simulator.py")
 .sim_repo_root <- normalizePath(dirname(.sim_script_dir))
+.sim_workspace_root <- normalizePath(file.path(.sim_repo_root, ".."))
 
 #' Simulate surfaces for given parameter combinations
 #'
@@ -53,6 +54,18 @@ simulate_surfaces <- function(parameters,
   if (!use_nn_surfaces && is.null(averaged_surfaces_dir)) {
     stop("averaged_surfaces_dir is required when use_nn_surfaces = FALSE")
   }
+  if (!is.null(averaged_surfaces_dir) && !grepl("^/", averaged_surfaces_dir)) {
+    averaged_surfaces_dir <- normalizePath(
+      file.path(.sim_workspace_root, averaged_surfaces_dir),
+      mustWork = FALSE
+    )
+  }
+  if (!is.null(checkpoint_path) && !grepl("^/", checkpoint_path)) {
+    checkpoint_path <- normalizePath(
+      file.path(.sim_workspace_root, checkpoint_path),
+      mustWork = FALSE
+    )
+  }
 
   if (skip_motor_noise) {
     required_cols <- c("sd_feat1", "sd_feat2", "sd_spat")
@@ -70,6 +83,12 @@ simulate_surfaces <- function(parameters,
 
   # Build Python command — absolute paths for I/O, cd to repo root so that
   # "results/" and other relative paths in surface_simulator.py resolve correctly.
+  pythonpath_parts <- c(
+    .sim_repo_root,
+    file.path(.sim_repo_root, "neural_network_optimization"),
+    Sys.getenv("PYTHONPATH", unset = "")
+  )
+  pythonpath <- paste(pythonpath_parts[nzchar(pythonpath_parts)], collapse = ":")
   cmd_args <- c(
     shQuote(input_file_r),
     n_samples,
@@ -82,6 +101,7 @@ simulate_surfaces <- function(parameters,
 
   full_cmd <- paste(
     "cd", shQuote(.sim_repo_root), "&&",
+    sprintf("PYTHONPATH=%s", shQuote(pythonpath)),
     "python", shQuote(.sim_py_script), paste(cmd_args, collapse = " ")
   )
 
