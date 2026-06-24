@@ -9,6 +9,7 @@ space: rounded (bias_to_distr_corr, abs_td_dist) grid cells.
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 from typing import Iterable
 
@@ -36,10 +37,15 @@ from shared.utils import filter_data_for_fitting
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_20 = REPO_ROOT / "pretrained/model_epoch1500_10ktrain_20samples.pkl"
 DEFAULT_100 = REPO_ROOT / "pretrained/model_epoch1500_10ktrain_100samples.pkl"
+CSH2026_SPLIT_EXPERIMENTS = {"color_2_first", "color_2_second"}
 
 
 def normalize_label(value: object) -> str:
     return "_".join(str(value).strip().split()).lower()
+
+
+def normalize_condition_label(value: object) -> str:
+    return re.sub(r"[\s_-]+", "", str(value).strip().lower())
 
 
 def infer_checkpoint_path(fits_csv: Path, checkpoint_path: str | None) -> Path:
@@ -69,6 +75,17 @@ def load_fit_rows(path: Path, optimizers: Iterable[str] | None) -> pd.DataFrame:
     return dt.reset_index(drop=True)
 
 
+def filter_csh2026_split_rows(path: Path, fit_rows: pd.DataFrame) -> pd.DataFrame:
+    path_lower = str(path).lower()
+    if 'csh2026' in path_lower and 'separate' not in path_lower:
+        filtered = fit_rows[~fit_rows["experiment"].isin(CSH2026_SPLIT_EXPERIMENTS)].copy()
+        removed = len(fit_rows) - len(filtered)
+        if removed:
+            print(f"Filtered {removed} stale split-report CSH2026 fit row(s) from united output")
+        return filtered.reset_index(drop=True)
+    return fit_rows.reset_index(drop=True)
+
+
 def load_trial_data(path: Path, outlier_col: str | None, include_outliers: bool) -> pd.DataFrame:
     dt = pd.read_csv(path, low_memory=False)
     dt["_source_row_index"] = np.arange(len(dt), dtype=int)
@@ -77,6 +94,17 @@ def load_trial_data(path: Path, outlier_col: str | None, include_outliers: bool)
     if not include_outliers and outlier_col and outlier_col in dt.columns:
         dt = dt[dt[outlier_col] != 1].copy()
     return dt.reset_index(drop=True)
+
+
+def infer_csh2026_companion_path(data_path: Path) -> Path | None:
+    name = data_path.name
+    if name == "csh2026_prepared.csv":
+        companion = data_path.with_name("csh2026_separate_prepared.csv")
+    elif name == "csh2026_separate_prepared.csv":
+        companion = data_path.with_name("csh2026_prepared.csv")
+    else:
+        return None
+    return companion if companion.exists() else None
 
 
 def angle_scale_to_model(circ_space: int) -> float:
@@ -99,11 +127,11 @@ def prepare_condition_rows(
 ) -> pd.DataFrame:
     fit_subject = normalize_label(fit_row["subject"])
     fit_experiment = normalize_label(fit_row["experiment"])
-    fit_condition = normalize_label(fit_row["condition"])
+    fit_condition = normalize_condition_label(fit_row["condition"])
     composite_experiment = normalize_label(f"{fit_row['experiment']}_{fit_row['condition']}")
 
     subject_match = data[subject_col].map(normalize_label) == fit_subject
-    condition_match = data[condition_col].map(normalize_label) == fit_condition
+    condition_match = data[condition_col].map(normalize_condition_label) == fit_condition
     experiment_match = data[exp_col].map(normalize_label).isin([fit_experiment, composite_experiment])
 
     subset = data[subject_match & condition_match & experiment_match].copy()
@@ -154,6 +182,41 @@ def prepare_condition_rows(
     return cleaned
 
 
+def prepare_condition_rows_from_sources(
+    data_sources: list[tuple[str, pd.DataFrame]],
+    fit_row: pd.Series,
+    exp_col: str,
+    subject_col: str,
+    condition_col: str,
+    x_col: str,
+    y_col: str,
+    circ_space: int,
+) -> tuple[pd.DataFrame, str]:
+    last_error: ValueError | None = None
+    for source_name, data in data_sources:
+        try:
+            return (
+                prepare_condition_rows(
+                    data=data,
+                    fit_row=fit_row,
+                    exp_col=exp_col,
+                    subject_col=subject_col,
+                    condition_col=condition_col,
+                    x_col=x_col,
+                    y_col=y_col,
+                    circ_space=circ_space,
+                ),
+                source_name,
+            )
+        except ValueError as err:
+            if not str(err).startswith("No prepared-data rows matched "):
+                raise
+            last_error = err
+    if last_error is None:
+        raise RuntimeError("No trial data sources were available for postprocessing.")
+    raise last_error
+
+
 def predict_log_surface(
     optimizer: GridBasedMultiConditionOptimizer,
     fit_row: pd.Series,
@@ -173,7 +236,7 @@ def predict_log_surface(
 
 def score_fit_row(
     optimizer: GridBasedMultiConditionOptimizer,
-    data: pd.DataFrame,
+    data_sources: list[tuple[str, pd.DataFrame]],
     fit_row: pd.Series,
     exp_col: str,
     subject_col: str,
@@ -182,8 +245,8 @@ def score_fit_row(
     y_col: str,
     circ_space: int,
 ) -> tuple[pd.DataFrame, dict]:
-    scored = prepare_condition_rows(
-        data=data,
+    scored, data_source = prepare_condition_rows_from_sources(
+        data_sources=data_sources,
         fit_row=fit_row,
         exp_col=exp_col,
         subject_col=subject_col,
@@ -222,6 +285,7 @@ def score_fit_row(
     scored["sd_feat2"] = float(fit_row["sd_feat2"])
     scored["sd_spat"] = float(fit_row["sd_spat"])
     scored["sd_motor"] = float(fit_row["sd_motor"])
+    scored["prepared_data_source"] = data_source
 
     # The fitter's stored eval_likelihood_loss indexes the NN log-density directly,
     # so validate against density in model degrees, not the newly converted mass.
@@ -233,6 +297,7 @@ def score_fit_row(
         "experiment": fit_row["experiment"],
         "condition": fit_row["condition"],
         "optimizer": fit_row["optimizer"],
+        "prepared_data_source": data_source,
         "stored_eval_likelihood_loss": stored_nll,
         "rescored_nll_density_model_deg": rescored_nll_density_model_deg,
         "rescored_nll_mass": rescored_nll_mass,
@@ -247,8 +312,16 @@ def score_fit_row(
 def postprocess(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFrame]:
     fits_csv = Path(args.fits_csv)
     checkpoint_path = infer_checkpoint_path(fits_csv, args.checkpoint_path)
-    fit_rows = load_fit_rows(fits_csv, args.optimizers)
+    fit_rows = filter_csh2026_split_rows(fits_csv, load_fit_rows(fits_csv, args.optimizers))
     trial_data = load_trial_data(Path(args.data_path), args.outlier_col, args.include_outliers)
+    data_sources = [(str(Path(args.data_path)), trial_data)]
+
+    companion_path = infer_csh2026_companion_path(Path(args.data_path))
+    if companion_path is not None:
+        data_sources.append((
+            str(companion_path),
+            load_trial_data(companion_path, args.outlier_col, args.include_outliers),
+        ))
 
     dummy = jnp.asarray(np.zeros((1, 2), dtype=np.float32))
     optimizer = GridBasedMultiConditionOptimizer(
@@ -262,7 +335,7 @@ def postprocess(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFrame]:
     for _, fit_row in fit_rows.iterrows():
         scored, check = score_fit_row(
             optimizer=optimizer,
-            data=trial_data,
+            data_sources=data_sources,
             fit_row=fit_row,
             exp_col=args.exp_col,
             subject_col=args.subject_col,
@@ -314,8 +387,9 @@ def main() -> None:
     out.to_csv(output, index=False)
     checks.to_csv(check_output, index=False)
 
-    if not checks.empty:
-        print(f"stored-vs-rescored max abs diff: {checks['abs_diff'].max():.6g}")
+    finite_abs_diff = checks["abs_diff"].dropna()
+    if not finite_abs_diff.empty:
+        print(f"stored-vs-rescored max abs diff: {finite_abs_diff.max():.6g}")
     print(f"wrote {len(out)} rows -> {output}")
     print(f"wrote {len(checks)} checks -> {check_output}")
 

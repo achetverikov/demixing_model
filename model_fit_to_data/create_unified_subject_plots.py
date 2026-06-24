@@ -63,6 +63,7 @@ OPTIMIZER_LABELS = {
     'balanced_crps': 'Balanced CRPS',
 }
 LOSS_EVALUATION_METHODS = ['density', 'expectation', 'likelihood', 'crps', 'balanced_crps']
+CSH2026_SPLIT_EXPERIMENTS = {'color_2_first', 'color_2_second'}
 
 
 def _angle_display_scale(circ_space: int = 360) -> float:
@@ -147,8 +148,26 @@ def load_extended_results(results_path: str) -> Dict:
     print(f"Loading extended results from {results_path}")
     with open(results_path, 'rb') as f:
         results = pickle.load(f)
+    path_lower = str(results_path).lower()
+    if 'csh2026' in path_lower and 'separate' not in path_lower:
+        filtered = {
+            key: value
+            for key, value in results.items()
+            if not any(f'#color_2_{variant}#' in key for variant in ('first', 'second'))
+        }
+        removed = len(results) - len(filtered)
+        if removed:
+            print(f"Filtered {removed} stale split-report CSH2026 result(s) from united output")
+        results = filtered
     print(f"Loaded {len(results)} extended results")
     return results
+
+
+def display_condition_label(value: object) -> str:
+    text = str(value)
+    if "___" in text:
+        return text.replace("___", " - ")
+    return text
 
 
 def organize_results_by_subject(extended_results: Dict) -> Dict:
@@ -792,7 +811,8 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
             for prepared_result in prepared_results_list:
                 subject_id = prepared_result['subject_id']
                 experiment_data = prepared_result['experiment_data']
-                noise_condition = prepared_result['noise_condition']
+                noise_condition_key = prepared_result['noise_condition']
+                noise_condition = display_condition_label(noise_condition_key)
 
                 # Skip the "combined" pseudo-subject from summary statistics so
                 # group means/SDs reflect individual observers only.
@@ -800,9 +820,9 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                     continue
 
                 # Get precomputed optimizer curves for this subject+condition
-                optimizer_curves = experiment_data['optimizer_curves'].get(noise_condition, {})
-                empirical_curves = experiment_data['empirical_curves'].get(noise_condition, {})
-                parameters = experiment_data['parameters'].get(noise_condition, {})
+                optimizer_curves = experiment_data['optimizer_curves'].get(noise_condition_key, {})
+                empirical_curves = experiment_data['empirical_curves'].get(noise_condition_key, {})
+                parameters = experiment_data['parameters'].get(noise_condition_key, {})
 
                 for opt in available_optimizers:
                     if opt in optimizer_curves:
@@ -847,12 +867,14 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                 if subject_id == "combined":
                     continue
                 experiment_data = prepared_result['experiment_data']
-                noise_condition = prepared_result['noise_condition']
+                noise_condition_key = prepared_result['noise_condition']
+                noise_condition = display_condition_label(noise_condition_key)
 
                 valid_results.append({
                     'subject': subject_id,
                     'experiment': exp_name,
                     'condition': noise_condition,
+                    'condition_key': noise_condition_key,
                     'experiment_data': experiment_data
                 })
 
@@ -897,7 +919,7 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
 
                     for result in valid_results:
                         experiment_data = result['experiment_data']
-                        noise_condition = result['condition']
+                        noise_condition = result['condition_key']
                         parameters = experiment_data['parameters'].get(noise_condition, {})
 
                         # Handle both old format (parameters[opt]) and new format (parameters['params'][opt])
@@ -951,7 +973,10 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                                 opt_mse_losses.append(np.nan)
                                 opt_corr_losses.append(np.nan)
 
-                    opt_params_array = np.array(opt_params_list)
+                    if not opt_params_list:
+                        continue
+
+                    opt_params_array = np.vstack([np.asarray(params).reshape(-1) for params in opt_params_list])
 
                     param_df_data = {
                         'subject': subjects,
