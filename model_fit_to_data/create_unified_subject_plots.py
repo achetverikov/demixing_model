@@ -63,7 +63,6 @@ OPTIMIZER_LABELS = {
     'balanced_crps': 'Balanced CRPS',
 }
 LOSS_EVALUATION_METHODS = ['density', 'expectation', 'likelihood', 'crps', 'balanced_crps']
-CSH2026_SPLIT_EXPERIMENTS = {'color_2_first', 'color_2_second'}
 
 
 def _angle_display_scale(circ_space: int = 360) -> float:
@@ -179,17 +178,6 @@ def load_extended_results(results_path: str) -> Dict:
     print(f"Loading extended results from {results_path}")
     with open(results_path, 'rb') as f:
         results = pickle.load(f)
-    path_lower = str(results_path).lower()
-    if 'csh2026' in path_lower and 'separate' not in path_lower:
-        filtered = {
-            key: value
-            for key, value in results.items()
-            if not any(f'#color_2_{variant}#' in key for variant in ('first', 'second'))
-        }
-        removed = len(results) - len(filtered)
-        if removed:
-            print(f"Filtered {removed} stale split-report CSH2026 result(s) from united output")
-        results = filtered
     results = canonicalize_result_keys(results)
     print(f"Loaded {len(results)} extended results")
     return results

@@ -8,9 +8,9 @@ Columns = feature difference values.
 Run from the repo root:
     PYTHONPATH=.:neural_network_optimization \
         python model_fit_to_data/plot_pdf_slices.py \
-        --results-path results/fritsche/extended_fit_results.pkl \
+        --results-path results/<dataset>/extended_fit_results.pkl \
         --checkpoint-path pretrained/model_epoch1500_10ktrain_20samples.pkl \
-        --output-dir results/fritsche \
+        --output-dir results/<dataset> \
         --circ-space 180
 """
 

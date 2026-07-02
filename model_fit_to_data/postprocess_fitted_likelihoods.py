@@ -37,7 +37,6 @@ from shared.utils import filter_data_for_fitting
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_20 = REPO_ROOT / "pretrained/model_epoch1500_10ktrain_20samples.pkl"
 DEFAULT_100 = REPO_ROOT / "pretrained/model_epoch1500_10ktrain_100samples.pkl"
-CSH2026_SPLIT_EXPERIMENTS = {"color_2_first", "color_2_second"}
 
 
 def normalize_label(value: object) -> str:
@@ -75,17 +74,6 @@ def load_fit_rows(path: Path, optimizers: Iterable[str] | None) -> pd.DataFrame:
     return dt.reset_index(drop=True)
 
 
-def filter_csh2026_split_rows(path: Path, fit_rows: pd.DataFrame) -> pd.DataFrame:
-    path_lower = str(path).lower()
-    if 'csh2026' in path_lower and 'separate' not in path_lower:
-        filtered = fit_rows[~fit_rows["experiment"].isin(CSH2026_SPLIT_EXPERIMENTS)].copy()
-        removed = len(fit_rows) - len(filtered)
-        if removed:
-            print(f"Filtered {removed} stale split-report CSH2026 fit row(s) from united output")
-        return filtered.reset_index(drop=True)
-    return fit_rows.reset_index(drop=True)
-
-
 def load_trial_data(path: Path, outlier_col: str | None, include_outliers: bool) -> pd.DataFrame:
     dt = pd.read_csv(path, low_memory=False)
     dt["_source_row_index"] = np.arange(len(dt), dtype=int)
@@ -94,17 +82,6 @@ def load_trial_data(path: Path, outlier_col: str | None, include_outliers: bool)
     if not include_outliers and outlier_col and outlier_col in dt.columns:
         dt = dt[dt[outlier_col] != 1].copy()
     return dt.reset_index(drop=True)
-
-
-def infer_csh2026_companion_path(data_path: Path) -> Path | None:
-    name = data_path.name
-    if name == "csh2026_prepared.csv":
-        companion = data_path.with_name("csh2026_separate_prepared.csv")
-    elif name == "csh2026_separate_prepared.csv":
-        companion = data_path.with_name("csh2026_prepared.csv")
-    else:
-        return None
-    return companion if companion.exists() else None
 
 
 def angle_scale_to_model(circ_space: int) -> float:
@@ -343,16 +320,9 @@ def score_fit_row(
 def postprocess(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFrame]:
     fits_csv = Path(args.fits_csv)
     checkpoint_path = infer_checkpoint_path(fits_csv, args.checkpoint_path)
-    fit_rows = filter_csh2026_split_rows(fits_csv, load_fit_rows(fits_csv, args.optimizers))
+    fit_rows = load_fit_rows(fits_csv, args.optimizers)
     trial_data = load_trial_data(Path(args.data_path), args.outlier_col, args.include_outliers)
     data_sources = [(str(Path(args.data_path)), trial_data)]
-
-    companion_path = infer_csh2026_companion_path(Path(args.data_path))
-    if companion_path is not None:
-        data_sources.append((
-            str(companion_path),
-            load_trial_data(companion_path, args.outlier_col, args.include_outliers),
-        ))
 
     dummy = jnp.asarray(np.zeros((1, 2), dtype=np.float32))
     optimizer = GridBasedMultiConditionOptimizer(
