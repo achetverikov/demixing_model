@@ -151,20 +151,26 @@ Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
 def create_shared_parameter_grid(grid_size: int = 20,
                                  sd_spat_range: Tuple[float, float] = (config.param_range_low, config.param_range_high),
                                  sd_motor_range: Tuple[float, float] = (0.1, 50.0),
-                                 skip_motor_noise: bool = False) -> jnp.ndarray:
+                                 skip_motor_noise: bool = False,
+                                 motor_grid_size: Optional[int] = None) -> jnp.ndarray:
     """Create grid of shared parameters (sd_spat, sd_motor).
 
     Args:
-        grid_size: Number of grid points along each dimension
+        grid_size: Number of grid points along the sd_spat dimension
         sd_spat_range: Range for sd_spat, defaults to config bounds
         sd_motor_range: Range for sd_motor, defaults to [0.1, 50.0]
         skip_motor_noise: If True, create only sd_spat grid with sd_motor=0
+        motor_grid_size: Number of grid points along the sd_motor dimension.
+            Defaults to grid_size (square grid). Decoupling it lets the motor
+            axis use fewer points when its data-informed range is small.
 
     Returns:
-        Array of shape (grid_size^2, 2) or (grid_size, 2) with all grid combinations
+        Array of shape (grid_size*motor_grid_size, 2) or (grid_size, 2).
     """
+    if motor_grid_size is None:
+        motor_grid_size = grid_size
     sd_spat_vals = jnp.linspace(sd_spat_range[0], sd_spat_range[1], grid_size)
-    
+
     if skip_motor_noise:
         # Create 1D grid with only sd_spat, sd_motor fixed to 0
         grid_points = jnp.stack([
@@ -176,7 +182,7 @@ def create_shared_parameter_grid(grid_size: int = 20,
         print(f"  sd_spat range: [{sd_spat_range[0]:.1f}, {sd_spat_range[1]:.1f}]")
         print(f"  sd_motor: 0.0 (fixed)")
     else:
-        sd_motor_vals = jnp.linspace(sd_motor_range[0], sd_motor_range[1], grid_size)
+        sd_motor_vals = jnp.linspace(sd_motor_range[0], sd_motor_range[1], motor_grid_size)
 
         # Create all combinations - sd_motor varies slowly (outer loop), sd_spat varies fast (inner loop)
         sd_motor_grid, sd_spat_grid = jnp.meshgrid(sd_motor_vals, sd_spat_vals, indexing='ij')
@@ -187,7 +193,7 @@ def create_shared_parameter_grid(grid_size: int = 20,
             sd_motor_grid.flatten()
         ], axis=1)
 
-        print(f"Created shared parameter grid: {grid_size}×{grid_size} = {len(grid_points)} points")
+        print(f"Created shared parameter grid: {grid_size}×{motor_grid_size} = {len(grid_points)} points")
         print(f"  sd_spat range: [{sd_spat_range[0]:.1f}, {sd_spat_range[1]:.1f}]")
         print(f"  sd_motor range: [{sd_motor_range[0]:.1f}, {sd_motor_range[1]:.1f}]")
 
@@ -1063,7 +1069,8 @@ class GridBasedMultiConditionOptimizer:
     def fit_hierarchical_grid(self, shared_grid_size: int = 20, feat_grid_size: int = 10,
                               min_grid_step: float = 1.0, zoom_factor: float = 0.5,
                               fitting_method: str = "likelihood", verbosity: int = 2,
-                              stop_after_first_stage: bool = False) -> Dict:
+                              stop_after_first_stage: bool = False,
+                              sd_motor_max: float = 50.0) -> Dict:
         """Run hierarchical grid-based multi-condition optimization.
 
         Args:
@@ -1081,7 +1088,7 @@ class GridBasedMultiConditionOptimizer:
         if self.skip_motor_noise:
             print(f"Initial shared parameter grid (motor noise SKIPPED): {shared_grid_size} points")
         else:
-            print(f"Initial shared parameter grid: {shared_grid_size}×{shared_grid_size} = {shared_grid_size ** 2} points")
+            print(f"Initial shared parameter grid: {shared_grid_size} (sd_spat) × motor axis sized from empirical cap (see below)")
         print(
             f"Initial feature grid, specific by condition: {feat_grid_size}×{feat_grid_size} = {feat_grid_size ** 2} per condition")
         print(f"Minimum grid step: {min_grid_step} degrees")
@@ -1093,7 +1100,30 @@ class GridBasedMultiConditionOptimizer:
 
         # Initialize bounds for shared parameters
         sd_spat_range = (config.param_range_low - config.param_step // 2, config.param_range_high)
-        sd_motor_range = (0.1, 50.0)
+        # sd_motor is one component of the total response error, so it can never
+        # exceed the empirical error SD; sd_motor_max carries that data-informed
+        # cap (min-over-conditions error SD). Capping the range and sizing the
+        # motor axis to ~2*min_grid_step resolution shrinks the grid from
+        # shared_grid_size**2 toward shared_grid_size*motor_grid_size.
+        sd_motor_low = 0.1
+        if self.skip_motor_noise:
+            # Motor axis unused (sd_motor fixed to 0). Keep the legacy phantom range
+            # and full width so staging/termination is byte-identical to before.
+            sd_motor_hi = 50.0
+            motor_grid_size = shared_grid_size
+        else:
+            # sd_motor is one component of the total response error, so it can never
+            # exceed the empirical error SD; sd_motor_max carries that data-informed
+            # cap. Capping the range and sizing the motor axis to ~2*min_grid_step
+            # resolution shrinks the grid from shared_grid_size**2 toward
+            # shared_grid_size*motor_grid_size.
+            sd_motor_hi = float(min(sd_motor_max, 50.0))
+            motor_span = max(sd_motor_hi - sd_motor_low, 0.0)
+            motor_grid_size = int(min(shared_grid_size,
+                                      max(4, int(np.ceil(motor_span / (2.0 * min_grid_step))) + 1)))
+            print(f"Motor-noise range capped at sd_motor <= {sd_motor_hi:.1f} "
+                  f"(empirical error SD); motor axis: {motor_grid_size} points")
+        sd_motor_range = (sd_motor_low, sd_motor_hi)
         center = (config.param_range_low + config.param_range_high) / 2
         feat_step_schedule = [10, 6, 4, 2, 1] # Decreasing step sizes
         if (config.param_range_high - config.param_range_low) > (10 * (feat_grid_size - 1) ):
@@ -1119,10 +1149,10 @@ class GridBasedMultiConditionOptimizer:
                 else:
                     print(f"Search ranges: sd_spat=[{sd_spat_range[0]:.1f}, {sd_spat_range[1]:.1f}], "
                           f"sd_motor=[{sd_motor_range[0]:.1f}, {sd_motor_range[1]:.1f}]")
-                    print(f"Grid size: {shared_grid_size}×{shared_grid_size} = {shared_grid_size ** 2} points")
+                    print(f"Grid size: {shared_grid_size}×{motor_grid_size} = {shared_grid_size * motor_grid_size} points")
 
             # Create shared parameter grid for this stage
-            shared_grid = create_shared_parameter_grid(shared_grid_size, sd_spat_range, sd_motor_range, self.skip_motor_noise)
+            shared_grid = create_shared_parameter_grid(shared_grid_size, sd_spat_range, sd_motor_range, self.skip_motor_noise, motor_grid_size=motor_grid_size)
             
             # Precompile motor noise kernels for this stage (only if motor noise enabled)
             if not self.skip_motor_noise:
@@ -1257,6 +1287,7 @@ class GridBasedMultiConditionOptimizer:
                 print(f"Best shared params: sd_spat={sd_spat:.1f}, "
                       f"sd_motor={sd_motor:.1f}, loss={stage_best_loss:.3f}")
                 nn_evals_this_stage = len(shared_grid) * feat_grid_size ** 2
+                total_nn_evaluations += nn_evals_this_stage
                 print(f"NN evaluations this stage: {nn_evals_this_stage:,}")
 
             # Boundary-hit detection
@@ -1290,7 +1321,12 @@ class GridBasedMultiConditionOptimizer:
             # Check if we should zoom in on shared parameters
             zoom_check_start_time = time.time()
             current_spat_step = (sd_spat_range[1] - sd_spat_range[0]) / (shared_grid_size - 1)
-            current_motor_step = (sd_motor_range[1] - sd_motor_range[0]) / (shared_grid_size - 1)
+            # Termination references the LEGACY uncapped motor schedule (full [0.1,50]
+            # range over shared_grid_size points, zoomed by zoom_factor each stage) so
+            # that capping/shrinking the actual motor axis cannot change the number of
+            # stages or the sd_spat resolution at which we stop. Without this, a small
+            # empirical cap would make motor_step tiny and stop early with coarse sd_spat.
+            current_motor_step = (50.0 - 0.1) / (shared_grid_size - 1) * (zoom_factor ** (stage - 1))
 
             if verbosity > 0:
                 print(f"Current grid steps: spat={current_spat_step:.2f}, motor={current_motor_step:.2f}")
@@ -1322,8 +1358,8 @@ class GridBasedMultiConditionOptimizer:
                 min(config.param_range_high, best_sd_spat + new_spat_half_range)
             )
             sd_motor_range = (
-                max(0.1, best_sd_motor - new_motor_half_range),
-                min(50.0, best_sd_motor + new_motor_half_range)
+                max(sd_motor_low, best_sd_motor - new_motor_half_range),
+                min(sd_motor_hi, best_sd_motor + new_motor_half_range)
             )
 
             zoom_check_time = time.time() - zoom_check_start_time

@@ -307,6 +307,25 @@ def process_subject(
         log(f"  Skipping {subject_id}: no valid conditions remain.", "yellow")
         return {}
 
+    # Data-informed cap on motor noise. Motor noise is one additive component of
+    # the total response error, so sd_motor can never exceed the empirical error
+    # SD. Because it is a shared (across-condition) parameter it must be <= the
+    # tightest condition, i.e. min over conditions. Values here are already in the
+    # model's 360°-wide space (scaled by angle_scale_to_model), matching the grid.
+    # This never binds for likelihood/CRPS (pure speed-up) and clips motor-noise
+    # over-attribution for density.
+    def _circ_sd_model_deg(vals):
+        th = np.deg2rad(np.asarray(vals, dtype=float))  # model space period = 360°
+        R = np.abs(np.mean(np.exp(1j * th)))
+        return float('inf') if R <= 0 else float(np.degrees(np.sqrt(-2.0 * np.log(R))))
+
+    emp_motor_cap = 50.0
+    if not optimizer.skip_motor_noise:
+        cond_error_sds = [_circ_sd_model_deg(np.asarray(ds)[:, 1]) for ds in condition_datasets.values()]
+        emp_motor_cap = min(cond_error_sds) * 1.1  # small margin for finite-sample noise
+        emp_motor_cap = float(max(0.1, min(emp_motor_cap, 50.0)))
+        log(f"  Empirical motor-noise cap (min-condition error SD ×1.1): {emp_motor_cap:.1f}° (model space)", "cyan")
+
     optimizer.update_dataset(condition_datasets)
 
     empirical_curves = {
@@ -325,6 +344,16 @@ def process_subject(
     if progress is not None:
         method_task = progress.add_task(f"[magenta]Methods for {subject_id}", total=len(methods_to_run))
     for method in methods_to_run:
+        # The 'expectation' objective fits only the circular-mean bias curve, which
+        # a symmetric motor-noise convolution leaves exactly invariant — sd_motor is
+        # mathematically unidentifiable there. In a motor-noise run it is therefore
+        # skipped entirely (fitting it would just reproduce the no-motor result).
+        if method == "expectation" and not optimizer.skip_motor_noise:
+            log("  Skipping 'expectation': sd_motor is unidentifiable under this "
+                "objective (symmetric response convolution preserves the circular mean).", "yellow")
+            if progress is not None and method_task is not None:
+                progress.advance(method_task)
+            continue
         log(f"  Running {method}...", "magenta")
         t0 = time.time()
         status = None
@@ -333,7 +362,8 @@ def process_subject(
             status.start()
         try:
             result = optimizer.fit_hierarchical_grid(fitting_method=method, verbosity=1,
-                                                     shared_grid_size=40, feat_grid_size=20)
+                                                     shared_grid_size=40, feat_grid_size=20,
+                                                     sd_motor_max=emp_motor_cap)
         finally:
             if status is not None:
                 status.stop()
