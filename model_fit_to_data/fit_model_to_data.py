@@ -143,8 +143,26 @@ def load_results(output_dir: str):
     results_file = Path(output_dir) / 'extended_fit_results.pkl'
     if not results_file.exists():
         return {}, set()
-    with open(results_file, 'rb') as f:
-        results = pickle.load(f)
+    try:
+        with open(results_file, 'rb') as f:
+            results = pickle.load(f)
+    except (OSError, pickle.PickleError, EOFError) as exc:
+        corrupt_path = results_file.with_suffix(
+            results_file.suffix + f".corrupt-{time.strftime('%Y%m%d-%H%M%S')}"
+        )
+        try:
+            results_file.replace(corrupt_path)
+            log(
+                f"Warning: could not load {results_file} ({exc}); moved it to {corrupt_path} "
+                "and will refit from scratch.",
+                "yellow",
+            )
+        except OSError:
+            log(
+                f"Warning: could not load {results_file} ({exc}); will refit from scratch.",
+                "yellow",
+            )
+        return {}, set()
     completed = {key.rsplit('#', 1)[0] for key in results}
     return results, completed
 
@@ -170,8 +188,13 @@ def save_results(results: Dict, output_dir: str, label: str = None):
                for k, v in entry.items() if not k.endswith('_optimization_result')}
         for cond, entry in results.items()
     }
-    with open(output_path / 'extended_fit_results.pkl', 'wb') as f:
+    results_file = output_path / 'extended_fit_results.pkl'
+    tmp_results_file = output_path / f'.{results_file.name}.tmp'
+    with open(tmp_results_file, 'wb') as f:
         pickle.dump(serializable, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_results_file, results_file)
 
     progress = {
         'total_completed': len(results),
