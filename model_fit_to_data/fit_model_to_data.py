@@ -103,6 +103,35 @@ def _sanitize(value: str) -> str:
     return re.sub(r'[^\w]', '_', str(value)).strip('_')
 
 
+def _canonical_condition_key(key: str) -> str:
+    """Canonicalize legacy result keys to the current sanitized form."""
+    parts = str(key).split('#')
+    if len(parts) < 3:
+        return str(key)
+    subject, experiment = parts[0], parts[1]
+    condition = "#".join(parts[2:])
+    return f"{_sanitize(subject)}#{_sanitize(experiment)}#{_sanitize(condition)}"
+
+
+def _merge_result_entries(old: Dict, new: Dict) -> Dict:
+    """Merge duplicate legacy/current condition entries without dropping methods."""
+    merged = dict(old)
+    merged.update(new)
+    return merged
+
+
+def canonicalize_result_keys(results: Dict) -> Dict:
+    """Collapse legacy unsanitized condition keys onto sanitized keys."""
+    canonical = {}
+    for key, entry in results.items():
+        ckey = _canonical_condition_key(key)
+        if ckey in canonical and isinstance(canonical[ckey], dict) and isinstance(entry, dict):
+            canonical[ckey] = _merge_result_entries(canonical[ckey], entry)
+        else:
+            canonical[ckey] = entry
+    return canonical
+
+
 def load_data(data_path: str, outlier_col: Optional[str], include_outliers: bool) -> pd.DataFrame:
     """Load trial data from a CSV file and optionally filter outlier rows.
 
@@ -163,6 +192,7 @@ def load_results(output_dir: str):
                 "yellow",
             )
         return {}, set()
+    results = canonicalize_result_keys(results)
     completed = {key.rsplit('#', 1)[0] for key in results}
     return results, completed
 

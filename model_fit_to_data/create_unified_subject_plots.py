@@ -143,6 +143,37 @@ def compute_predicted_sd_curves_batch(log_surfaces_batch, feat_vals):
     return circular_sds
 
 
+def _sanitize_result_key_part(value: str) -> str:
+    """Match fit_model_to_data.py's result-key sanitization."""
+    return re.sub(r'[^\w]', '_', str(value)).strip('_')
+
+
+def _canonical_condition_key(key: str) -> str:
+    parts = str(key).split('#')
+    if len(parts) < 3:
+        return str(key)
+    subject, experiment = parts[0], parts[1]
+    condition = "#".join(parts[2:])
+    return (
+        f"{_sanitize_result_key_part(subject)}#"
+        f"{_sanitize_result_key_part(experiment)}#"
+        f"{_sanitize_result_key_part(condition)}"
+    )
+
+
+def canonicalize_result_keys(results: Dict) -> Dict:
+    canonical = {}
+    for key, entry in results.items():
+        ckey = _canonical_condition_key(key)
+        if ckey in canonical and isinstance(canonical[ckey], dict) and isinstance(entry, dict):
+            merged = dict(canonical[ckey])
+            merged.update(entry)
+            canonical[ckey] = merged
+        else:
+            canonical[ckey] = entry
+    return canonical
+
+
 def load_extended_results(results_path: str) -> Dict:
     """Load extended batch fitting results."""
     print(f"Loading extended results from {results_path}")
@@ -159,6 +190,7 @@ def load_extended_results(results_path: str) -> Dict:
         if removed:
             print(f"Filtered {removed} stale split-report CSH2026 result(s) from united output")
         results = filtered
+    results = canonicalize_result_keys(results)
     print(f"Loaded {len(results)} extended results")
     return results
 
