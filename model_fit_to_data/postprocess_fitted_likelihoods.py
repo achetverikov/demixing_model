@@ -115,6 +115,21 @@ def physical_bin_width_deg(circ_space: int) -> float:
     return config.mu1_bias_step / angle_scale_to_model(circ_space)
 
 
+def model_grid_indices(
+    values: np.ndarray,
+    grid_min: float,
+    grid_step: float,
+    grid_size: int,
+) -> np.ndarray:
+    """Match the fitter's JAX/float32 round-to-grid indexing path."""
+    indices = jnp.round(
+        (jnp.asarray(values, dtype=jnp.float32) - np.float32(grid_min))
+        / np.float32(grid_step)
+    ).astype(jnp.int32)
+    indices = jnp.clip(indices, 0, grid_size - 1)
+    return np.asarray(indices, dtype=int)
+
+
 def prepare_condition_rows(
     data: pd.DataFrame,
     fit_row: pd.Series,
@@ -159,17 +174,19 @@ def prepare_condition_rows(
     cleaned["feat_diff_model_deg"] = cleaned[x_col].to_numpy(float) * scale
     cleaned["bias_model_deg"] = cleaned[y_col].to_numpy(float) * scale
 
-    feat_idx = np.rint(
-        (cleaned["feat_diff_model_deg"].to_numpy(float) - config.feat_diff_range[0])
-        / config.feat_diff_step
-    ).astype(int)
-    feat_idx = np.clip(feat_idx, 0, config.feat_diff_grid_size - 1)
+    feat_idx = model_grid_indices(
+        cleaned["feat_diff_model_deg"].to_numpy(float),
+        grid_min=config.feat_diff_range[0],
+        grid_step=config.feat_diff_step,
+        grid_size=config.feat_diff_grid_size,
+    )
 
-    bias_idx = np.rint(
-        (cleaned["bias_model_deg"].to_numpy(float) - config.mu1_bias_range[0])
-        / config.mu1_bias_step
-    ).astype(int)
-    bias_idx = np.clip(bias_idx, 0, config.mu1_bias_grid_size - 1)
+    bias_idx = model_grid_indices(
+        cleaned["bias_model_deg"].to_numpy(float),
+        grid_min=config.mu1_bias_range[0],
+        grid_step=config.mu1_bias_step,
+        grid_size=config.mu1_bias_grid_size,
+    )
 
     cleaned["feat_idx"] = feat_idx
     cleaned["bias_idx"] = bias_idx
@@ -287,9 +304,21 @@ def score_fit_row(
     scored["sd_motor"] = float(fit_row["sd_motor"])
     scored["prepared_data_source"] = data_source
 
-    # The fitter's stored eval_likelihood_loss indexes the NN log-density directly,
-    # so validate against density in model degrees, not the newly converted mass.
-    rescored_nll_density_model_deg = float(scored["nll_density_model_deg"].sum())
+    # The fitter's stored eval_likelihood_loss indexes the NN log-density directly
+    # and reduces with JAX segment_sum. Validate against that reduction, not a
+    # pandas/NumPy sum of exported rows, because float32 reduction order can differ
+    # by ~1e-2 on large/high-NLL conditions.
+    flat_indices = (
+        scored["bias_idx"].to_numpy(int) * optimizer.n_feat_diff
+        + scored["feat_idx"].to_numpy(int)
+    )
+    fit_log_probs = log_surface.reshape(-1)[flat_indices]
+    rescored_nll_density_model_deg = -float(jax.ops.segment_sum(
+        jnp.asarray(fit_log_probs, dtype=jnp.float32),
+        jnp.zeros(len(fit_log_probs), dtype=jnp.int32),
+        num_segments=1,
+    )[0])
+    per_trial_sum_nll_density_model_deg = float(scored["nll_density_model_deg"].sum())
     rescored_nll_mass = float(scored["nll_mass"].sum())
     stored_nll = float(fit_row["eval_likelihood_loss"])
     check = {
@@ -300,8 +329,10 @@ def score_fit_row(
         "prepared_data_source": data_source,
         "stored_eval_likelihood_loss": stored_nll,
         "rescored_nll_density_model_deg": rescored_nll_density_model_deg,
+        "per_trial_sum_nll_density_model_deg": per_trial_sum_nll_density_model_deg,
         "rescored_nll_mass": rescored_nll_mass,
         "abs_diff": abs(rescored_nll_density_model_deg - stored_nll),
+        "per_trial_sum_abs_diff": abs(per_trial_sum_nll_density_model_deg - stored_nll),
         "n_obs_scored": int(len(scored)),
         "model_bin_width_deg": model_bin_width_deg,
         "bin_width_deg": bin_width_deg,
@@ -372,6 +403,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--circ-space", type=int, choices=[180, 360], default=360)
     parser.add_argument("--skip-motor-noise", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--optimizers", nargs="*", default=None)
+    parser.add_argument(
+        "--max-check-abs-diff",
+        type=float,
+        default=0.01,
+        help="Fail if stored-vs-rescored density-scale NLL differs by more than this.",
+    )
     return parser.parse_args()
 
 
@@ -389,7 +426,13 @@ def main() -> None:
 
     finite_abs_diff = checks["abs_diff"].dropna()
     if not finite_abs_diff.empty:
-        print(f"stored-vs-rescored max abs diff: {finite_abs_diff.max():.6g}")
+        max_abs_diff = float(finite_abs_diff.max())
+        print(f"stored-vs-rescored max abs diff: {max_abs_diff:.6g}")
+        if max_abs_diff > args.max_check_abs_diff:
+            raise RuntimeError(
+                "Stored eval_likelihood_loss reproduction failed: "
+                f"max abs diff {max_abs_diff:.6g} > {args.max_check_abs_diff:.6g}"
+            )
     print(f"wrote {len(out)} rows -> {output}")
     print(f"wrote {len(checks)} checks -> {check_output}")
 
