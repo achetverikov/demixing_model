@@ -667,8 +667,9 @@ def train_em_jax_diag_common(key, observed, num_comp=2, n_init=400, rtol=1e-6, m
     return weights, mu1_best, mu2_best, sigma1_arr, sigma2_arr, loss_best
 
 
-@partial(jax.jit, static_argnames=['num_comp', 'n_init', 'rtol', 'max_iter'])
-def train_em_jax(key, observed, num_comp=2, n_init=225, rtol=1e-6, max_iter=5000):
+@partial(jax.jit, static_argnames=['num_comp', 'n_init', 'rtol', 'max_iter', 'fix_weights'])
+def train_em_jax(key, observed, num_comp=2, n_init=225, rtol=1e-6, max_iter=5000,
+                 fix_weights=False):
     """
     Trains a mixture model using the Expectation-Maximization algorithm in JAX.
 
@@ -678,6 +679,9 @@ def train_em_jax(key, observed, num_comp=2, n_init=225, rtol=1e-6, max_iter=5000
     :param n_init: The number of initializations for the algorithm.
     :param rtol: The relative tolerance for convergence.
     :param max_iter: The maximum number of iterations for the algorithm.
+    :param fix_weights: If True, hold the mixture weights fixed at 1/num_comp (equal
+        proportions) throughout — the M-step weight update is skipped. If False (default),
+        weights are estimated and projected onto the simplex with a 0.1 floor each step.
     :return: A tuple containing the estimated parameters: pi_best, mu_best, sigma_best.
     """
 
@@ -758,7 +762,11 @@ def train_em_jax(key, observed, num_comp=2, n_init=225, rtol=1e-6, max_iter=5000
 
         pi_upd, mu1_upd, mu2_upd, sigma1_upd, sigma2_upd = m_step_circ(observed, membership_weight, debug = debug)
 
-        pi_upd = project_to_simplex_with_min(pi_upd, 0.1)
+        if fix_weights:
+            # Keep weights pinned at their initial equal value (1/num_comp); skip the update.
+            pi_upd = pi
+        else:
+            pi_upd = project_to_simplex_with_min(pi_upd, 0.1)
 
         membership_weight_upd = e_step_circ(
             observed, pi_upd, mu1_upd, mu2_upd, sigma1_upd, sigma2_upd
@@ -918,12 +926,27 @@ def jax_generate_and_fit(key, true_mu1, true_mu2, true_sigma1, true_sigma2,
     :param n_samples: Total number of samples to generate.
     :return: Fitted parameters and true parameters.
     """
+    # Honor the requested fitting mode instead of silently ignoring these flags.
+    # Only the diagonal, circular EM is implemented in this path; anything else must fail
+    # loudly rather than return a mislabeled diagonal fit. (algorithm/diagonal_covariance
+    # are static under jit, so these checks resolve at trace time.)
+    if algorithm.upper() != 'EM':
+        raise NotImplementedError(
+            f"jax_generate_and_fit only implements EM in this path; got algorithm={algorithm!r}. "
+            "VBEM/VBEM_MIX have no inference code in this repo."
+        )
+    if not diagonal_covariance:
+        raise NotImplementedError(
+            "Full covariance is not implemented for the circular demixing EM; only diagonal "
+            "(independent circular-feature + linear-spatial axes) is supported."
+        )
+
     key, subkey = jrnd.split(key, 2)
 
     # Generate observed samples
     observed = jax_jax_mixture(key, true_mu1, true_mu2, true_sigma1, true_sigma2, weights, n_samples)
 
-    out = train_em_jax(subkey, observed, num_comp=2)
+    out = train_em_jax(subkey, observed, num_comp=2, fix_weights=fix_weights)
 
     # Rearrange components to match true component order based on mu2
     res = rearrange_components(out[:5], true_mu2)

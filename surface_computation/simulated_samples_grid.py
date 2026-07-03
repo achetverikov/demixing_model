@@ -1890,8 +1890,10 @@ def parse_arguments():
                         help='Automatically advance to next grid level when current is complete')
     parser.add_argument('--test-mode', action='store_true',
                         help='Run in test mode with reduced parameters')
-    parser.add_argument('--diagonal-covariance', action=argparse.BooleanOptionalAction, default=False,
-                        help='Use diagonal covariance matrix in simulations (default: False)')
+    parser.add_argument('--diagonal-covariance', action=argparse.BooleanOptionalAction, default=True,
+                        help='Use diagonal covariance in the fit (default: True). This is the only '
+                             'implemented mode; --no-diagonal-covariance raises NotImplementedError. '
+                             'Matches build_samples_folder_name so folders are truthfully labeled diagcov.')
     parser.add_argument('--status-only', action='store_true',
                         help='Only show status without running computation')
     parser.add_argument('--match-csv-params', type=str,

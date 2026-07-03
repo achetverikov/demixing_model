@@ -74,8 +74,8 @@ This document describes the current pipeline for `simulated_samples_grid.py`, wh
 │    ├─ feat_diff (from config.create_grid('feat_diff'))          │
 │    ├─ n_simulations (per run; split across 10 scans)            │
 │    ├─ n_samples (from runtime args)                             │
-│    ├─ algorithm (EM / VBEM / VBEM_MIX)                          │
-│    ├─ diagonal_covariance, fix_weights                          │
+│    ├─ algorithm (EM only; VBEM/VBEM_MIX NOT implemented → raise)│
+│    ├─ diagonal_covariance (True only), fix_weights              │
 │                                                                  │
 │    COMPUTATION LOOP:                                             │
 │    - 10 scan loops with jax.lax.scan()                           │
@@ -242,9 +242,17 @@ sim_samples_{sim_part}_{n_samples}samples_{geometry}_{algorithm}_{covariance}_{w
 Where:
 - `sim_part` is `n_simulations` formatted as `1k`, `2k`, etc. when divisible by 1000 (otherwise raw integer)
 - `geometry` is `circular` if `jf.wrap_1st` is True, else `linear`
-- `algorithm` is `em`, `vbem`, or `vbem_mix` (lowercased; currently only basic EM is working well)
-- `covariance` is `diagcov` if `diagonal_covariance` is True, else `fullcov`
-- `weights` is `fix_weights` if `fix_weights` is True, else `free_weights`
+- `algorithm` is `em` (lowercased). **Only `em` is implemented.** `vbem` / `vbem_mix` exist
+  as CLI choices, docstrings, and zero-filled result columns (`weight_mix`/`mu1_mix`/`mu2_mix`)
+  but have **no inference code** — requesting them now raises `NotImplementedError`
+  (pinned by `tests/test_flag_dispatch.py`).
+- `covariance` is `diagcov` (the default and **only implemented mode**). `fullcov`
+  (`--no-diagonal-covariance`) now raises `NotImplementedError` — full covariance is not
+  implemented for the circular model. (Pre-2026-07-03 artifacts labeled `fullcov` were
+  actually diagonal; the flag used to be silently ignored.)
+- `weights` is `fix_weights` if `fix_weights` is True, else `free_weights`. `fix_weights`
+  is implemented (holds mixture weights at 1/K); `free_weights` estimates them (floored to
+  [0.1, 0.9]).
 
 ### Sample Generation Parameters
 ```python
@@ -265,7 +273,7 @@ n_samples = 100
 - **Multi-machine**: linear speedup with number of machines
 
 ### Computational Bottleneck
-- `simulate_dual_component_bias_distribution()`: repeated EM/VBEM fits per simulation
+- `simulate_dual_component_bias_distribution()`: repeated EM fits per simulation (225-init multistart; EM is the only implemented algorithm)
 - JAX JIT compilation provides substantial speedup for large runs
 
 ### Memory Usage
