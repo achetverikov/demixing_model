@@ -9,14 +9,19 @@ space: rounded (bias_to_distr_corr, abs_td_dist) grid cells.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from pathlib import Path
+import shutil
+import tempfile
 from typing import Iterable
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 try:
     from grid_based_multi_condition_optimizer_jax_loops import (
@@ -37,6 +42,90 @@ from shared.utils import filter_data_for_fitting
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_20 = REPO_ROOT / "pretrained/model_epoch1500_10ktrain_20samples.pkl"
 DEFAULT_100 = REPO_ROOT / "pretrained/model_epoch1500_10ktrain_100samples.pkl"
+
+FIT_META_COLS = [
+    "fit_subject",
+    "fit_experiment",
+    "fit_condition",
+    "optimizer",
+    "sd_feat1",
+    "sd_feat2",
+    "sd_spat",
+    "sd_motor",
+    "prepared_data_source",
+]
+
+LIKELIHOOD_COLS = [
+    "feat_diff_model_deg",
+    "bias_model_deg",
+    "feat_idx",
+    "bias_idx",
+    "trial_index_within_fit",
+    "valid_model_eval",
+    "include_common_eval",
+    "loglik_density_model_deg",
+    "nll_density_model_deg",
+    "loglik_mass",
+    "nll_mass",
+    "loglik_density_deg",
+    "nll_density_deg",
+    "bin_width_deg",
+]
+
+
+def _write_parquet(df: pd.DataFrame, path: Path, compression: str) -> None:
+    table = pa.Table.from_pandas(df, preserve_index=False)
+    pq.write_table(table, path, compression=compression, use_dictionary=True)
+
+
+def write_split_trial_loglik(out: pd.DataFrame, output_dir: Path, compression: str = "zstd") -> None:
+    """Write demixing per-trial likelihoods as normalized split Parquet tables."""
+    output_dir = Path(output_dir)
+    fit_cols = [col for col in FIT_META_COLS if col in out.columns]
+    likelihood_cols = [col for col in LIKELIHOOD_COLS if col in out.columns]
+    trial_cols = [col for col in out.columns if col not in set(fit_cols + likelihood_cols)]
+    if not fit_cols or not likelihood_cols:
+        raise ValueError("trial likelihood table is missing fit or likelihood columns")
+
+    trial_meta = out[trial_cols].drop_duplicates().reset_index(drop=True)
+    trial_meta.insert(0, "trial_id", np.arange(len(trial_meta), dtype=np.int64))
+    fit_meta = out[fit_cols].drop_duplicates().reset_index(drop=True)
+    fit_meta.insert(0, "fit_id", np.arange(len(fit_meta), dtype=np.int64))
+
+    likelihood = out[trial_cols + fit_cols + likelihood_cols].merge(
+        trial_meta, on=trial_cols, how="left", validate="many_to_one"
+    ).merge(
+        fit_meta, on=fit_cols, how="left", validate="many_to_one"
+    )
+    if likelihood["trial_id"].isna().any() or likelihood["fit_id"].isna().any():
+        raise RuntimeError("failed to assign trial_id/fit_id while writing split likelihoods")
+    likelihood = likelihood[["trial_id", "fit_id"] + likelihood_cols]
+
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    tmp_dir = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}.", dir=output_dir.parent))
+    try:
+        _write_parquet(trial_meta, tmp_dir / "trial_meta.parquet", compression)
+        _write_parquet(fit_meta, tmp_dir / "fit_meta.parquet", compression)
+        _write_parquet(likelihood, tmp_dir / "likelihood.parquet", compression)
+        manifest = {
+            "format": "split_demixing_trial_loglik",
+            "version": 1,
+            "source": "postprocess_fitted_likelihoods.py",
+            "rows": int(len(out)),
+            "trial_meta_rows": int(len(trial_meta)),
+            "fit_meta_rows": int(len(fit_meta)),
+            "trial_columns": trial_cols,
+            "fit_columns": fit_cols,
+            "likelihood_columns": likelihood_cols,
+            "compression": compression,
+        }
+        (tmp_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        tmp_dir.rename(output_dir)
+    except Exception:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
 
 
 def normalize_label(value: object) -> str:
@@ -361,7 +450,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-path", required=True, help="Prepared trial CSV used for fitting.")
     parser.add_argument("--fits-csv", required=True, help="Path to fitted_parameters.csv.")
     parser.add_argument("--checkpoint-path", default=None, help="NN checkpoint path; inferred from fits path when omitted.")
-    parser.add_argument("--output", default=None, help="Output CSV path for per-trial likelihoods.")
+    parser.add_argument("--output", default=None, help="Output split-Parquet directory for per-trial likelihoods.")
     parser.add_argument("--check-output", default=None, help="Output CSV path for stored-vs-rescored checks.")
     parser.add_argument("--exp-col", default="expName")
     parser.add_argument("--subject-col", default="subject")
@@ -379,6 +468,12 @@ def parse_args() -> argparse.Namespace:
         default=0.01,
         help="Fail if stored-vs-rescored density-scale NLL differs by more than this.",
     )
+    parser.add_argument(
+        "--parquet-compression",
+        default="zstd",
+        choices=["zstd", "snappy", "gzip"],
+        help="Compression codec for split-Parquet likelihood output.",
+    )
     return parser.parse_args()
 
 
@@ -386,12 +481,12 @@ def main() -> None:
     args = parse_args()
     fits_csv = Path(args.fits_csv)
     csv_dir = fits_csv.parent
-    output = Path(args.output) if args.output else csv_dir / "trial_loglik.csv"
+    output = Path(args.output) if args.output else csv_dir / "trial_loglik_split"
     check_output = Path(args.check_output) if args.check_output else csv_dir / "trial_loglik_checks.csv"
 
     out, checks = postprocess(args)
     output.parent.mkdir(parents=True, exist_ok=True)
-    out.to_csv(output, index=False)
+    write_split_trial_loglik(out, output, compression=args.parquet_compression)
     checks.to_csv(check_output, index=False)
 
     finite_abs_diff = checks["abs_diff"].dropna()
