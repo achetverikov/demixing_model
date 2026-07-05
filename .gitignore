@@ -41,6 +41,7 @@ __pycache__/
 Rplots.pdf
 .venv*
 /logs/
+MODEL_PIPELINE_FOR_REVIEWERS.md
 # Vast README cost/performance documentation artifacts
 !cloud/vast_cost_performance/
 !cloud/vast_cost_performance/*.png
