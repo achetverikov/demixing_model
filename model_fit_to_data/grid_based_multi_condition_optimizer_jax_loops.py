@@ -854,11 +854,13 @@ class GridBasedMultiConditionOptimizer:
         print(f"Density curves shape: {self.unified_target_density.shape}")
         print(f"Smoothed bias curves shape: {self.unified_target_bias_curve.shape}")
 
-        # Precompute empirical bias distributions for the balanced method.
+        # Precompute empirical bias distributions shared by the balanced_crps and
+        # bias_weighted_crps methods (unified_target_d for both; unified_fd_weights
+        # for balanced_crps, unified_bias_fd_weights for bias_weighted_crps).
         # Q[c, j, k] = Gaussian-weighted empirical probability of bias bin k at feat_diff grid point j.
         # target_d[c, j, k] = sum_l D_circ[k,l] * Q[c,j,l]  — expected circular distance from bin k
         #                       to the empirical distribution.  Precomputed so the JIT branch is cheap.
-        print("Precomputing empirical bias distributions for balanced CRPS...")
+        print("Precomputing empirical bias distributions for balanced_crps/bias_weighted_crps...")
         D_np = np.array(self.D_circ_matrix)        # (n_bias, n_bias)
         fd_grid_np = np.array(self.feat_diff_grid)  # (n_feat,)
         bias_low = config.mu1_bias_range[0]
