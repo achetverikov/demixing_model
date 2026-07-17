@@ -815,7 +815,7 @@ class GridBasedMultiConditionOptimizer:
         # std/quantile/n bandwidth terms. This is a one-time precompute (not in the
         # JIT objective), so we loop over the real condition arrays instead, exactly
         # as the balanced-CRPS block below does. See codex_audit.md #3.
-        from shared.utils import _compute_empirical_density_asymmetry_core
+        from shared.utils import _compute_empirical_density_asymmetry_core, compute_target_bias_rolling_curve_core
         feat_diff_grid = self.feat_diff_grid
 
         def density_curve_wrapper(feat_diff_vals, bias_vals, grid):
@@ -830,16 +830,29 @@ class GridBasedMultiConditionOptimizer:
             for i in range(len(self.condition_names))
         ])
 
+        # Smoothed (rolling-mean) circular bias curve, for the smoothed_exp method:
+        # same curve-vs-curve idea as the density asymmetry curve above, but for the
+        # circular-mean bias itself instead of hard 8-degree bins.
+        smoothed_bias_curves = jnp.stack([
+            compute_target_bias_rolling_curve_core(condition_dataframes[i][:, 0],
+                                                    condition_dataframes[i][:, 1],
+                                                    feat_diff_grid,
+                                                    weights_sd=self.emp_density_weights_sd)
+            for i in range(len(self.condition_names))
+        ])
+
         # Store unified results
         self.unified_feat_indices = feat_indices[0]  # Same for all conditions
         self.unified_target_bias = target_bias  # Shape: (n_conditions, n_bins)
         self.unified_bias_weights = weights  # Shape: (n_conditions, n_bins)
         self.unified_target_density = density_curves  # Shape: (n_conditions, n_feat_points)
+        self.unified_target_bias_curve = smoothed_bias_curves  # Shape: (n_conditions, n_feat_points)
 
         print(f"Target curves precomputed for {len(self.condition_names)} conditions (vmap)")
         print(f"Bias curves shape: {self.unified_target_bias.shape}")
         print(f"Bias weights shape: {self.unified_bias_weights.shape}")
         print(f"Density curves shape: {self.unified_target_density.shape}")
+        print(f"Smoothed bias curves shape: {self.unified_target_bias_curve.shape}")
 
         # Precompute empirical bias distributions for the balanced method.
         # Q[c, j, k] = Gaussian-weighted empirical probability of bias bin k at feat_diff grid point j.
@@ -906,7 +919,7 @@ class GridBasedMultiConditionOptimizer:
             surfaces: Precomputed surfaces, shape (n_unique_surfaces, n_mu1_bias, n_feat_diff)
             cond_params_with_idx: Parameter combinations, shape (n_total_combinations, 3)
             surface_indices: Surface index for each parameter combination, shape (n_total_combinations,)
-            fitting_method: One of "likelihood", "expectation", "density"
+            fitting_method: One of "likelihood", "expectation", "smoothed_exp", "density"
 
         Returns:
             Array of shape (n_conditions, 3) with [sd_feat1, sd_feat2, loss] for each condition
@@ -948,6 +961,20 @@ class GridBasedMultiConditionOptimizer:
             # Compute losses using unified function with weights (MSE for expectation, angular=True)
             losses = _compute_curve_losses(predicted_bias_per_combo, target_bias_per_combo,
                                            loss_type="mse", is_angular=True, weights=weights_per_combo)
+
+        elif fitting_method == "smoothed_exp":
+            # Curve-vs-curve version of "expectation": same MSE-only, angular loss, but
+            # the target is a smoothed (Gaussian rolling-mean) circular bias curve over
+            # the full feat_diff grid instead of hard 8-degree bins, and the model curve
+            # is evaluated at every grid point instead of only the bin-center indices.
+            # No correlation term and no support weighting, matching how "density" fits.
+            all_predicted_bias_curve = _generate_nn_bias_curve_batch(surfaces, jnp.arange(n_feat))
+
+            predicted_bias_curve_per_combo = all_predicted_bias_curve[surface_indices]  # Shape: (n_combos, n_feat_points)
+            target_bias_curve_per_combo = self.unified_target_bias_curve[condition_indices]  # Shape: (n_combos, n_feat_points)
+
+            losses = _compute_curve_losses(predicted_bias_curve_per_combo, target_bias_curve_per_combo,
+                                           loss_type="mse", is_angular=True)
 
         elif fitting_method == "density":
             # Use precomputed target density curves (no function calls inside JIT)
@@ -1049,7 +1076,7 @@ class GridBasedMultiConditionOptimizer:
         else:
             raise ValueError(
                 f"Unknown fitting method: {fitting_method}. Must be one of "
-                f"'likelihood', 'expectation', 'density', 'crps', 'balanced_crps', 'bias_weighted_crps'")
+                f"'likelihood', 'expectation', 'smoothed_exp', 'density', 'crps', 'balanced_crps', 'bias_weighted_crps'")
 
         # Find best parameter for each condition
         min_losses = jax.ops.segment_min(losses, condition_indices, num_segments=self.n_conditions)
@@ -1078,7 +1105,7 @@ class GridBasedMultiConditionOptimizer:
             feat_grid_size: Size of initial condition-specific parameter grid
             min_grid_step: Minimum grid step size (stop criterion)
             zoom_factor: Factor to reduce grid size when zooming in
-            fitting_method: One of "likelihood", "expectation", "density"
+            fitting_method: One of "likelihood", "expectation", "smoothed_exp", "density"
             verbosity: Verbosity level
 
         Returns:

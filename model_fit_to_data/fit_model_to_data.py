@@ -37,7 +37,7 @@ from shared.utils import filter_data_for_fitting, resolve_input_path, resolve_re
 
 
 LOSS_EVALUATION_METHODS = [
-    'density', 'expectation', 'likelihood', 'crps', 'balanced_crps', 'bias_weighted_crps',
+    'density', 'expectation', 'smoothed_exp', 'likelihood', 'crps', 'balanced_crps', 'bias_weighted_crps',
 ]
 
 try:
@@ -386,6 +386,7 @@ def process_subject(
             'target_bias': optimizer.unified_target_bias[i],
             'bias_weights': optimizer.unified_bias_weights[i],
             'target_density': optimizer.unified_target_density[i],
+            'target_bias_curve': optimizer.unified_target_bias_curve[i],
             'bias_feat_indices': optimizer.unified_feat_indices,
             'density_feat_grid': optimizer.feat_diff_grid,
         }
@@ -397,12 +398,13 @@ def process_subject(
     if progress is not None:
         method_task = progress.add_task(f"[magenta]Methods for {subject_id}", total=len(methods_to_run))
     for method in methods_to_run:
-        # The 'expectation' objective fits only the circular-mean bias curve, which
-        # a symmetric motor-noise convolution leaves exactly invariant — sd_motor is
-        # mathematically unidentifiable there. In a motor-noise run it is therefore
-        # skipped entirely (fitting it would just reproduce the no-motor result).
-        if method == "expectation" and not optimizer.skip_motor_noise:
-            log("  Skipping 'expectation': sd_motor is unidentifiable under this "
+        # The 'expectation' and 'smoothed_exp' objectives fit only the circular-mean
+        # bias curve (binned or smoothed), which a symmetric motor-noise convolution
+        # leaves exactly invariant — sd_motor is mathematically unidentifiable there.
+        # In a motor-noise run they are therefore skipped entirely (fitting them would
+        # just reproduce the no-motor result).
+        if method in ("expectation", "smoothed_exp") and not optimizer.skip_motor_noise:
+            log(f"  Skipping '{method}': sd_motor is unidentifiable under this "
                 "objective (symmetric response convolution preserves the circular mean).", "yellow")
             if progress is not None and method_task is not None:
                 progress.advance(method_task)
@@ -703,7 +705,7 @@ if __name__ == '__main__':
     parser.add_argument('--include-outliers', action='store_true',
                         help='Skip outlier filtering.')
     parser.add_argument('--include-methods', nargs='+', default=['density'],
-                        choices=['density', 'expectation', 'likelihood', 'crps', 'balanced_crps', 'bias_weighted_crps'],
+                        choices=['density', 'expectation', 'smoothed_exp', 'likelihood', 'crps', 'balanced_crps', 'bias_weighted_crps'],
                         help='Optimisation method(s) to run.')
     parser.add_argument('--min-trials', type=int, default=30,
                         help='Minimum trials per condition to include.')

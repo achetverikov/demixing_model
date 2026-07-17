@@ -724,6 +724,34 @@ def _compute_empirical_density_asymmetry_core(real_feat_diff, real_bias, feat_di
     return distances, asymmetry_values
 
 
+def compute_target_bias_rolling_curve_core(real_feat_diff, real_bias, feat_diff_grid, weights_sd=20):
+    """
+    Gaussian-weighted (rolling) circular-mean bias curve over feat_diff_grid.
+
+    Same feat_diff-space Gaussian weighting as _compute_empirical_density_asymmetry_core,
+    but normalized to sum to 1 over trials (a true kernel-weighted average) and applied to
+    cos/sin of bias instead of splitting into positive/negative asymmetry.
+
+    Args:
+        real_feat_diff: Array of feature difference values, shape (n_trials,)
+        real_bias: Array of bias values in degrees, shape (n_trials,)
+        feat_diff_grid: Grid of feature difference values to compute the curve at
+        weights_sd: Standard deviation for Gaussian weights in feat_diff dimension
+
+    Returns:
+        target_bias_curve: Circular mean bias in degrees at each feat_diff_grid point
+    """
+    dist_matrix = feat_diff_grid[:, None] - real_feat_diff[None, :]  # (n_grid, n_trials)
+    log_weights = -0.5 * (dist_matrix / weights_sd) ** 2
+    log_weights_normalized = log_weights - jax.scipy.special.logsumexp(log_weights, axis=1, keepdims=True)
+    weight_matrix = jnp.exp(log_weights_normalized)  # each row sums to 1
+
+    bias_rad = jnp.radians(real_bias)
+    cos_curve = weight_matrix @ jnp.cos(bias_rad)
+    sin_curve = weight_matrix @ jnp.sin(bias_rad)
+
+    return jnp.degrees(jnp.arctan2(sin_curve, cos_curve))
+
 
 def filter_data_for_fitting(data, feat_diff_col=None, bias_col=None, verbose=True,
                             min_diss=4.0, max_diss=180.0):

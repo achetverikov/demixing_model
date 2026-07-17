@@ -54,6 +54,7 @@ OPTIMIZER_COLORS = {
     'expectation': '#CC79A7',  # reddish purple
     'density': '#009E73',      # green
     'balanced_crps': '#D55E00',  # vermillion
+    'smoothed_exp': '#F0E442',  # yellow
 }
 OPTIMIZER_LABELS = {
     'likelihood': 'Likelihood',
@@ -61,8 +62,9 @@ OPTIMIZER_LABELS = {
     'expectation': 'Expectation',
     'density': 'Density',
     'balanced_crps': 'Balanced CRPS',
+    'smoothed_exp': 'Smoothed Exp',
 }
-LOSS_EVALUATION_METHODS = ['density', 'expectation', 'likelihood', 'crps', 'balanced_crps']
+LOSS_EVALUATION_METHODS = ['density', 'expectation', 'smoothed_exp', 'likelihood', 'crps', 'balanced_crps']
 
 
 def _angle_display_scale(circ_space: int = 360) -> float:
@@ -467,12 +469,19 @@ def prepare_all_subjects_data(
                         empirical_sd = compute_empirical_sd_curve(
                             data_array[:, 0], data_array[:, 1], n_bins=18)
 
+                    bias_curve_smoothed = saved_curves.get('target_bias_curve')
+
                     experiment_empirical_curves[noise_cond] = {
                         'bias': saved_curves['target_bias'],
                         'asymmetry': saved_curves['target_density'],
                         'sd': empirical_sd,
                         'bias_grid': saved_curves['density_feat_grid'][saved_curves['bias_feat_indices']],
-                        'asymm_grid': saved_curves['density_feat_grid']
+                        'asymm_grid': saved_curves['density_feat_grid'],
+                        # Rolling-mean (Gaussian-weighted) bias curve, same grid as density's
+                        # asymmetry curve. Only present in results saved after smoothed_exp
+                        # was added; older pickles fall back to None (no smoothed line drawn).
+                        'bias_smoothed': bias_curve_smoothed,
+                        'bias_smoothed_grid': saved_curves['density_feat_grid'] if bias_curve_smoothed is not None else None,
                     }
 
             elif all_condition_datasets:
@@ -491,9 +500,11 @@ def prepare_all_subjects_data(
                             condition_indices_array = jnp.array(condition_indices)
                             empirical_bias = jnp.mean(global_optimizer.unified_target_bias[condition_indices_array], axis=0)
                             empirical_asymm = jnp.mean(global_optimizer.unified_target_density[condition_indices_array], axis=0)
+                            empirical_bias_smoothed = jnp.mean(global_optimizer.unified_target_bias_curve[condition_indices_array], axis=0)
                         else:
                             empirical_bias = None
                             empirical_asymm = None
+                            empirical_bias_smoothed = None
 
                         # Compute empirical SD for this specific condition
                         empirical_sd = None
@@ -516,7 +527,10 @@ def prepare_all_subjects_data(
                             'asymmetry': empirical_asymm,
                             'sd': empirical_sd,
                             'bias_grid': empirical_bias_grid,
-                            'asymm_grid': empirical_asymm_grid
+                            'asymm_grid': empirical_asymm_grid,
+                            # Smoothed bias curve shares the full feat_diff grid with asymmetry.
+                            'bias_smoothed': empirical_bias_smoothed,
+                            'bias_smoothed_grid': empirical_asymm_grid if empirical_bias_smoothed is not None else None,
                         }
 
             # Store experiment data
@@ -597,7 +611,7 @@ def create_unified_subject_plot(
             ax1 = axes[0, col]
 
             # Plot optimizer curves
-            legend_entries = []
+            param_lines = []
             for opt in available_optimizers:
                 if opt not in condition_optimizer_curves:
                     continue
@@ -615,16 +629,24 @@ def create_unified_subject_plot(
                 ax1.plot(display_feat_vals, condition_optimizer_curves[opt]['bias'] * angle_display_scale,
                         color=color, linewidth=2, label=f'{label}')
 
-                legend_entries.append(f'{label}: {param_str}')
+                param_lines.append(f'{label}: {param_str}')
 
-            # Plot empirical data
+            # Plot empirical data: raw 8°-binned circular mean (what "expectation" fits
+            # against) and the Gaussian-smoothed rolling-mean curve (what "smoothed_exp"
+            # fits against), so the two targets can be compared directly.
             empirical_bias = condition_empirical_curves.get('bias')
             empirical_bias_grid = condition_empirical_curves.get('bias_grid')
             if empirical_bias is not None and empirical_bias_grid is not None:
                 ax1.plot(np.array(empirical_bias_grid) * angle_display_scale,
                         empirical_bias * angle_display_scale,
-                        'k--', linewidth=2, alpha=0.7, label='Data')
-                legend_entries.append('Data')
+                        'k--', linewidth=2, alpha=0.7, label='Data (binned)')
+
+            empirical_bias_smoothed = condition_empirical_curves.get('bias_smoothed')
+            empirical_bias_smoothed_grid = condition_empirical_curves.get('bias_smoothed_grid')
+            if empirical_bias_smoothed is not None and empirical_bias_smoothed_grid is not None:
+                ax1.plot(np.array(empirical_bias_smoothed_grid) * angle_display_scale,
+                        np.array(empirical_bias_smoothed) * angle_display_scale,
+                        color='black', linestyle=':', linewidth=2, alpha=0.9, label='Data (smoothed)')
 
             ax1.set_xlabel('Feature Difference (°)')
             ax1.set_ylabel('Mu1 Bias (degrees)')
@@ -632,7 +654,7 @@ def create_unified_subject_plot(
             ax1.grid(True, alpha=0.3)
 
             # Add parameter info as text box
-            param_text = '\n'.join(legend_entries[:-1])  # Exclude 'Data' entry
+            param_text = '\n'.join(param_lines)
             ax1.text(0.02, 0.98, param_text, transform=ax1.transAxes,
                     fontsize=8, verticalalignment='top',
                     bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
