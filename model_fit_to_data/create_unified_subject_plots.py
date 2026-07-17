@@ -807,10 +807,23 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                 continue
 
             first_subject_data = prepared_results_list[0]['experiment_data']
-            available_optimizers = first_subject_data['available_optimizers']
             feat_vals = first_subject_data['feat_vals']
             angle_display_scale = _angle_display_scale(circ_space)
             display_feat_vals = np.array(feat_vals) * angle_display_scale
+
+            # Only aggregate optimizers every subject in this condition actually
+            # has. Subjects can be a mix of vintages (e.g. legacy fits from
+            # before motor-noise runs excluded "expectation", alongside subjects
+            # fit later under the current --include-methods set); trusting just
+            # the first subject's optimizer list produces ragged per-optimizer
+            # arrays below and crashes the DataFrame construction.
+            common_optimizers = set(first_subject_data['available_optimizers'])
+            for prepared_result in prepared_results_list[1:]:
+                common_optimizers &= set(prepared_result['experiment_data']['available_optimizers'])
+            available_optimizers = [
+                opt for opt in first_subject_data['available_optimizers']
+                if opt in common_optimizers
+            ]
 
             if not available_optimizers:
                 continue
