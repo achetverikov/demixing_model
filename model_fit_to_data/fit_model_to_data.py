@@ -113,23 +113,42 @@ def _canonical_condition_key(key: str) -> str:
     return f"{_sanitize(subject)}#{_sanitize(experiment)}#{_sanitize(condition)}"
 
 
-def _merge_result_entries(old: Dict, new: Dict) -> Dict:
-    """Merge duplicate legacy/current condition entries without dropping methods."""
-    merged = dict(old)
-    merged.update(new)
-    return merged
-
-
 def canonicalize_result_keys(results: Dict) -> Dict:
-    """Collapse legacy unsanitized condition keys onto sanitized keys."""
+    """Canonicalize legacy result keys, rejecting lossy-key collisions."""
     canonical = {}
+    source_keys = {}
     for key, entry in results.items():
         ckey = _canonical_condition_key(key)
-        if ckey in canonical and isinstance(canonical[ckey], dict) and isinstance(entry, dict):
-            canonical[ckey] = _merge_result_entries(canonical[ckey], entry)
-        else:
-            canonical[ckey] = entry
+        if ckey in canonical and source_keys[ckey] != str(key):
+            raise ValueError(
+                "Result-key collision after sanitization: "
+                f"{source_keys[ckey]!r} and {str(key)!r} both map to {ckey!r}"
+            )
+        canonical[ckey] = entry
+        source_keys[ckey] = str(key)
     return canonical
+
+
+def _validate_group_key_uniqueness(
+    df: pd.DataFrame, exp_col: str, subject_col: str, condition_col: str
+) -> None:
+    """Fail before fitting if distinct labels collapse to the same result key."""
+    seen_subjects = {}
+    seen_conditions = {}
+    label_cols = [subject_col, exp_col, condition_col]
+    for values in df[label_cols].drop_duplicates().itertuples(index=False, name=None):
+        raw = tuple(str(value) for value in values)
+        for source, sanitized, seen in (
+            (raw[:2], "#".join(_sanitize(value) for value in raw[:2]), seen_subjects),
+            (raw, "#".join(_sanitize(value) for value in raw), seen_conditions),
+        ):
+            previous = seen.get(sanitized)
+            if previous is not None and previous != source:
+                raise ValueError(
+                    "Distinct labels collide after result-key sanitization: "
+                    f"{previous!r} and {source!r} both map to {sanitized!r}"
+                )
+            seen[sanitized] = source
 
 
 def load_data(data_path: str, outlier_col: Optional[str], include_outliers: bool) -> pd.DataFrame:
@@ -247,6 +266,7 @@ def group_conditions(
     min_trials: int,
 ) -> Dict[str, Dict[str, pd.DataFrame]]:
     """Group data into {subject#exp: {subject#exp#condition: DataFrame}} structure."""
+    _validate_group_key_uniqueness(df, exp_col, subject_col, condition_col)
     groups = {}
     for exp in df[exp_col].unique():
         exp_data = df[df[exp_col] == exp]

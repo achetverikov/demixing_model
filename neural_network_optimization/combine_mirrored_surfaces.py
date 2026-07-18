@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
-Combine Mirrored Surfaces Script
-===============================
+Legacy Combine Mirrored Surfaces Script
+=======================================
+
+Deprecated: the current create_averaged_surfaces_from_samples.py pipeline performs
+this mirroring while building each averaged surface. This file is retained only for
+old, already-generated uncombined surface folders.
 
 This script combines mirrored surfaces by averaging log-likelihoods to create higher-quality surfaces.
 The symmetry property: mu1_comp1_surface(sf1, sf2, sp) = mu1_comp2_surface(sf2, sf1, sp)
@@ -290,7 +294,10 @@ def verify_averaged_surfaces(output_folder: str = "combined_mirrored_surfaces_10
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description='Combine mirrored surfaces by averaging log-likelihoods')
+    print(
+        "WARNING: legacy tool; current averaged-surface generation already combines mirrors."
+    )
+    parser = argparse.ArgumentParser(description='LEGACY: combine old mirrored surface files')
     parser.add_argument('--input-folder', type=str, default=None,
                         help='Input folder containing surface files')
     parser.add_argument('--output-folder', type=str, default="combined_mirrored_surfaces_10k",

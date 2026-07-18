@@ -343,7 +343,7 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
         # Group by unique sd_motor values for efficiency
         unique_motors, motor_indices = jnp.unique(sd_motor, return_inverse=True)
         
-        final_surfaces = []
+        final_surfaces = jnp.empty_like(log_surfaces_batch)
         for i, unique_motor in enumerate(unique_motors):
             # Get surfaces for this motor noise level
             mask = motor_indices == i
@@ -352,9 +352,9 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
             if len(surfaces_subset) > 0:
                 # Apply motor noise
                 noisy_surfaces = apply_motor_noise(surfaces_subset, float(unique_motor))
-                final_surfaces.append(noisy_surfaces)
-        
-        log_surfaces_batch = jnp.concatenate(final_surfaces, axis=0)
+                final_surfaces = final_surfaces.at[mask].set(noisy_surfaces)
+
+        log_surfaces_batch = final_surfaces
     else:
         print("Skipping motor noise (sd_motor = 0)")
     

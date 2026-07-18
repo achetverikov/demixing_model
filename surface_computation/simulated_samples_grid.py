@@ -534,9 +534,6 @@ class ChunkedGridComputer:
     def _acquire_chunk_lock(self, chunk_id: str) -> bool:
         return self.lock_backend.acquire(chunk_id, self.machine_id, self.lock_ttl)
 
-    def _release_chunk_lock(self, chunk_id: str) -> None:
-        self.lock_backend.release(chunk_id, self.machine_id)
-
     def _log_error(self, param_name: str, param_hash: str,
                    sd_feat1: float, sd_feat2: float, sd_spat: float,
                    error: Exception) -> None:
@@ -968,15 +965,16 @@ class ChunkedGridComputer:
             pickle.dump({'manifest': manifest, 'surfaces': surfaces}, f, protocol=pickle.HIGHEST_PROTOCOL)
         tmp_bundle.replace(bundle_path)
 
-        tmp_manifest = manifest_path.with_suffix(manifest_path.suffix + '.tmp')
+        tmp_manifest = manifest_path.with_suffix(manifest_path.suffix + '.pending')
         with open(tmp_manifest, 'w') as f:
             json.dump(manifest, f, indent=2)
-        tmp_manifest.replace(manifest_path)
 
         if self.object_store:
             try:
                 bundle_key = self.object_store.upload_file(bundle_path)
-                manifest_key = self.object_store.upload_file(manifest_path)
+                manifest_key = self.object_store.upload_file(
+                    tmp_manifest, object_name=manifest_name
+                )
                 print(
                     f"  [{self.machine_id}] Uploaded bundle s3://{self.object_store.config.bucket}/{bundle_key} "
                     f"and manifest {manifest_key}"
@@ -984,6 +982,10 @@ class ChunkedGridComputer:
             except Exception as e:
                 print(f"  [{self.machine_id}] Bundle upload failed: {e}")
                 return False
+
+        # The manifest is the local completion marker. Publish it only after the
+        # durable bundle and manifest uploads have both succeeded.
+        tmp_manifest.replace(manifest_path)
 
         if self.completion_registry:
             try:
@@ -1051,7 +1053,7 @@ class ChunkedGridComputer:
 
         if self.pipeline and self.bundle_output:
             if not self._bundle_chunk_outputs(chunk_id, chunk_start_idx, chunk_end_idx, samples_params):
-                print(f"[{self.machine_id}] {chunk_id} bundle was not completed")
+                raise RuntimeError(f"{chunk_id} bundle was not completed")
 
         chunk_time = time.time() - chunk_start_time
         label = 'surfaces' if self.pipeline else 'samples'
@@ -1130,29 +1132,30 @@ class ChunkedGridComputer:
                 break
 
             chunk_id = f"L{self.grid_level}_chunk_{chunk_start:05d}_{min(chunk_start + chunk_size, self.total_groups):05d}"
-            try:
-                surfaces_computed, surfaces_skipped, chunk_time = self._process_chunk(
-                    chunk_start, chunk_size, samples_params
-                )
+            interrupted = False
+            with self.lock_backend.maintain(chunk_id, self.machine_id, self.lock_ttl):
+                try:
+                    surfaces_computed, surfaces_skipped, chunk_time = self._process_chunk(
+                        chunk_start, chunk_size, samples_params
+                    )
 
-                # Update session stats
-                session_stats['chunks_processed'] += 1
-                session_stats['samples_computed'] += surfaces_computed
-                session_stats['samples_skipped'] += surfaces_skipped
-                session_stats['total_computation_time'] += chunk_time
+                    # Update session stats
+                    session_stats['chunks_processed'] += 1
+                    session_stats['samples_computed'] += surfaces_computed
+                    session_stats['samples_skipped'] += surfaces_skipped
+                    session_stats['total_computation_time'] += chunk_time
 
-                self._release_chunk_lock(chunk_id)
-                self._save_progress_summary(session_stats)
-                time.sleep(1)
+                    self._save_progress_summary(session_stats)
+                    time.sleep(1)
 
-            except ChunkConflict as e:
-                print(f"\n[{self.machine_id}] Chunk conflict detected: {e}")
-                print(f"[{self.machine_id}] Releasing lock on {chunk_id} and reassigning chunk.")
-                self._release_chunk_lock(chunk_id)
+                except ChunkConflict as e:
+                    print(f"\n[{self.machine_id}] Chunk conflict detected: {e}")
+                    print(f"[{self.machine_id}] Releasing lock on {chunk_id} and reassigning chunk.")
 
-            except KeyboardInterrupt:
-                print(f"\n[{self.machine_id}] Interrupted by user")
-                self._release_chunk_lock(chunk_id)
+                except KeyboardInterrupt:
+                    print(f"\n[{self.machine_id}] Interrupted by user")
+                    interrupted = True
+            if interrupted:
                 break
 
         # Final session summary
@@ -1886,8 +1889,9 @@ def parse_arguments():
                         help='Actually perform cleanup operations (overrides --dry-run)')
     parser.add_argument('--grid-level', type=int, default=1, choices=[1, 2],
                         help='Grid refinement level (1=coarse 10°, 2=fine 5°)')
-    parser.add_argument('--auto-advance', action='store_true', default=True,
-                        help='Automatically advance to next grid level when current is complete')
+    parser.add_argument('--auto-advance', action=argparse.BooleanOptionalAction, default=True,
+                        help='Automatically advance to the next grid level when complete '
+                             '(default: enabled; use --no-auto-advance to stop after this level)')
     parser.add_argument('--test-mode', action='store_true',
                         help='Run in test mode with reduced parameters')
     parser.add_argument('--diagonal-covariance', action=argparse.BooleanOptionalAction, default=True,

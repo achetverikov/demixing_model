@@ -164,14 +164,16 @@ def _canonical_condition_key(key: str) -> str:
 
 def canonicalize_result_keys(results: Dict) -> Dict:
     canonical = {}
+    source_keys = {}
     for key, entry in results.items():
         ckey = _canonical_condition_key(key)
-        if ckey in canonical and isinstance(canonical[ckey], dict) and isinstance(entry, dict):
-            merged = dict(canonical[ckey])
-            merged.update(entry)
-            canonical[ckey] = merged
-        else:
-            canonical[ckey] = entry
+        if ckey in canonical and source_keys[ckey] != str(key):
+            raise ValueError(
+                "Result-key collision after sanitization: "
+                f"{source_keys[ckey]!r} and {str(key)!r} both map to {ckey!r}"
+            )
+        canonical[ckey] = entry
+        source_keys[ckey] = str(key)
     return canonical
 
 

@@ -34,8 +34,7 @@ def load_filtered_surfaces(folder: str = config.surfaces_folder, low=30, high=60
             data = load_surface(file)
             # New format: data contains 'surface' (Surface object) and 'parameters'
             surface_obj = data["surface"]
-            # For training, we need mu1_comp1_surface which has shape (180, 90)
-            if surface_obj.mu1_comp1_surface.shape == (180, 90):
+            if surface_obj.mu1_comp1_surface.shape == config.mu1_surface_shape:
                 surfaces_list.append(data)
         except Exception as e:
             print(f"Error reading {file.name}: {e}")

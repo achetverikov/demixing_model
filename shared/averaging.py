@@ -123,7 +123,7 @@ def weighted_kde_single_step_bounded(i, samples, bias_grid, feat_diff_steps,
 # ---------------------------------------------------------------------------
 
 def make_averaging_functions(config, bias_bandwidth: float = 0.075,
-                              feat_bandwidth: float = 3.0, use_bounded: bool = True):
+                              feat_bandwidth: float = 3.0):
     """Compile and return everything needed to run KDE averaging.
 
     Returns a dict with keys:

@@ -22,6 +22,7 @@ import json
 import os
 import threading
 import time
+import uuid
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from datetime import datetime
@@ -71,19 +72,28 @@ class LockBackend(ABC):
             yield False
             return
 
+        with self.maintain(key, owner, ttl_seconds):
+            yield True
+
+    @contextmanager
+    def maintain(self, key: str, owner: str, ttl_seconds: int = 1800):
+        """Heartbeat and finally release a lock that the caller already acquired."""
+
         stop = threading.Event()
 
         def _heartbeat():
-            interval = max(ttl_seconds / 3, 10)
+            interval = max(ttl_seconds / 3, 0.1)
             while not stop.wait(interval):
-                self.refresh(key, owner, ttl_seconds)
+                if not self.refresh(key, owner, ttl_seconds):
+                    return
 
         t = threading.Thread(target=_heartbeat, daemon=True)
         t.start()
         try:
-            yield True
+            yield
         finally:
             stop.set()
+            t.join(timeout=1)
             self.release(key, owner)
 
 
@@ -198,63 +208,103 @@ class RedisLockBackend(LockBackend):
 class FileLockBackend(LockBackend):
     """File-based lock compatible with OneDrive-synced shared folders.
 
-    Lock files are JSON: {owner, start_time, timestamp}.
-    TTL is enforced by comparing start_time against the current clock;
-    refresh() touches the file mtime as a heartbeat.
+    Lock files contain an owner plus a unique acquisition token. The file mtime
+    is the heartbeat, so a long-lived but actively refreshed lock does not become
+    stale, and an expired process cannot refresh or release a replacement lock.
     """
 
     def __init__(self, lock_dir: Path, stale_multiplier: float = 1.0):
         self._dir = Path(lock_dir)
         # A lock is considered stale after ttl_seconds * stale_multiplier
         self._stale_mult = stale_multiplier
+        self._tokens = {}
 
     def _lf(self, key: str) -> Path:
         return self._dir / f"computing_{key}.lock"
 
     def acquire(self, key: str, owner: str, ttl_seconds: int = 10800) -> bool:
         lf = self._lf(key)
+        self._dir.mkdir(parents=True, exist_ok=True)
+        token = uuid.uuid4().hex
         try:
             with open(lf, 'x') as f:
                 json.dump({
                     'owner': owner,
+                    'token': token,
                     'start_time': time.time(),
                     'timestamp': datetime.now().isoformat(),
                 }, f)
+                f.flush()
+                os.fsync(f.fileno())
+            self._tokens[(key, owner)] = token
             return True
         except FileExistsError:
             return self._reclaim_if_stale(lf, key, owner, ttl_seconds)
 
     def release(self, key: str, owner: str) -> None:
         lf = self._lf(key)
+        token = self._tokens.get((key, owner))
+        if token is None:
+            return
         try:
-            lf.unlink()
-        except FileNotFoundError:
-            pass
+            with open(lf) as f:
+                data = json.load(f)
+            if data.get('owner') != owner or data.get('token') != token:
+                return
+            before = lf.stat()
+            with open(lf) as f:
+                data = json.load(f)
+                if data.get('owner') != owner or data.get('token') != token:
+                    return
+            after = lf.stat()
+            if self._same_file_state(before, after):
+                lf.unlink(missing_ok=True)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return
+        finally:
+            self._tokens.pop((key, owner), None)
 
     def refresh(self, key: str, owner: str, ttl_seconds: int = 10800) -> bool:
         lf = self._lf(key)
-        try:
-            lf.touch()
-            return True
-        except OSError:
+        token = self._tokens.get((key, owner))
+        if token is None:
             return False
+        try:
+            with open(lf) as f:
+                data = json.load(f)
+            if data.get('owner') != owner or data.get('token') != token:
+                return False
+            os.utime(lf, None)
+            return True
+        except (OSError, json.JSONDecodeError):
+            return False
+
+    @staticmethod
+    def _same_file_state(left, right) -> bool:
+        return (
+            left.st_dev, left.st_ino, left.st_size, left.st_mtime_ns
+        ) == (
+            right.st_dev, right.st_ino, right.st_size, right.st_mtime_ns
+        )
 
     def _reclaim_if_stale(self, lf: Path, key: str, owner: str,
                            ttl_seconds: int) -> bool:
         try:
-            with open(lf) as f:
-                data = json.load(f)
-            age = time.time() - data.get('start_time', 0)
-            existing_owner = data.get('owner', '')
-            is_stale = (
-                age > ttl_seconds * self._stale_mult
-                or existing_owner == owner  # reclaim own crashed lock
-            )
-            if is_stale:
-                lf.unlink(missing_ok=True)
-                return self.acquire(key, owner, ttl_seconds)
-        except (json.JSONDecodeError, OSError):
+            before = lf.stat()
+            age = time.time() - before.st_mtime
+            if age <= ttl_seconds * self._stale_mult:
+                return False
+            try:
+                with open(lf) as f:
+                    json.load(f)
+            except json.JSONDecodeError:
+                pass
+            after = lf.stat()
+            if not self._same_file_state(before, after):
+                return False
             lf.unlink(missing_ok=True)
+            return self.acquire(key, owner, ttl_seconds)
+        except (FileNotFoundError, OSError):
             return self.acquire(key, owner, ttl_seconds)
         return False
 
@@ -267,7 +317,8 @@ class FileLockBackend(LockBackend):
                 key = lf.stem.removeprefix('computing_')
                 result[key] = {
                     'owner': data.get('owner'),
-                    'age_seconds': time.time() - data.get('start_time', 0),
+                    'age_seconds': time.time() - lf.stat().st_mtime,
+                    'held_since_seconds': time.time() - data.get('start_time', 0),
                     'ttl_remaining_seconds': None,
                 }
             except (json.JSONDecodeError, OSError):

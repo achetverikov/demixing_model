@@ -56,8 +56,8 @@ class SurfaceObjectStore:
     def _key(self, name: str) -> str:
         return f"{self.config.prefix}/{name}" if self.config.prefix else name
 
-    def upload_file(self, path: Path) -> str:
-        key = self._key(path.name)
+    def upload_file(self, path: Path, object_name: Optional[str] = None) -> str:
+        key = self._key(object_name or path.name)
         self._client.upload_file(str(path), self.config.bucket, key)
         return key
 

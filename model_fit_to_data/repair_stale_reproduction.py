@@ -58,6 +58,9 @@ def main() -> None:
     raw_by_canonical: dict[str, list[str]] = {}
     for k in results:
         raw_by_canonical.setdefault(canonical_key(k), []).append(k)
+    collisions = {key: raw for key, raw in raw_by_canonical.items() if len(raw) > 1}
+    if collisions:
+        raise ValueError(f"Result-key collisions after sanitization: {collisions}")
 
     removed = 0
     unmatched = []

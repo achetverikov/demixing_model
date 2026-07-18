@@ -94,7 +94,14 @@ class SurfaceDataManager:
                 except Exception:
                     continue
 
-        self.surfaces_df = pd.DataFrame(surfaces).sort_values(['sd_feat1', 'sd_feat2', 'sd_spat'])
+        columns = [
+            'file', 'sd_feat1', 'sd_feat2', 'sd_spat', 'filename', 'source', 'surface_type'
+        ]
+        self.surfaces_df = pd.DataFrame(surfaces, columns=columns)
+        if not self.surfaces_df.empty:
+            self.surfaces_df = self.surfaces_df.sort_values(
+                ['sd_feat1', 'sd_feat2', 'sd_spat']
+            )
 
         # Show loading stats
         if len(surfaces) > 0:

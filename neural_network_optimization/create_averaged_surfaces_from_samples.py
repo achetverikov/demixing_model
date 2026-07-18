@@ -18,138 +18,19 @@ Only processes L1 parameter combinations (coarse grid).
 import pickle
 import numpy as np
 import jax.numpy as jnp
-import jax
-import jax.lax
 from pathlib import Path
 from typing import Dict, Tuple, List, Optional
 import re
 import gzip
-from dataclasses import dataclass
-from shared.utils import Surface, AveragedSurface, resolve_input_path, resolve_results_path, get_git_commit
+from shared.utils import AveragedSurface, resolve_input_path, resolve_results_path, get_git_commit
 from shared.config import Config
-from jax.scipy.stats import gaussian_kde
+from shared.averaging import prefilter_isolated_samples, make_averaging_functions
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
 config = Config()
 config.samples_folder = './sim_samples_10k_20samples'
 output_folder = "averaged_surfaces_10k_20samples" 
-
-@jax.jit
-def prefilter_isolated_samples(samples, feat_bin_size=8, bias_bin_size=8, min_neighbors=3):
-    """Flag isolated samples as NaN using a 2D histogram density check.
-
-    Bins the (feat_diff_index × bias_value) space and marks any sample whose
-    3×3 bin neighbourhood has fewer than min_neighbors total samples as NaN.
-    NaN-flagged samples are assigned zero weight in the KDE and do not
-    contribute to the density estimate.  Returns (filtered_samples, n_removed).
-    """
-    feat_diff_n, sample_n = samples.shape
-    
-    # Flatten all coordinates
-    feat_coords = jnp.arange(feat_diff_n)[:, None].repeat(sample_n, axis=1).flatten()
-    bias_coords = samples.flatten()
-    
-    # Create 2D histogram bins
-    feat_bins = jnp.arange(0, feat_diff_n + feat_bin_size, feat_bin_size)
-    bias_bins = jnp.arange(-180, 180 + bias_bin_size, bias_bin_size)
-    
-    # Count samples in each bin
-    hist, _, _ = jnp.histogram2d(feat_coords, bias_coords, bins=[feat_bins, bias_bins])
-    
-    # For each sample, check if its neighborhood has enough samples
-    def check_sample_neighborhood(feat_idx, sample_idx):
-        """Return filtered bias for a single sample based on local density."""
-        bias_val = samples[feat_idx, sample_idx]
-        
-        # Find bin indices
-        feat_bin_idx = feat_idx // feat_bin_size
-        bias_bin_idx = jnp.clip((bias_val + 180) // bias_bin_size, 0, hist.shape[1] - 1).astype(jnp.int32)
-        
-        # Sum neighbors in 3x3 neighborhood
-        neighbor_sum = 0
-        for df in [-1, 0, 1]:
-            for db in [-1, 0, 1]:
-                f_idx = jnp.clip(feat_bin_idx + df, 0, hist.shape[0] - 1)
-                b_idx = jnp.clip(bias_bin_idx + db, 0, hist.shape[1] - 1)
-                neighbor_sum += hist[f_idx, b_idx]
-        
-        return jnp.where(neighbor_sum >= min_neighbors, bias_val, jnp.nan)
-
-    # Apply filtering to all samples
-    filtered = jax.vmap(jax.vmap(check_sample_neighborhood, in_axes=(None, 0)),
-                       in_axes=(0, None))(
-        jnp.arange(feat_diff_n), jnp.arange(sample_n)
-    )
-
-    removed_count = jnp.sum(jnp.isnan(filtered))
-
-    return filtered, removed_count
-
-def sum_wrapped_pdf(kde, bias_grid):
-    """Sum wrapped PDF for circular boundary handling"""
-    kde_sum = kde.evaluate(bias_grid) + kde.evaluate(bias_grid + 360) + kde.evaluate(bias_grid - 360)
-    epsilon = 1e-10  # Or something smaller if needed
-    log_density = jnp.log(jax.nn.softplus(kde_sum / epsilon) * epsilon)
-    return log_density
-
-def weighted_kde_single_step_bounded(i, samples, bias_grid, feat_diff_steps, bias_bandwidth, feat_bandwidth, ref_sum, circular=True):
-    """Compute weighted KDE for a single feat_diff step with boundary compensation"""
-    current_step = feat_diff_steps[i]
-    
-    # Compute Gaussian weights based on feat_diff distance
-    distances = jnp.abs(feat_diff_steps - current_step)
-    weights = jnp.exp(-0.5 * (distances / feat_bandwidth) ** 2)
-    
-    # Use fixed maximum window size to avoid dynamic slice issues
-    max_window_size = 15  # Should cover most reasonable bandwidths
-    half_window = max_window_size // 2
-    
-    # Calculate window bounds
-    start_idx = jnp.maximum(0, i - half_window)
-    #start_idx = jnp.minimum(start_idx, len(feat_diff_steps) - max_window_size)
-    #start_idx = jnp.maximum(start_idx, 0)
-    
-    # Extract fixed-size window
-    window_weights = jax.lax.dynamic_slice(weights, (start_idx,), (max_window_size,))
-    window_samples = jax.lax.dynamic_slice(samples, (start_idx, 0), (max_window_size, samples.shape[1]))
-    
-    # Create masks for valid elements
-    #window_indices = jnp.arange(max_window_size) + start_idx
-    #bounds_mask = window_indices < len(feat_diff_steps)
-    #distance_mask = jnp.abs(window_indices - i) <= (feat_bandwidth * 3)
-    #valid_mask = bounds_mask & distance_mask
-    
-    # Apply masks
-    valid_weights = window_weights#jnp.where(valid_mask, window_weights, 0.0)
-    
-    # Scale weights to compensate for boundary truncation
-    current_sum = jnp.sum(valid_weights)
-    scale_factor = jnp.where(current_sum > 0, ref_sum / current_sum, 1.0)
-    min_weight = jnp.min(jnp.where(valid_weights > 0, valid_weights, jnp.inf))
-    min_weight = jnp.where(jnp.isfinite(min_weight), min_weight, 0.0)
-    compensated_weights = min_weight + (valid_weights - min_weight) * scale_factor
-    scaled_weights = compensated_weights / jnp.sum(compensated_weights)
-    
-    # Create weighted samples; NaN-flagged outliers get zero weight
-    weighted_samples = window_samples.flatten()
-    sample_weights = jnp.repeat(scaled_weights, window_samples.shape[1])
-    nan_mask = jnp.isnan(weighted_samples)
-    sample_weights = jnp.where(nan_mask, 0.0, sample_weights)
-    weighted_samples = jnp.where(nan_mask, 0.0, weighted_samples)
-
-    # Weighted 1D KDE
-    kde = gaussian_kde(weighted_samples, bw_method=bias_bandwidth, weights=sample_weights)
-    
-    # Simple conditional - will work with static_argnames
-    if circular:
-        # Circular boundary handling for bias parameters (angles)
-        return sum_wrapped_pdf(kde, bias_grid)
-    else:
-        # No circular boundary for spatial parameters
-        return kde.logpdf(bias_grid)
-
-
 
 def find_sample_file(folder: Path, sf1: float, sf2: float, sp: float) -> Optional[Path]:
     """Find sample file matching the given parameters.
@@ -496,7 +377,7 @@ def process_single_surface(params_tuple, input_path, output_path, compiled_vmap_
         if stub_processed_samples:
             stub_sample_file(original_file)
             print(f"[Thread {thread_id}] Stubbed {original_file.name}")
-            if sf1 != sf2:
+            if mirror_samples is not None:
                 stub_sample_file(mirror_file)
                 print(f"[Thread {thread_id}] Stubbed {mirror_file.name}")
 
@@ -510,7 +391,6 @@ def process_single_surface(params_tuple, input_path, output_path, compiled_vmap_
 
 def create_all_averaged_surfaces(input_folder: str = None, output_folder: str = None,
                                 bias_bandwidth: float = 0.075, feat_bandwidth: float = 5.0,
-                                use_bounded: bool = True,
                                 n_workers: int = 2, results_dir: str = "results",
                                 include_all_params: bool = False,
                                 stub_processed_samples: bool = False,
@@ -541,49 +421,15 @@ def create_all_averaged_surfaces(input_folder: str = None, output_folder: str = 
     print(f"Creating averaged surfaces from samples in: {input_path}")
     print(f"Output folder: {output_path}")
     print(f"KDE parameters: bias_bw={bias_bandwidth}, feat_bw={feat_bandwidth}")
-    print(f"Using bounded method: {use_bounded}")
-    
-    # Setup grids and compute reference weight sum for bounded method
-    feat_diff_grid = config.create_grid('feat_diff')
-    mu1_bias_grid = config.create_grid('mu1_bias')
-    mu2_bias_grid = config.create_grid('mu2_bias')
-    feat_diff_steps = jnp.arange(len(feat_diff_grid))
-    
-    ref_sum = None
-    if use_bounded:
-        # Pre-compute reference weight sum for center point (for bounded method)
-        center_step = len(feat_diff_steps) // 2
-        center_distances = jnp.abs(feat_diff_steps - center_step)
-        center_weights = jnp.exp(-0.5 * (center_distances / feat_bandwidth) ** 2)
-        center_valid_mask = center_weights >= 0.01  # Fixed threshold for boundary calculation
-        center_valid_weights = jnp.where(center_valid_mask, center_weights, 0.0)
-        ref_sum = jnp.sum(center_valid_weights)
-        print(f"Reference weight sum for bounded method: {ref_sum:.4f}")
-    
-    # Create simple vmap functions with fixed window size
-    print("Compiling JAX vmap functions...")
-    
-    @jax.jit
-    def kde_circular(i, samples):
-        """Compute circular KDE log densities for one feature index."""
-        return weighted_kde_single_step_bounded(
-            i, samples, mu1_bias_grid, feat_diff_steps,
-            bias_bandwidth, feat_bandwidth, ref_sum, True
-        )
-    
-    @jax.jit
-    def kde_spatial(i, samples):
-        """Compute spatial KDE log densities for one feature index."""
-        return weighted_kde_single_step_bounded(
-            i, samples, mu2_bias_grid, feat_diff_steps,
-            bias_bandwidth, feat_bandwidth, ref_sum, False
-        )
-    
-    # Create vmap functions
-    compiled_vmap_circular = jax.vmap(kde_circular, in_axes=(0, None))
-    compiled_vmap_spatial = jax.vmap(kde_spatial, in_axes=(0, None))
-    
-    print("JAX functions compiled using closures.")
+    print("Compiling shared bounded-KDE functions...")
+    avg_fns = make_averaging_functions(config, bias_bandwidth, feat_bandwidth)
+    compiled_vmap_circular = avg_fns['vmap_circular']
+    compiled_vmap_spatial = avg_fns['vmap_spatial']
+    feat_diff_steps = avg_fns['feat_diff_steps']
+    feat_diff_grid = avg_fns['feat_diff_grid']
+    mu1_bias_grid = avg_fns['mu1_bias_grid']
+    mu2_bias_grid = avg_fns['mu2_bias_grid']
+    ref_sum = avg_fns['ref_sum']
     
     # Get parameter combinations (L1-only by default)
     combinations = (
@@ -675,9 +521,6 @@ if __name__ == "__main__":
                         help='Bandwidth for bias dimension KDE')
     parser.add_argument('--feat-bandwidth', type=float, default=3.0,
                         help='Bandwidth for feat_diff dimension smoothing')
-    # Weight threshold removed - using fixed window approach instead
-    parser.add_argument('--no-bounded', action='store_true',
-                        help='Disable bounded method (use standard method instead)')
     parser.add_argument('--workers', type=int, default=4,
                         help='Number of worker threads for parallel processing')
     parser.add_argument('--include-all-params', action='store_true',
@@ -692,8 +535,8 @@ if __name__ == "__main__":
 
     create_all_averaged_surfaces(
         args.input_folder, args.output_folder,
-        args.bias_bandwidth, args.feat_bandwidth, not args.no_bounded,
-        args.workers, results_dir=args.results_dir,
+        args.bias_bandwidth, args.feat_bandwidth, args.workers,
+        results_dir=args.results_dir,
         include_all_params=args.include_all_params,
         stub_processed_samples=args.stub_samples,
         dry_run=args.dry_run,

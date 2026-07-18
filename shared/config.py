@@ -2,28 +2,7 @@
 
 from dataclasses import dataclass
 from typing import Tuple
-import jax, os, platform
-from shared.seed_manager import SeedManager
-from datetime import datetime
 
-# jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
-# jax.config.update("jax_persistent_cache_min_compile_time_secs", 5)
-# jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
-machine_id = platform.node()  # Gets hostname
-cache_dir = os.path.expanduser(f"~/.cache/jax_cache_{machine_id}")
-# print(cache_dir)
-os.makedirs(cache_dir, exist_ok=True)
-
-jax.config.update("jax_compilation_cache_dir", cache_dir)
-jax.config.update("jax_persistent_cache_min_compile_time_secs", 2)  # Lower threshold
-
-# Enable XLA caching properly
-os.environ['XLA_FLAGS'] = (
-    os.environ.get('XLA_FLAGS', '') +
-    ' --xla_gpu_autotune_level=4'  # Cache GPU kernel tuning
-)
-print('Jax config updated to use persistent cache in /tmp/jax_cache')
-print(f'Jax is running on device {jax.devices()}')
 @dataclass
 class Config:
     surfaces_folder: str = './likelihood_surfaces_10k'
@@ -42,8 +21,6 @@ class Config:
     mu2_bias_range: Tuple[int, int] = (-498, 498)
 
     n_samples: int = 100
-
-    seed = SeedManager(int(datetime.now().timestamp()))
 
     @property
     def data_range(self):

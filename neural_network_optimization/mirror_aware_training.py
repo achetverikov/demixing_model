@@ -255,7 +255,8 @@ def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_
                             weight_decay: float = 1e-4,
                             save_dir: str = "neural_net_checkpoints",
                             save_every: int = 25,
-                            results_dir: str = "results") -> train_state.TrainState:
+                            results_dir: str = "results",
+                            seed: int = 42) -> train_state.TrainState:
     """
     Train mirror-aware model on averaged surfaces.
     
@@ -307,9 +308,10 @@ def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_
     print(f"  Batches per epoch: {n_batches}")
     print(f"  Total steps: {total_steps}")
     print(f"  Warmup steps: {warmup_steps}")
+    print(f"  Seed: {seed}")
     
     # Create training state
-    key = jax.random.PRNGKey(42)
+    key = jax.random.PRNGKey(seed)
     state = create_mirror_aware_train_state(
         key=key,
         learning_rate=learning_rate,
@@ -342,12 +344,11 @@ def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_
         weight_decay=weight_decay,
         warmup_steps=warmup_steps,
         total_steps=total_steps,
-        mirror_aware=True
+        mirror_aware=True,
+        seed=seed,
     )
-    
-    # Pre-generate epoch permutations
-    print("Pre-generating epoch permutations...")
-    all_perms = [np.random.permutation(n_samples) for _ in range(n_epochs)]
+
+    rng = np.random.default_rng(seed)
     
     # Training loop
     print("Starting training...")
@@ -355,7 +356,7 @@ def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_
         epoch_start_time = time.time()
         
         # Shuffle data
-        perm = all_perms[epoch]
+        perm = rng.permutation(n_samples)
         batched_indices = perm[:n_batches * batch_size].reshape(n_batches, batch_size)
         
         # Training metrics — accumulated as JAX arrays to avoid per-step GPU→CPU sync
@@ -410,10 +411,15 @@ def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_
     return state
 
 
-def test_mirror_symmetry_trained_model(checkpoint_path: str) -> None:
-    """Test that trained model still enforces mirror symmetry."""
+def check_trained_model_outputs(checkpoint_path: str) -> bool:
+    """Check that both ordered component predictions are finite and normalized.
+
+    The component pair for (a, b) is [F(a, b), F(b, a)]. These two surfaces
+    generally differ when a != b; swapping the items reverses the pair rather
+    than making the individual surfaces invariant.
+    """
     
-    print("Testing mirror symmetry of trained model...")
+    print("Checking ordered component predictions from trained model...")
     
     # Load checkpoint
     with open(checkpoint_path, 'rb') as f:
@@ -431,15 +437,20 @@ def test_mirror_symmetry_trained_model(checkpoint_path: str) -> None:
     pred_1 = model.apply(params, test_input_1)
     pred_2 = model.apply(params, test_input_2)
     
-    # Check symmetry
-    diff = jnp.max(jnp.abs(pred_1 - pred_2))
+    component_diff = jnp.max(jnp.abs(pred_1 - pred_2))
+    integrals = jnp.sum(jnp.exp(jnp.concatenate([pred_1, pred_2], axis=0)), axis=1)
+    integrals = integrals * config.mu1_bias_step
+    finite = jnp.all(jnp.isfinite(pred_1)) & jnp.all(jnp.isfinite(pred_2))
+    normalized = jnp.allclose(integrals, 1.0, rtol=1e-5, atol=1e-5)
+    valid = finite & normalized
     
     print(f"  Input 1: sf1=30, sf2=50, sp=100")
     print(f"  Input 2: sf1=50, sf2=30, sp=100")
-    print(f"  Max difference: {diff:.2e}")
-    print(f"  Symmetry maintained: {diff < 1e-6}")
+    print(f"  Max component difference (not expected to be zero): {component_diff:.2e}")
+    print(f"  Finite: {finite}")
+    print(f"  Density integrals equal 1: {normalized}")
     
-    return diff < 1e-6
+    return bool(valid)
 
 
 if __name__ == "__main__":
@@ -459,7 +470,9 @@ if __name__ == "__main__":
     parser.add_argument('--save-dir', type=str, default="neural_net_checkpoints_20samples",
                         help='Directory to save checkpoints')
     parser.add_argument('--test-checkpoint', type=str, default=None,
-                        help='Test mirror symmetry of specific checkpoint')
+                        help='Check ordered component predictions from a checkpoint')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Seed for model initialization and epoch shuffling (default: 42)')
     parser.add_argument('--results-dir', type=str, default='results',
                         help='Base directory for outputs (relative paths are placed here)')
     
@@ -467,7 +480,8 @@ if __name__ == "__main__":
     
     if args.test_checkpoint:
         checkpoint_path = resolve_input_path(args.test_checkpoint, args.results_dir)
-        test_mirror_symmetry_trained_model(str(checkpoint_path))
+        if not check_trained_model_outputs(str(checkpoint_path)):
+            raise SystemExit(1)
     else:
         # Train model
         final_state = train_mirror_aware_model(
@@ -477,5 +491,6 @@ if __name__ == "__main__":
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
             save_dir=args.save_dir,
-            results_dir=args.results_dir
+            results_dir=args.results_dir,
+            seed=args.seed,
         )

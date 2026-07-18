@@ -129,9 +129,8 @@ def write_split_trial_loglik(out: pd.DataFrame, output_dir: Path, compression: s
     likelihood = likelihood[["trial_id", "fit_id"] + likelihood_cols]
 
     output_dir.parent.mkdir(parents=True, exist_ok=True)
-    if output_dir.exists():
-        shutil.rmtree(output_dir)
     tmp_dir = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}.", dir=output_dir.parent))
+    backup_dir = None
     try:
         _write_parquet(trial_meta, tmp_dir / "trial_meta.parquet", compression)
         _write_parquet(fit_meta, tmp_dir / "fit_meta.parquet", compression)
@@ -149,10 +148,82 @@ def write_split_trial_loglik(out: pd.DataFrame, output_dir: Path, compression: s
             "compression": compression,
         }
         (tmp_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-        tmp_dir.rename(output_dir)
+        if output_dir.exists():
+            backup_dir = Path(tempfile.mkdtemp(
+                prefix=f".{output_dir.name}.backup.", dir=output_dir.parent
+            ))
+            backup_dir.rmdir()
+            output_dir.rename(backup_dir)
+        try:
+            tmp_dir.rename(output_dir)
+        except Exception:
+            if backup_dir is not None and backup_dir.exists() and not output_dir.exists():
+                backup_dir.rename(output_dir)
+            raise
+        if backup_dir is not None:
+            shutil.rmtree(backup_dir, ignore_errors=True)
     except Exception:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
+
+
+REPRODUCTION_VALUE_COLS = [
+    "stored_eval_likelihood_loss",
+    "rescored_nll_density_model_deg",
+    "per_trial_sum_nll_density_model_deg",
+    "rescored_nll_mass",
+    "abs_diff",
+    "per_trial_sum_abs_diff",
+]
+
+
+def prepare_reproduction_checks(checks: pd.DataFrame, max_abs_diff: float) -> pd.DataFrame:
+    """Add finite-value and floor-aware tolerance results to reproduction checks."""
+    checks = checks.copy()
+    if "n_floor_trials" not in checks.columns:
+        checks["n_floor_trials"] = 0
+    missing = [col for col in REPRODUCTION_VALUE_COLS if col not in checks.columns]
+    if missing:
+        raise ValueError(f"reproduction checks are missing numeric columns: {missing}")
+    numeric_values = checks[REPRODUCTION_VALUE_COLS].apply(pd.to_numeric, errors="coerce")
+    checks[REPRODUCTION_VALUE_COLS] = numeric_values
+    checks["values_finite"] = np.isfinite(numeric_values.to_numpy()).all(axis=1)
+    checks["floor_tolerance"] = (
+        max_abs_diff
+        + checks["n_floor_trials"].fillna(0) * MOTOR_NOISE_FLOOR_TRIAL_NATS
+    )
+    checks["within_tolerance"] = (
+        checks["values_finite"]
+        & np.isfinite(checks["floor_tolerance"])
+        & (checks["abs_diff"] <= checks["floor_tolerance"])
+    )
+    return checks
+
+
+def validate_reproduction_checks(checks: pd.DataFrame) -> None:
+    """Raise when any reproduction value is non-finite or outside tolerance."""
+    nonfinite = checks[~checks["values_finite"]]
+    if not nonfinite.empty:
+        identities = ", ".join(
+            f"{r.optimizer} {r.subject}/{r.experiment}/{r.condition}"
+            for r in nonfinite.itertuples()
+        )
+        raise RuntimeError(
+            "Stored eval_likelihood_loss reproduction produced non-finite values for "
+            f"{len(nonfinite)} condition(s): {identities}"
+        )
+
+    failed = checks[~checks["within_tolerance"]]
+    if not failed.empty:
+        worst = failed.loc[failed["abs_diff"].idxmax()]
+        raise RuntimeError(
+            "Stored eval_likelihood_loss reproduction failed: "
+            f"{len(failed)} condition(s) exceed the floor-aware tolerance; worst "
+            f"abs_diff {float(worst['abs_diff']):.6g} > tolerance "
+            f"{float(worst['floor_tolerance']):.6g} "
+            f"({worst['optimizer']} {worst['subject']}/{worst['experiment']}/"
+            f"{worst['condition']}, n_floor_trials={int(worst['n_floor_trials'])})"
+        )
 
 
 def normalize_label(value: object) -> str:
@@ -531,25 +602,16 @@ def main() -> None:
 
     out, checks = postprocess(args)
     output.parent.mkdir(parents=True, exist_ok=True)
-    write_split_trial_loglik(out, output, compression=args.parquet_compression)
 
     # Floor-aware reproduction gate (B1). Each condition is allowed the strict
     # --max-check-abs-diff, plus extra slack for trials pinned to the motor-noise
     # density floor, whose likelihood is not reproducible across compute backends.
     # A condition with no floor trials keeps the strict tolerance unchanged, so
     # genuine reproduction bugs in the well-conditioned regime still fail hard.
-    if "n_floor_trials" not in checks.columns:
-        checks["n_floor_trials"] = 0
-    checks["floor_tolerance"] = (
-        args.max_check_abs_diff
-        + checks["n_floor_trials"].fillna(0) * MOTOR_NOISE_FLOOR_TRIAL_NATS
-    )
-    checks["within_tolerance"] = (
-        checks["abs_diff"].isna() | (checks["abs_diff"] <= checks["floor_tolerance"])
-    )
+    checks = prepare_reproduction_checks(checks, args.max_check_abs_diff)
     checks.to_csv(check_output, index=False)
 
-    finite_abs_diff = checks["abs_diff"].dropna()
+    finite_abs_diff = checks.loc[checks["values_finite"], "abs_diff"]
     if not finite_abs_diff.empty:
         max_abs_diff = float(finite_abs_diff.max())
         print(f"stored-vs-rescored max abs diff: {max_abs_diff:.6g}")
@@ -570,17 +632,8 @@ def main() -> None:
                     f"abs_diff={r['abs_diff']:.4g} n_floor_trials={int(r['n_floor_trials'])} "
                     f"floor_tolerance={r['floor_tolerance']:.4g}"
                 )
-        failed = checks[~checks["within_tolerance"]]
-        if not failed.empty:
-            worst = failed.loc[failed["abs_diff"].idxmax()]
-            raise RuntimeError(
-                "Stored eval_likelihood_loss reproduction failed: "
-                f"{len(failed)} condition(s) exceed the floor-aware tolerance; worst "
-                f"abs_diff {float(worst['abs_diff']):.6g} > tolerance "
-                f"{float(worst['floor_tolerance']):.6g} "
-                f"({worst['optimizer']} {worst['subject']}/{worst['experiment']}/"
-                f"{worst['condition']}, n_floor_trials={int(worst['n_floor_trials'])})"
-            )
+    validate_reproduction_checks(checks)
+    write_split_trial_loglik(out, output, compression=args.parquet_compression)
     print(f"wrote {len(out)} rows -> {output}")
     print(f"wrote {len(checks)} checks -> {check_output}")
 
