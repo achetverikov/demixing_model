@@ -595,20 +595,34 @@ class GridBasedMultiConditionOptimizer:
         self._precompute_target_curves()
 
     def update_dataset(self, condition_datasets: Dict[str, Dict]):
-        """Update optimizer with new condition datasets without recompiling functions.
+        """Update optimizer with new condition datasets (e.g. the next subject in a
+        batch loop).
+
+        Each subject's padded trial-array shape differs, so
+        _prepare_all_condition_data below always retraces/recompiles
+        _optimize_conditions_jit (and, via _setup_shared_param_evaluation's dummy
+        warm-up call, the NN predict_batch_64/predict_batch_256 functions too) —
+        this does NOT skip recompilation despite what an earlier version of this
+        docstring claimed. Left unmanaged, a long-running batch loop accumulates
+        one compiled executable per distinct shape for the life of the process,
+        which grows host memory until it OOMs partway through a large batch (see
+        codex_audit.md investigation, 2026-07-17: crashed 38/51 subjects into a
+        csh2026 run). jax.clear_caches() releases the previous subject's compiled
+        executables before this subject's replacements get built.
 
         Args:
             condition_datasets: Dict of {condition_name: {'data_df': DataFrame}}
         """
+        jax.clear_caches()
+
         self.condition_datasets = condition_datasets
         self.condition_names = list(condition_datasets.keys())
         self.n_conditions = len(self.condition_names)
 
-        # Re-prepare data indices for new conditions
+        # Re-prepare data indices for new conditions. Also re-precomputes target
+        # curves internally (see _prepare_all_condition_data) — do not call
+        # _precompute_target_curves() again here, it would just redo the same work.
         self._prepare_all_condition_data()
-
-        # Re-precompute target curves for new conditions
-        self._precompute_target_curves()
 
         print(f"Updated optimizer with {self.n_conditions} conditions")
 
