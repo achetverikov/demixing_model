@@ -322,7 +322,8 @@ class ChunkedGridComputer:
             bundle_dir: Local directory for chunk bundles when bundle_output=True.
             save_samples: If True (and pipeline=True), also write sample files.
             bias_bandwidth: KDE bandwidth for bias dimension (pipeline mode).
-            feat_bandwidth: KDE bandwidth for feat_diff dimension (pipeline mode).
+            feat_bandwidth: Gaussian SD in feat_diff grid steps (pipeline mode).
+                            The default 3.0 is 6 degrees on the standard 2-degree grid.
             chunk_size: Optional override for both large and small dynamic chunk
                         sizes, useful for smoke tests.
         """
@@ -1865,7 +1866,8 @@ def print_runtime_configuration(args, n_simulations: int, n_samples: int, output
         if args.bundle_output:
             print(f"Bundle Dir          : {args.bundle_dir or 'derived from averaged-surfaces dir'}")
         print(f"Bias Bandwidth       : {args.bias_bandwidth}")
-        print(f"Feat Bandwidth       : {args.feat_bandwidth}")
+        print(f"Feat Bandwidth       : {args.feat_bandwidth} grid steps "
+              f"({args.feat_bandwidth * config.feat_diff_step:g} degrees)")
     print(f"Output Folder        : {output_dir}")
     print("================================\n")
 
@@ -1940,7 +1942,8 @@ def parse_arguments():
     parser.add_argument('--bias-bandwidth', type=float, default=0.075,
                         help='KDE bandwidth for bias dimension in pipeline mode (default: 0.075)')
     parser.add_argument('--feat-bandwidth', type=float, default=3.0,
-                        help='KDE bandwidth for feat_diff dimension in pipeline mode (default: 3.0)')
+                        help='Gaussian SD across feat_diff grid steps in pipeline mode; '
+                             '3.0 steps = 6 degrees on the default grid')
     parser.add_argument('--lock-ttl', type=int, default=1800,
                         help='Lock TTL in seconds; heartbeat keeps it alive (default: 1800)')
     parser.add_argument('--chunk-size', type=int, default=None,

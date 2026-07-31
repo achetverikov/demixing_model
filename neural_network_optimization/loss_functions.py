@@ -9,8 +9,11 @@ def kl_divergence_loss(pred_log_density, target_log_density):
     """Compute KL divergence from target to predicted log-probability density.
 
     Sums the KL integrand over the mu1_error axis and averages over batch and
-    feat_diff dimensions.  No grid-spacing factor is needed because
-    normalize_to_density already accounts for grid spacing.
+    feat_diff dimensions.  The inputs are continuous densities (1/dx scale), so
+    this sum equals the discrete-bin KL divided by dx — a constant factor, but
+    one that inflates this term relative to the fixed-weight MSE/smoothness
+    terms it is combined with in combined_probabilistic_loss (see
+    MODEL_PIPELINE_FOR_AGENTS.md S5.3b).
 
     Args:
         pred_log_density: Predicted log-density with shape (batch, mu1_error, feat_diff).
@@ -28,6 +31,13 @@ def kl_divergence_loss(pred_log_density, target_log_density):
 
 def expectation_loss(pred_log_density, target_log_density):
     """Compute mean-squared error between predicted and target expected mu1_error values.
+
+    The expectation here is the LINEAR mean of mu1_error (unlike the circular
+    means used everywhere at fitting time) — near-equivalent only while column
+    mass stays far from ±180°.  Like kl_divergence_loss, the sums omit the dx
+    factor over continuous densities, scaling each expectation by 1/dx and the
+    MSE by 1/dx² relative to their integral definitions (constant, but it
+    shifts this term's effective weight in combined_probabilistic_loss).
 
     Args:
         pred_log_density: Predicted log-density with shape (batch, mu1_error, feat_diff).

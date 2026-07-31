@@ -259,7 +259,15 @@ def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_
                             seed: int = 42) -> train_state.TrainState:
     """
     Train mirror-aware model on averaged surfaces.
-    
+
+    These function defaults (2500 epochs, batch 64) are NOT what the CLI runs:
+    the argument parser below defaults to 1500 epochs / batch 32 and passes
+    them explicitly. Both shipped pretrained checkpoints match the CLI values
+    (their stored step counts are 3,000,000 = 1500 × 64,000/32; see
+    pretrained/README.md and MODEL_PIPELINE_FOR_AGENTS.md D.5). Programmatic
+    callers omitting these arguments get a different training run than the
+    documented one.
+
     Args:
         surfaces_folder: Folder containing averaged surface files
         n_epochs: Number of training epochs

@@ -80,6 +80,27 @@ This document describes the reusable model fitting pipeline in `model_fit_to_dat
 - `--min-trials 30`
 - Outliers excluded by default
 
+## Dissimilarity smoothing in the fitting objectives
+
+The NN predicts simulation surfaces that already contain a nominal 6° Gaussian
+smoother across dissimilarity (three steps on the 2° grid). Fitting then handles the
+empirical and predicted sides as follows:
+
+| Objective | Empirical side | Predicted side |
+|---|---|---|
+| `likelihood`, `crps` | Raw trials | Pointwise NN column; no added dissimilarity smoother |
+| `expectation` | Circular means in 4° bins | NN circular mean at the matching column |
+| `smoothed_exp` | Rolling circular moments, nominal 20° Gaussian SD | Pointwise NN mean curve; no added 20° smoother |
+| `density` | Density-asymmetry curve, nominal 20° Gaussian trial weights | NN asymmetry curve with a nominal 20° Gaussian convolution |
+| `balanced_crps`, `bias_weighted_crps` | Conditional empirical distributions, nominal 20° Gaussian trial weights | Pointwise NN distribution |
+
+Thus the default `density` objective does apply similar 20° dissimilarity smoothing to
+both sides. It is not exact: the NN side also inherits the upstream 6° smoother, and its
+later discrete 20° kernel has finite support and edge padding, whereas the empirical
+kernel is normalized over the available trials. Since 6° is small relative to 20°, this
+is expected to be a minor approximation, but the objectives should not all be described
+as using matched smoothing.
+
 ---
 
 ## Outputs

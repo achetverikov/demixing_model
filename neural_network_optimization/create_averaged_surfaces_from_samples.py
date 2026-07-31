@@ -398,6 +398,11 @@ def create_all_averaged_surfaces(input_folder: str = None, output_folder: str = 
     """Main function to create all averaged surfaces from samples.
 
     Args:
+        feat_bandwidth: Gaussian SD in feat_diff grid steps. The CLI default of
+            3.0 corresponds to 6 degrees on the standard 2-degree grid — but
+            THIS function's default is 5.0 (10 degrees), so programmatic
+            callers omitting the argument get wider smoothing than the
+            production surfaces (see MODEL_PIPELINE_FOR_AGENTS.md D.6).
         stub_processed_samples: If True, replace raw sample files with tiny stubs after
             averaging.  The stubs preserve the filename/hash so simulated_samples_grid.py
             still counts those combinations as done, but occupy ~1 KB instead of ~6 MB.
@@ -520,7 +525,8 @@ if __name__ == "__main__":
     parser.add_argument('--bias-bandwidth', type=float, default=0.075,
                         help='Bandwidth for bias dimension KDE')
     parser.add_argument('--feat-bandwidth', type=float, default=3.0,
-                        help='Bandwidth for feat_diff dimension smoothing')
+                        help='Gaussian SD across feat_diff grid steps; 3.0 steps = '
+                             '6 degrees on the default grid')
     parser.add_argument('--workers', type=int, default=4,
                         help='Number of worker threads for parallel processing')
     parser.add_argument('--include-all-params', action='store_true',

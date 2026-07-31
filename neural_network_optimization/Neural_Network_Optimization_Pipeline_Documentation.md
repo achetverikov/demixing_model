@@ -28,6 +28,7 @@ with appropriate component flipping, and builds the KDE surfaces in one step.
 │ For each unique (sf1 ≤ sf2, sp):                                │
 │   - load (sf1, sf2, sp) and mirror (sf2, sf1, sp) sample files  │
 │   - combine samples with component flipping                     │
+│   - smooth across feat_diff with SD 3 grid steps = 6°           │
 │   - fit KDE → mu1_comp1_surface, mu1_comp2_surface, mu2_surface │
 │ Output : averaged_sf1_*_sf2_*_sp_*.pkl  (4,200 files for L1)   │
 └───────────────────────────┬─────────────────────────────────────┘
@@ -105,3 +106,8 @@ config.param_range_high = 200
 config.param_step       = 10
 config.mu1_surface_shape = (181, 90)   # (bias_points, feat_diff_points)
 ```
+
+`--feat-bandwidth` is expressed in feature-difference **grid steps**, not degrees.
+The production grid advances by 2°, so the default `--feat-bandwidth 3` gives a
+nominal 6° Gaussian SD across neighboring simulated dissimilarities. This smoothing
+is part of each training target and is consequently baked into the trained NN output.
