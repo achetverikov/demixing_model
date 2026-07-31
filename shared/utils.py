@@ -675,10 +675,17 @@ def _compute_empirical_density_asymmetry_core(real_feat_diff, real_bias, feat_di
     Returns:
         distances: feat_diff_grid values
         asymmetry_values: Asymmetry values at each grid point
+
+    Notes:
+        The bias KDE is a plain (non-circular) Gaussian: mass smoothed past
+        ±max_diss is not wrapped or renormalized before the signed integration.
+        The Silverman bandwidth below has no lower bound, so degenerate input
+        (near-identical bias values) drives kernel_bw toward 0 and the kernel
+        normalization divides by it (see MODEL_PIPELINE_FOR_AGENTS.md D.11).
     """
     max_diss = circ_space / 2
-    
-    # Auto bandwidth using Silverman's rule  
+
+    # Auto bandwidth using Silverman's rule
     bias_std = jnp.std(real_bias)
     n = len(real_bias)
     kernel_bw = 0.9 * jnp.minimum(bias_std, (jnp.quantile(real_bias, 0.75) - jnp.quantile(real_bias, 0.25)) / 1.34) * (n ** (-1/5))
@@ -687,8 +694,10 @@ def _compute_empirical_density_asymmetry_core(real_feat_diff, real_bias, feat_di
     if feat_diff_grid is not None:
         distances = feat_diff_grid
     else:
-        distances = jnp.arange(4, int(max_diss * 2) + 1, 4)  # [4, 8, 12, ..., 180]
-    bias_range = jnp.linspace(-max_diss, max_diss, 181)  # [-90, -89, ..., 90]
+        distances = jnp.arange(4, int(max_diss * 2) + 1, 4)  # [4, 8, ..., circ_space]
+    # 181 points spanning ±max_diss: step 2° for circ_space=360 (the model-space
+    # default used by the fitter), step 1° for circ_space=180.
+    bias_range = jnp.linspace(-max_diss, max_diss, 181)
     
     # Vectorized weight matrix computation with logsumexp for numerical stability
     dist_matrix = distances[:, None] - real_feat_diff[None, :]  # Broadcasting
@@ -711,7 +720,7 @@ def _compute_empirical_density_asymmetry_core(real_feat_diff, real_bias, feat_di
     
     # Sum densities in positive and negative regions for each distance
     # Account for grid spacing in numerical integration
-    dx_empirical = bias_range[1] - bias_range[0]  # Grid spacing = 1.0 degree
+    dx_empirical = bias_range[1] - bias_range[0]  # circ_space/180 deg: 2.0 for 360, 1.0 for 180
     
     # Use jnp.where instead of boolean indexing to avoid concreteness issues
     pos_densities_matrix = jnp.where(pos_mask[None, :], density_matrix, 0.0)

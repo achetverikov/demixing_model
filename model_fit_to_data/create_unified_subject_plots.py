@@ -33,7 +33,11 @@ from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
 )
 from shared.config import config
 from shared import seed_manager
-from shared.utils import resolve_input_path, resolve_results_path
+from shared.utils import (
+    compute_target_bias_rolling_curve_core,
+    resolve_input_path,
+    resolve_results_path,
+)
 
 # Initialize seed manager
 seed = seed_manager.SeedManager(quiet=True)
@@ -64,12 +68,58 @@ OPTIMIZER_LABELS = {
     'balanced_crps': 'Balanced CRPS',
     'smoothed_exp': 'Smoothed Exp',
 }
-LOSS_EVALUATION_METHODS = ['density', 'expectation', 'smoothed_exp', 'likelihood', 'crps', 'balanced_crps']
+LOSS_EVALUATION_METHODS = [
+    'density', 'expectation', 'smoothed_exp', 'likelihood', 'crps',
+    'balanced_crps', 'bias_weighted_crps',
+]
 
 
 def _angle_display_scale(circ_space: int = 360) -> float:
     """Scale angular model-space values back to the data circular space."""
     return circ_space / (2 * config.feat_diff_range[1])
+
+
+def _pooled_bias_weighted_crps(log_surfaces, datasets, feat_grid, distance_matrix,
+                               weights_sd):
+    """Distribution-level BWCRPS for separately fitted report-order surfaces."""
+    log_surfaces = np.asarray(log_surfaces, dtype=float)
+    probabilities = np.exp(log_surfaces - log_surfaces.max(axis=1, keepdims=True))
+    probabilities /= probabilities.sum(axis=1, keepdims=True)
+    feat_grid = np.asarray(feat_grid, dtype=float)
+    distance_matrix = np.asarray(distance_matrix, dtype=float)
+    bias_low = config.mu1_bias_range[0]
+    bias_step = config.mu1_bias_step
+    n_bias = probabilities.shape[1]
+
+    supports = []
+    weighted_empirical = []
+    weighted_bias = []
+    for dataset in datasets:
+        values = np.asarray(dataset, dtype=float)
+        feat_diff, bias = values[:, 0], values[:, 1]
+        kernel = np.exp(-0.5 * ((feat_grid[:, None] - feat_diff[None, :]) / weights_sd) ** 2)
+        support = kernel.sum(axis=1)
+        bias_bin = np.clip(np.round((bias - bias_low) / bias_step).astype(int), 0, n_bias - 1)
+        one_hot = np.zeros((len(bias), n_bias), dtype=float)
+        one_hot[np.arange(len(bias)), bias_bin] = 1.0
+        supports.append(support)
+        weighted_empirical.append(kernel @ one_hot)
+        weighted_bias.append(kernel @ bias)
+
+    supports = np.stack(supports)
+    total_support = supports.sum(axis=0)
+    pred_fd = np.einsum("rf,rbf->fb", supports, probabilities)
+    pred_fd /= np.maximum(total_support[:, None], 1e-10)
+    empirical_fd = np.sum(weighted_empirical, axis=0) / np.maximum(total_support[:, None], 1e-10)
+    target_d = empirical_fd @ distance_matrix
+    mean_bias = np.sum(weighted_bias, axis=0) / np.maximum(total_support, 1e-10)
+    support_mask = total_support > np.median(total_support) * 0.01
+    fd_weights = mean_bias ** 2 * support_mask
+    if not np.any(fd_weights > 0):
+        raise ValueError("pooled report-order BWCRPS is unidentified because all bias weights are zero")
+    cross = np.sum(pred_fd * target_d, axis=1)
+    self_energy = np.sum(pred_fd * (pred_fd @ distance_matrix), axis=1)
+    return float(np.sum(fd_weights * (2 * cross - self_energy)) / np.sum(fd_weights))
 
 
 def compute_empirical_sd_curve(feat_diff_values, bias_values, n_bins=18):
@@ -108,7 +158,17 @@ def compute_empirical_sd_curve(feat_diff_values, bias_values, n_bins=18):
 
 
 def compute_predicted_sd_curves_batch(log_surfaces_batch, feat_vals):
-    """Batch version: Compute predicted SD curves for multiple surfaces at once - fully vectorized."""
+    """Batch version: Compute predicted SD curves for multiple surfaces at once - fully vectorized.
+
+    Estimator caveat: the sine/cosine moments below are trapezoidal integrals of
+    the raw column values, NOT divided by trapezoid(p). The NN columns are
+    normalized by discrete sum × dx (rectangle rule), so their trapezoidal
+    integral is close to but not exactly 1 (endpoint bins carry half weight),
+    and the resultant length inherits that mismatch. The empirical counterpart
+    (compute_empirical_sd_curve) uses normalized trial means, so the two SD
+    estimators are not operationally identical — see
+    MODEL_PIPELINE_FOR_AGENTS.md D.10.
+    """
     mu1_bias_grid = config.create_grid('mu1_bias')
     n_surfaces, n_mu1_bias, n_feat_diff = log_surfaces_batch.shape
     n_feat_vals = len(feat_vals)
@@ -129,8 +189,10 @@ def compute_predicted_sd_curves_batch(log_surfaces_batch, feat_vals):
     cos_angles = jnp.cos(angles_rad)  # Shape: (n_mu1_bias,)
     sin_angles = jnp.sin(angles_rad)  # Shape: (n_mu1_bias,)
 
-    # Vectorized circular SD computation for all surfaces and feature values
-    # NN normalizes via trapezoid integral = 1 (continuous), so use trapezoid not sum.
+    # Vectorized circular SD computation for all surfaces and feature values.
+    # The NN columns are continuous densities normalized by discrete sum × dx
+    # (rectangle rule, see normalize_to_density_flexible); the trapezoidal
+    # moments here treat them as ≈normalized without re-dividing (docstring).
     # prob_profiles: (n_surfaces, n_mu1_bias, n_feat_vals)
     # cos_angles: (n_mu1_bias,) -> broadcast to (1, n_mu1_bias, 1)
     mean_cos = jnp.trapezoid(prob_profiles * cos_angles[None, :, None], x=mu1_bias_grid, axis=1)
@@ -249,6 +311,15 @@ def prepare_all_subjects_data(
     """
     Batch data preparation routine - processes all subjects at once for maximum efficiency.
 
+    Two selection/settings caveats (see MODEL_PIPELINE_FOR_AGENTS.md S10.1, D.2):
+    - The available-optimizer list per (subject, experiment) is read from the
+      FIRST condition's result only and reused for every condition; a method
+      fitted only in a later condition is never predicted or plotted.
+    - Model density-asymmetry curves are computed with the DEFAULT 20-degree
+      smoothing (generate_nn_density_asymmetry_batch defaults), regardless of
+      any non-default emp_density_weights_sd/density_smoothing_sigma the fit
+      itself used.
+
     Returns:
         Dictionary with all precomputed data for all subjects
     """
@@ -361,6 +432,34 @@ def prepare_all_subjects_data(
 
         log_surfaces_batch = surfaces_with_noise
 
+        # Report-order fits have separate parameters but enter the comparison as
+        # one color_2 distribution. Mix their predicted surfaces with the same
+        # feature-distance kernel support used for the empirical target, then apply
+        # the nonlinear energy score once. Only the scalar is retained.
+        report_order_bwcrps = {}
+        for key, first_idx in param_mapping.items():
+            subject_id, experiment, condition_name, opt = key
+            if experiment != "color_2_first":
+                continue
+            second_key = (subject_id, "color_2_second", condition_name, opt)
+            if second_key not in param_mapping:
+                continue
+            first_result = subjects_structure[subject_id]["color_2_first"][
+                "noise_conditions"][condition_name][0]["result"]
+            second_result = subjects_structure[subject_id]["color_2_second"][
+                "noise_conditions"][condition_name][0]["result"]
+            if "data_df" not in first_result or "data_df" not in second_result:
+                continue
+            score = _pooled_bias_weighted_crps(
+                jnp.take(log_surfaces_batch,
+                         jnp.asarray([first_idx, param_mapping[second_key]]), axis=0),
+                [first_result["data_df"], second_result["data_df"]],
+                feat_vals, global_optimizer.D_circ_matrix,
+                global_optimizer.emp_density_weights_sd,
+            )
+            report_order_bwcrps[key] = score
+            report_order_bwcrps[second_key] = score
+
         # Batch compute ALL curves at once for all subjects
         print("Computing bias curves for all surfaces...")
         feat_indices = jnp.arange(len(feat_vals))
@@ -373,6 +472,8 @@ def prepare_all_subjects_data(
         all_predicted_sd = compute_predicted_sd_curves_batch(log_surfaces_batch, feat_vals)
 
         print("Mapping results back to subject structure...")
+    else:
+        report_order_bwcrps = {}
 
     # Build the complete prepared data structure
     prepared_all_subjects = {}
@@ -425,6 +526,7 @@ def prepare_all_subjects_data(
                 optimizer_params = {}
                 optimizer_losses = {}
                 optimizer_eval_losses = {}
+                optimizer_pooled_bwcrps = {}
                 for opt in available_optimizers:
                     param_key = f'{opt}_fitted_params'
                     loss_key = f'{opt}_loss'
@@ -435,11 +537,15 @@ def prepare_all_subjects_data(
                         optimizer_losses[opt] = result[loss_key]
                     if eval_key in result:
                         optimizer_eval_losses[opt] = result[eval_key]
+                    pooled_key = (subject_id, experiment, noise_cond, opt)
+                    if pooled_key in report_order_bwcrps:
+                        optimizer_pooled_bwcrps[opt] = report_order_bwcrps[pooled_key]
 
                 experiment_parameters[noise_cond] = {
                     'params': optimizer_params,
                     'losses': optimizer_losses,
                     'eval_losses': optimizer_eval_losses,
+                    'pooled_bwcrps': optimizer_pooled_bwcrps,
                 }
 
                 # Collect condition data (data_df is already cleaned)
@@ -472,16 +578,24 @@ def prepare_all_subjects_data(
                             data_array[:, 0], data_array[:, 1], n_bins=18)
 
                     bias_curve_smoothed = saved_curves.get('target_bias_curve')
+                    if bias_curve_smoothed is None and 'data_df' in result:
+                        data_array = np.array(result['data_df'])
+                        bias_curve_smoothed = compute_target_bias_rolling_curve_core(
+                            jnp.asarray(data_array[:, 0]),
+                            jnp.asarray(data_array[:, 1]),
+                            jnp.asarray(saved_curves['density_feat_grid']),
+                        )
 
                     experiment_empirical_curves[noise_cond] = {
                         'bias': saved_curves['target_bias'],
+                        'bias_weights': saved_curves.get('bias_weights'),
                         'asymmetry': saved_curves['target_density'],
                         'sd': empirical_sd,
                         'bias_grid': saved_curves['density_feat_grid'][saved_curves['bias_feat_indices']],
                         'asymm_grid': saved_curves['density_feat_grid'],
                         # Rolling-mean (Gaussian-weighted) bias curve, same grid as density's
-                        # asymmetry curve. Only present in results saved after smoothed_exp
-                        # was added; older pickles fall back to None (no smoothed line drawn).
+                        # asymmetry curve. For older results that predate this saved field,
+                        # it is reconstructed above from the stored trial data.
                         'bias_smoothed': bias_curve_smoothed,
                         'bias_smoothed_grid': saved_curves['density_feat_grid'] if bias_curve_smoothed is not None else None,
                     }
@@ -501,10 +615,12 @@ def prepare_all_subjects_data(
                         if condition_indices:
                             condition_indices_array = jnp.array(condition_indices)
                             empirical_bias = jnp.mean(global_optimizer.unified_target_bias[condition_indices_array], axis=0)
+                            empirical_bias_weights = jnp.sum(global_optimizer.unified_bias_weights[condition_indices_array], axis=0)
                             empirical_asymm = jnp.mean(global_optimizer.unified_target_density[condition_indices_array], axis=0)
                             empirical_bias_smoothed = jnp.mean(global_optimizer.unified_target_bias_curve[condition_indices_array], axis=0)
                         else:
                             empirical_bias = None
+                            empirical_bias_weights = None
                             empirical_asymm = None
                             empirical_bias_smoothed = None
 
@@ -526,6 +642,7 @@ def prepare_all_subjects_data(
 
                         experiment_empirical_curves[noise_cond] = {
                             'bias': empirical_bias,
+                            'bias_weights': empirical_bias_weights,
                             'asymmetry': empirical_asymm,
                             'sd': empirical_sd,
                             'bias_grid': empirical_bias_grid,
@@ -633,15 +750,20 @@ def create_unified_subject_plot(
 
                 param_lines.append(f'{label}: {param_str}')
 
-            # Plot empirical data: raw 8°-binned circular mean (what "expectation" fits
+            # Plot empirical data: raw 4°-binned circular mean (what "expectation" fits
             # against) and the Gaussian-smoothed rolling-mean curve (what "smoothed_exp"
             # fits against), so the two targets can be compared directly.
             empirical_bias = condition_empirical_curves.get('bias')
             empirical_bias_grid = condition_empirical_curves.get('bias_grid')
             if empirical_bias is not None and empirical_bias_grid is not None:
-                ax1.plot(np.array(empirical_bias_grid) * angle_display_scale,
-                        empirical_bias * angle_display_scale,
-                        'k--', linewidth=2, alpha=0.7, label='Data (binned)')
+                empirical_bias = np.asarray(empirical_bias)
+                bias_weights = condition_empirical_curves.get('bias_weights')
+                valid = (np.asarray(bias_weights) > 0 if bias_weights is not None
+                         else np.isfinite(empirical_bias))
+                ax1.plot(np.asarray(empirical_bias_grid)[valid] * angle_display_scale,
+                        empirical_bias[valid] * angle_display_scale,
+                        color='black', marker='o', linestyle='none', markersize=5,
+                        alpha=0.8, label='Data (binned)')
 
             empirical_bias_smoothed = condition_empirical_curves.get('bias_smoothed')
             empirical_bias_smoothed_grid = condition_empirical_curves.get('bias_smoothed_grid')
@@ -777,6 +899,13 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                                  circ_space: int = 360) -> Tuple[List, List]:
     """Create extended summary plots using preprocessed data.
 
+    Aggregation caveat (see MODEL_PIPELINE_FOR_AGENTS.md S10.4, D.14): only
+    optimizers present in EVERY prepared result of an experiment+condition are
+    aggregated, and that intersection is computed before the "combined"
+    pseudo-subject is excluded from the statistics — a method missing only from
+    "combined" is dropped from the plots AND from the CSV rows returned here,
+    so the exports are not necessarily complete over all stored fits.
+
     Args:
         prepared_all_subjects: Dictionary from prepare_all_subjects_data() with all precomputed curves
         output_dir: Output directory for plots
@@ -860,9 +989,11 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
             # Collect parameters and empirical curves
             all_parameters = {opt: [] for opt in available_optimizers}
             all_empirical_bias = []
+            all_empirical_bias_smoothed = []
             all_empirical_asymm = []
             all_empirical_sd = []
             empirical_bias_grid = None
+            empirical_bias_smoothed_grid = None
             empirical_asymm_grid = None
 
             for prepared_result in prepared_results_list:
@@ -893,9 +1024,18 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
 
                 # Collect empirical curves and separate feature grids
                 if empirical_curves.get('bias') is not None:
-                    all_empirical_bias.append(empirical_curves['bias'])
+                    empirical_bias = np.asarray(empirical_curves['bias'], dtype=float)
+                    bias_weights = empirical_curves.get('bias_weights')
+                    if bias_weights is not None:
+                        empirical_bias = np.where(np.asarray(bias_weights) > 0,
+                                                  empirical_bias, np.nan)
+                    all_empirical_bias.append(empirical_bias)
                     if empirical_bias_grid is None:
                         empirical_bias_grid = empirical_curves.get('bias_grid')
+                if empirical_curves.get('bias_smoothed') is not None:
+                    all_empirical_bias_smoothed.append(empirical_curves['bias_smoothed'])
+                    if empirical_bias_smoothed_grid is None:
+                        empirical_bias_smoothed_grid = empirical_curves.get('bias_smoothed_grid')
                 if empirical_curves.get('asymmetry') is not None:
                     all_empirical_asymm.append(empirical_curves['asymmetry'])
                     if empirical_asymm_grid is None:
@@ -971,6 +1111,7 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                     opt_params_list = []
                     opt_losses = []
                     opt_eval_losses = {method: [] for method in LOSS_EVALUATION_METHODS}
+                    opt_pooled_bwcrps = []
                     opt_mse_losses = []
                     opt_corr_losses = []
 
@@ -983,12 +1124,14 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                         opt_params = parameters.get('params', {}).get(opt, parameters.get(opt))
                         opt_loss = parameters.get('losses', {}).get(opt, 0.0)
                         eval_losses = parameters.get('eval_losses', {}).get(opt, {})
+                        pooled_bwcrps = parameters.get('pooled_bwcrps', {}).get(opt, np.nan)
 
                         if opt_params is not None:
                             opt_params_list.append(opt_params)
                             opt_losses.append(opt_loss)
                             for loss_method in LOSS_EVALUATION_METHODS:
                                 opt_eval_losses[loss_method].append(eval_losses.get(loss_method, np.nan))
+                            opt_pooled_bwcrps.append(pooled_bwcrps)
 
                             # Compute density loss components for density optimizer
                             if opt == 'density':
@@ -1047,6 +1190,7 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                     }
                     for loss_method, values in opt_eval_losses.items():
                         param_df_data[f'eval_{loss_method}_loss'] = values
+                    param_df_data['eval_bias_weighted_crps_pooled_loss'] = opt_pooled_bwcrps
 
                     # Add density loss components for density optimizer
                     if opt == 'density':
@@ -1077,17 +1221,21 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                     avg_stage_sd[opt] = jnp.mean(stage_sd_curves[opt], axis=0)
                     sem_stage_sd[opt] = jnp.std(stage_sd_curves[opt], axis=0) / jnp.sqrt(len(stage_sd_curves[opt]))
 
-            # Use precomputed empirical curves from prepared data
-            if all_empirical_bias and all_empirical_asymm:
-                # Average empirical curves across all subjects for this condition
-                empirical_bias_smoothed = jnp.mean(jnp.array(all_empirical_bias), axis=0)
+            # Use the separate binned and rolling-smoothed empirical curves from
+            # prepared data. Empty subject-level bins were converted to NaN above,
+            # so they do not pull the group binned mean toward zero.
+            empirical_bias_binned = None
+            empirical_bias_smoothed = None
+            emp_asymm = None
+            emp_bias_feat_vals = empirical_bias_grid
+            emp_bias_smoothed_feat_vals = empirical_bias_smoothed_grid
+            emp_asymm_feat_vals = empirical_asymm_grid
+            if all_empirical_bias:
+                empirical_bias_binned = np.nanmean(np.array(all_empirical_bias), axis=0)
+            if all_empirical_bias_smoothed:
+                empirical_bias_smoothed = jnp.mean(jnp.array(all_empirical_bias_smoothed), axis=0)
+            if all_empirical_asymm:
                 emp_asymm = jnp.mean(jnp.array(all_empirical_asymm), axis=0)
-                # Use the separate empirical feature grids
-                emp_bias_feat_vals = empirical_bias_grid
-                emp_asymm_feat_vals = empirical_asymm_grid
-            else:
-                empirical_bias_smoothed = jnp.zeros_like(feat_vals)
-                emp_bias_feat_vals, emp_asymm_feat_vals, emp_asymm = feat_vals, feat_vals, jnp.zeros_like(feat_vals)
 
             # Average empirical SD curves across subjects
             emp_sd_bin_centers = None
@@ -1118,11 +1266,19 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                 ax1.fill_between(display_feat_vals, avg_bias_display - sem_bias_display,
                                avg_bias_display + sem_bias_display, alpha=0.3, color=color)
 
-            # Plot empirical data
-            if emp_bias_feat_vals is not None:
-                ax1.plot(np.array(emp_bias_feat_vals) * angle_display_scale,
-                         empirical_bias_smoothed * angle_display_scale,
-                         'k--', linewidth=2, alpha=0.7, label='Data (smooth)')
+            # Plot the binned expectation target as points and the actual rolling
+            # smoothed-exp target as a line.
+            if empirical_bias_binned is not None and emp_bias_feat_vals is not None:
+                valid = np.isfinite(empirical_bias_binned)
+                ax1.plot(np.asarray(emp_bias_feat_vals)[valid] * angle_display_scale,
+                         np.asarray(empirical_bias_binned)[valid] * angle_display_scale,
+                         color='black', marker='o', linestyle='none', markersize=5,
+                         alpha=0.8, label='Data (binned)')
+            if empirical_bias_smoothed is not None and emp_bias_smoothed_feat_vals is not None:
+                valid = np.isfinite(np.asarray(empirical_bias_smoothed))
+                ax1.plot(np.asarray(emp_bias_smoothed_feat_vals)[valid] * angle_display_scale,
+                         np.asarray(empirical_bias_smoothed)[valid] * angle_display_scale,
+                         'k--', linewidth=2, alpha=0.8, label='Data (smoothed)')
 
             ax1.set_xlabel('Feature Difference (°)')
             ax1.set_ylabel('Mu1 Bias (degrees)')
@@ -1393,7 +1549,12 @@ def create_pdf_slice_plots(
 
 
 def export_fitted_parameters_csv(parameter_data: List[Dict], output_dir: str = 'model_fit_to_data_results_v2') -> None:
-    """Export fitted parameters to CSV in long format using pre-collected data."""
+    """Export fitted parameters to CSV in long format using pre-collected data.
+
+    Values are in MODEL space (360-degree; sd_* columns in model degrees) —
+    unlike fitted_curves.csv, which is display-scaled. Downstream joins must
+    convert one of the two (MODEL_PIPELINE_FOR_AGENTS.md D.1).
+    """
 
     print("Exporting fitted parameters to CSV...")
 
@@ -1413,7 +1574,14 @@ def export_fitted_parameters_csv(parameter_data: List[Dict], output_dir: str = '
 
 
 def export_fitted_curves_csv(curve_data: List[Dict], output_dir: str = 'model_fit_to_data_results_v2') -> None:
-    """Export fitted bias, SD, and density asymmetry curves to CSV in long format."""
+    """Export fitted bias, SD, and density asymmetry curves to CSV in long format.
+
+    Values are in DISPLAY (data) space: feat_diff, mu_bias, and sd_deg are
+    multiplied by circ_space/360; density_asymmetry is unitless and unscaled.
+    Model curves only — empirical curves are not exported. Rows inherit the
+    summary loop's common-optimizer filtering (see create_extended_summary_plots
+    docstring; MODEL_PIPELINE_FOR_AGENTS.md D.1/D.14).
+    """
 
     print("Exporting fitted curves to CSV...")
 

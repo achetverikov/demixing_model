@@ -33,6 +33,13 @@ def prefilter_isolated_samples(samples, feat_bin_size=8, bias_bin_size=8,
     Bins the (feat_diff_index × bias_value) space and marks any sample whose
     3×3 bin neighbourhood has fewer than min_neighbors total samples as NaN.
     NaN-flagged samples get zero weight in the KDE.
+
+    Note the bin sizes are in different units: feat_bin_size counts grid steps
+    (8 steps = 16° on the 2° grid) while bias_bin_size is in degrees. At grid
+    edges/corners the 3×3 neighbour indices are clipped independently, so the
+    same boundary bin is counted more than once (up to 4× at a corner) — the
+    effective threshold there is laxer than "min_neighbors across 9 distinct
+    bins" (MODEL_PIPELINE_FOR_AGENTS.md S3.2b).
     Returns (filtered_samples, n_removed).
     """
     feat_diff_n, sample_n = samples.shape
@@ -125,6 +132,10 @@ def weighted_kde_single_step_bounded(i, samples, bias_grid, feat_diff_steps,
 def make_averaging_functions(config, bias_bandwidth: float = 0.075,
                               feat_bandwidth: float = 3.0):
     """Compile and return everything needed to run KDE averaging.
+
+    ``feat_bandwidth`` is the Gaussian SD in feature-difference grid steps,
+    not degrees.  With the standard 2-degree grid, the default value of 3.0
+    therefore corresponds to a 6-degree SD.
 
     Returns a dict with keys:
         vmap_circular, vmap_spatial,

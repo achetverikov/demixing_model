@@ -73,9 +73,14 @@ def compute_target_bias_curve_core(feat_diff_values: jnp.ndarray, bias_values: j
 Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Compute a binned target bias curve for a single condition (vmap-compatible).
 
-    Bins trials by feature-difference into 8-degree bins, computes the circular
+    Bins trials by feature-difference into 4-degree bins, computes the circular
     mean bias per bin, and maps each bin centre to the nearest NN grid index.
     Padding beyond ``n_trials`` is masked out before any computation.
+
+    Bin-edge detail: with the standard grid the centres are arange(2, 184, 4) =
+    [2, 6, ..., 178, 182] — 46 bins whose final centre (182°) lies off-grid and
+    is mapped by nearest-index onto the terminal 180° column (see
+    MODEL_PIPELINE_FOR_AGENTS.md D.12).
 
     Args:
         feat_diff_values: Feature-difference values for each trial, zero-padded
@@ -97,11 +102,11 @@ Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     valid_feat_diff = jnp.where(valid_mask, feat_diff_values, 0.0)
     valid_bias = jnp.where(valid_mask, bias_values, 0.0)
 
-    # Use binning with step size of 8 degrees (twice the config step)
-    bin_step = config.feat_diff_step * 2  # 8 degrees
+    # Use binning with twice the configured 2-degree step: 4-degree bins.
+    bin_step = config.feat_diff_step * 2
 
-    # Create bin centers: [4, 12, 20, 28, ..., 180]
-    min_feat = config.feat_diff_range[0]  # Usually 4
+    # Create bin centers from the configured lower bound in bin_step increments.
+    min_feat = config.feat_diff_range[0]  # Standard grid starts at 2 degrees
     max_feat = config.feat_diff_range[1]  # Usually 180
     bin_centers = jnp.arange(min_feat, max_feat + bin_step, bin_step)
     n_bins = len(bin_centers)
