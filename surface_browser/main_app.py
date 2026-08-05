@@ -10,7 +10,9 @@ Usage: streamlit run main.py
 
 import streamlit as st
 import json
+# data_manager puts the repo root on sys.path, so shared.* is importable after it.
 from core.data_manager import SurfaceDataManager
+from shared.config import averaged_surfaces_dir
 from components.sidebar import create_sidebar
 from tabs import SingleTab, ComparisonTab, ExpectationTab, SpaceTab, StatsTab
 from browser_utils.url_state import state_manager, init_url_state_js
@@ -34,7 +36,7 @@ def main():
     
     # Load saved state with defaults (must happen early)
     default_state = {
-        'directory': '../averaged_surfaces_10k_20samples',  # Default to averaged surfaces
+        'directory': str(averaged_surfaces_dir(20)),  # Default to averaged surfaces
         'equal_noise_only': False,
         'filter_ranges': {},
         'expectation_plot_type': 'Expectation curves'

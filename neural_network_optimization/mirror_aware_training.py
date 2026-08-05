@@ -21,7 +21,7 @@ from flax.training import train_state
 
 from mirror_aware_model import MirrorAwareMu1Predictor, normalize_to_density_flexible
 from loss_functions import combined_probabilistic_loss, kl_divergence_loss, expectation_loss, smoothness_regularization
-from shared.config import config
+from shared.config import config, averaged_surfaces_dir
 from shared.utils import save_checkpoint, cleanup_old_checkpoints, save_training_log_smart, resolve_input_path, resolve_results_path
 # from shared.surface_functions import entropy_smooth_columns_with_mask
 from shared.utils import AveragedSurface
@@ -467,8 +467,9 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description='Train mirror-aware surface prediction model')
-    parser.add_argument('--surfaces-folder', type=str, default="averaged_surfaces_10k_20samples",
-                        help='Folder containing averaged surface files')
+    parser.add_argument('--surfaces-folder', type=str, default=str(averaged_surfaces_dir(20)),
+                        help='Folder containing averaged surface files or bundles '
+                             '(default resolves under $DEMIXING_ARTIFACT_ROOT)')
     parser.add_argument('--epochs', type=int, default=1500,
                         help='Number of training epochs')
     parser.add_argument('--batch-size', type=int, default=32,

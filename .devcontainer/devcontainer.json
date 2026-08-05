@@ -31,7 +31,8 @@
   "remoteEnv": {
     "PYTHONPATH": "/workspaces/demixing_model/demixing_model",
     "R_LIBS_USER": "/home/vscode/R/library",
-    "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+    "DEMIXING_ARTIFACT_ROOT": "/workspaces/demixing_model/results"
   },
   "remoteUser": "vscode",
   "postCreateCommand": "sudo apt-get update && sudo apt-get install -y ripgrep && sudo mkdir -p /home/vscode/R/library && sudo chown -R vscode:vscode /home/vscode/R /workspaces/.venv && python3 -u .devcontainer/install_python_packages_if_missing.py && Rscript .devcontainer/install_r_packages_if_missing.R"

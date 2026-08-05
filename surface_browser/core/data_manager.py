@@ -19,7 +19,10 @@ parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from shared.utils import Surface, AveragedSurface, SurfaceUnpickler
+from shared.utils import (
+    Surface, AveragedSurface, SurfaceUnpickler,
+    ensure_averaged_surface_file, _build_bundle_index,
+)
 
 
 class SurfaceDataManager:
@@ -94,6 +97,34 @@ class SurfaceDataManager:
                 except Exception:
                     continue
 
+        # Distributed surface sets ship as surface_bundle_*.pkl.gz rather than loose
+        # files, so list what the bundles hold too.  The manifest sidecars carry the
+        # parameters, so this costs no decompression; an individual surface is only
+        # extracted when one is actually opened (see load_surface).
+        seen = {s['filename'] for s in surfaces}
+        try:
+            bundle_index = _build_bundle_index(directory)
+        except Exception:
+            bundle_index = {}
+        bundled_count = 0
+        for filename in bundle_index:
+            if filename in seen:
+                continue
+            match = re.match(averaged_pattern, filename)
+            if not match:
+                continue
+            sd_feat1, sd_feat2, sd_spat = map(float, match.groups())
+            surfaces.append({
+                'file': directory / filename,  # materialised on first open
+                'sd_feat1': sd_feat1,
+                'sd_feat2': sd_feat2,
+                'sd_spat': sd_spat,
+                'filename': filename,
+                'source': 'bundle',
+                'surface_type': 'averaged'
+            })
+            bundled_count += 1
+
         columns = [
             'file', 'sd_feat1', 'sd_feat2', 'sd_spat', 'filename', 'source', 'surface_type'
         ]
@@ -111,6 +142,8 @@ class SurfaceDataManager:
             averaged_count = sum(1 for s in surfaces if s.get('surface_type') == 'averaged')
             st.sidebar.caption(f"Scanned {len(surfaces)} surfaces: {regular_count} regular, {averaged_count} averaged")
             st.sidebar.caption(f"Parsed: {filename_parsed} from filename, {pickle_parsed} from file")
+            if bundled_count:
+                st.sidebar.caption(f"Bundled: {bundled_count} available from .pkl.gz bundles")
 
         return self.surfaces_df
 
@@ -123,7 +156,13 @@ class SurfaceDataManager:
             return self._surface_cache[file_path]
 
         try:
-            with open(surface_row['file'], 'rb') as f:
+            path = Path(surface_row['file'])
+            if not path.exists():
+                # Listed from a bundle manifest: extract this one surface now and
+                # cache it as a loose .pkl, so reopening it skips the bundle.
+                path = ensure_averaged_surface_file(path.parent, path.name)
+
+            with open(path, 'rb') as f:
                 data = SurfaceUnpickler(f).load()
 
             # Extract the Surface object from the checkpoint data

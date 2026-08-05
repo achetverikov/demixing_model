@@ -1,6 +1,8 @@
 """Shared configuration defaults and grid helpers."""
 
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Tuple
 
 @dataclass
@@ -81,3 +83,28 @@ class Config:
         return (self.mu1_bias_grid_size, self.feat_diff_grid_size)
 
 config = Config()
+
+
+def artifact_root() -> Path:
+    """Root directory holding generated artifacts (surfaces, fits, checkpoints).
+
+    Surfaces are far too large to track in git and are distributed separately, so
+    where they live varies by machine: a fresh checkout unpacks them under the
+    repo's own ``results/``, while a working setup often keeps them on another
+    disk or beside the repo.  ``DEMIXING_ARTIFACT_ROOT`` overrides the location;
+    without it the repo-local ``results/`` is used.
+    """
+    env = os.environ.get("DEMIXING_ARTIFACT_ROOT")
+    if env:
+        return Path(env).expanduser()
+    return Path(__file__).resolve().parents[1] / "results"
+
+
+def averaged_surfaces_dir(n_samples: int = 20, circular: bool = True) -> Path:
+    """Conventional location of an averaged-surface set under `artifact_root`.
+
+    Both the loose-``.pkl`` and the bundled layout live at this same path; every
+    consumer auto-detects which one is present.
+    """
+    suffix = "_circular" if circular else ""
+    return artifact_root() / f"averaged_surfaces_10k_{n_samples}samples{suffix}"
