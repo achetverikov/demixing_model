@@ -6,7 +6,12 @@
     "source=r-mcp-state,target=/root/.cache,type=volume",
     "source=demixing-model-venv,target=/workspaces/.venv,type=volume"
   ],
-  "runArgs": ["--gpus", "all"],
+  "runArgs": [
+    "--gpus", "all",
+    "--ipc=host",
+    "--ulimit", "memlock=-1",
+    "--ulimit", "stack=67108864"
+  ],
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2.5.9": {
       "username": "vscode"

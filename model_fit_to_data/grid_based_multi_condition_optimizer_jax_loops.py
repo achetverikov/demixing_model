@@ -1323,9 +1323,13 @@ class GridBasedMultiConditionOptimizer:
             stage_best_loss = best_shared_result[0,2]
             stage_best_result = best_shared_result.copy()
             # stage_best_result['condition_results'] = condition_results.copy()
-            
-            if verbosity > 1:
-                print(f"  Best shared params: sd_spat={sd_spat:.1f}, sd_motor={sd_motor:.1f}, loss={stage_best_loss:.3f}")
+
+            # jax.lax.scan dispatches asynchronously; without forcing completion
+            # here, stage_time below would only measure dispatch latency rather
+            # than actual scan execution. This also fixes timing in callers (e.g.
+            # fit_model_to_data.py's `duration`/"done in Xs"), since they wrap this
+            # synchronous function call and can't return early once it blocks here.
+            jax.block_until_ready(best_shared_result)
 
             stage_time = time.time() - stage_start_time
             stage_times.append(stage_time)

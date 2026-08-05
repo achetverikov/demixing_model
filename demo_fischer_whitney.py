@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """
-Demo: fit the demixing model to Fischer & Whitney (2014b) orientation data.
+Demo: fit the demixing model to Fischer & Whitney (2014) orientation data.
 
-Downloads the data from the Aozkirli et al. mega-analysis repository,
+Downloads the data from the Ozkirli et al. mega-analysis repository,
 preprocesses it (cardinal-bias removal, feature-difference and bias columns),
 fits the model, and generates plots.
+
+Source papers:
+
+Fischer, J. & Whitney, D. Serial dependence in visual perception. Nat. Neurosci. 17, 738-743 (2014).
+
+Ozkirli, A., Chetverikov, A. & Pascucci, D. Large-scale mega-analysis indicates that serial dependence deteriorates perceptual decision-making. Nat Hum Behav (2025). https://doi.org/10.1038/s41562-025-02362-8
 
 Run from the repo root:
     PYTHONPATH=. /workspaces/.venv/bin/python demo_fischer_whitney.py

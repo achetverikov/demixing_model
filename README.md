@@ -2,18 +2,10 @@
 
 This repo implements the modeling pipeline for the Demixing Model (Chetverikov, 2023; Chetverikov & Hansmann-Roth, 2025). The core idea is that memory biases (attraction vs. repulsion) emerge as optimal and inevitable when the brain disentangles overlapping memory signals. The pipeline uses simulations to estimate the optimal solution for the signal disentanglement problem based on the amount of noise and similarity between the items for a two-item case.
 
-## Processing Steps
-
-1) Simulate bias distributions for dual-component memories on parameter grids (`surface_computation/`).
-2) Build averaged likelihood surfaces from simulations (`neural_network_optimization/`).
-3) Train a mirror-aware neural network surrogate to predict surfaces (`neural_network_optimization/`).
-4) Fit model parameters to behavioral data with grid-based optimization (`model_fit_to_data/`).
-5) Optional: generate plots/exports or run the Python/R prediction simulator (`model_fit_to_data/`, `surface_simulator_for_predictions/`).
-
 ## Requirements
 
 - Python 3 environment with the ability to install packages (virtualenv or conda recommended).
-- NVIDIA GPU with a CUDA-enabled JAX build (`jax`/`jaxlib`; see JAX and CUDA docs for instructions); CPU runs are likely possible but _extremely_ slow.
+- **NVIDIA GPU** with a CUDA-enabled JAX build (`jax`/`jaxlib`; see JAX and CUDA docs for instructions); CPU runs are likely possible but _extremely_ slow.
 - Core Python packages used across the pipeline: `flax`, `optax`, `numpy`, `pandas`, `matplotlib`, `seaborn`, `pyarrow`.
 - Surface browser dependencies: `streamlit` and `plotly` (see browser requirement below).
 - Optional R interface: `arrow`, `stringr`, and `data.table` for `surface_simulator_for_predictions/surface_simulator.R`.
@@ -54,13 +46,22 @@ The repo ships a VS Code Dev Container that provides a fully configured environm
 
 The Python interpreter is pre-configured to `/workspaces/.venv/bin/python`.
 
+**No NVIDIA GPU? (Mac, or any machine without one)**
+
+CUDA is NVIDIA-only, so the default container above can't run on Mac (or any host without an NVIDIA GPU) — `andreychetverikov/demixing-jax-r:latest` is a CUDA image, and Docker Desktop on macOS doesn't pass a GPU through to containers regardless of the host's own hardware. Use the CPU-only variant instead: in VS Code, run **Dev Containers: Reopen in Container** and pick the config under `.devcontainer/cpu/` (or open that folder's `devcontainer.json` directly). It pulls `andreychetverikov/demixing-jax-r:cpu` — same R/Python setup, plain CPU JAX, no `--gpus` requirement — and runs on both Apple Silicon and Intel. Expect it to be dramatically slower for fitting: fitting the `density` method to the Fischer & Whitney (2014b) demo dataset (`demo_fischer_whitney.py`, one NN checkpoint, 5 subject-groups) took **74m37s on CPU** vs. **6m5s on GPU** (~12x speedup); measured on Intel Core Ultra 9 285 (24 cores) / 64 GB RAM for CPU, NVIDIA GeForce RTX 5080 (16 GB VRAM) for GPU. The CPU image is fine for running R, editing/testing code, or browsing surfaces you already have from elsewhere (e.g. synced from cloud storage) — it doesn't generate surfaces for you. Surface generation (`surface_computation/`) and fitting real data are both compute-heavy and expect a GPU by default (see `tests/run_smoke_pipeline.sh`, which requires one unless `ALLOW_CPU=1` is set); on CPU, expect either to be extremely slow.
+
 **Rebuilding the Docker image**
 
-The image is built from `.devcontainer/Dockerfile.jax-r`. To rebuild and push after changing it:
+The GPU image is built from `.devcontainer/Dockerfile.jax-r`; the CPU-only image from `.devcontainer/Dockerfile.jax-r-cpu`. To rebuild and push after changing either:
 
 ```bash
+# GPU (CUDA, amd64 only)
 docker build -f .devcontainer/Dockerfile.jax-r -t andreychetverikov/demixing-jax-r:latest .
 docker push andreychetverikov/demixing-jax-r:latest
+
+# CPU-only (multi-arch: amd64 + arm64, e.g. Apple Silicon)
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -f .devcontainer/Dockerfile.jax-r-cpu -t andreychetverikov/demixing-jax-r:cpu --push .
 ```
 
 ---
@@ -92,13 +93,22 @@ docker push andreychetverikov/demixing-jax-r:latest
    bash tests/run_smoke_pipeline.sh
    ```
 
+## Processing Steps
+
+1) Simulate bias distributions for dual-component memories on parameter grids (`surface_computation/`).
+2) Build averaged likelihood surfaces from simulations (`neural_network_optimization/`).
+3) Train a mirror-aware neural network surrogate to predict surfaces (`neural_network_optimization/`).
+4) Fit model parameters to behavioral data with grid-based optimization (`model_fit_to_data/`).
+5) Optional: generate plots/exports or run the Python/R prediction simulator (`model_fit_to_data/`, `surface_simulator_for_predictions/`).
+
 ## Pipeline Docs
 
 - `surface_computation/Likelihood_Surface_Pipeline_Documentation.md`
 - `neural_network_optimization/Neural_Network_Optimization_Pipeline_Documentation.md`
 - `model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md`
 
-## Replicating the Paper Results
+
+## Replicating Chetverikov & Hansmann-Roth (2025) Paper Results
 
 1) Run the full simulation grid and surface generation in `surface_computation/` using the pipeline doc.
 2) Create averaged surfaces and train the mirror-aware NN in `neural_network_optimization/`.
