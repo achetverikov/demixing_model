@@ -58,6 +58,24 @@ class Config:
         return jnp.arange(param_range[0], param_range[1] + param_step, param_step)
     
     @property
+    def param_grid_low(self) -> float:
+        """Lowest parameter value the surfaces actually cover.
+
+        ``param_range_low``/``param_step`` describe the Level-1 coarse grid; the
+        Level-2 grid adds points one half-step below it (see
+        ``simulated_samples_grid.build_param_grid``), so surfaces exist — and the
+        network is trained — down to this value rather than ``param_range_low``.
+        Anything that selects, clamps, or filters parameters wants this bound;
+        using ``param_range_low`` directly silently excludes the finest surfaces.
+        """
+        return self.param_range_low - self.param_step // 2
+
+    @property
+    def param_grid_step(self) -> float:
+        """Spacing of the Level-2 grid the surfaces are computed on."""
+        return self.param_step / 2
+
+    @property
     def mu1_surface_shape(self) -> Tuple[int, int]:
         """Shape of mu1 surfaces: (mu1_bias_points, feat_diff_points)."""
         return (self.mu1_bias_grid_size, self.feat_diff_grid_size)

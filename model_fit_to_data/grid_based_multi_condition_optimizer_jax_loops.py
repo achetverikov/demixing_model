@@ -154,7 +154,7 @@ Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
 
 
 def create_shared_parameter_grid(grid_size: int = 20,
-                                 sd_spat_range: Tuple[float, float] = (config.param_range_low, config.param_range_high),
+                                 sd_spat_range: Tuple[float, float] = (config.param_grid_low, config.param_range_high),
                                  sd_motor_range: Tuple[float, float] = (0.1, 50.0),
                                  skip_motor_noise: bool = False,
                                  motor_grid_size: Optional[int] = None) -> jnp.ndarray:
@@ -1147,7 +1147,7 @@ class GridBasedMultiConditionOptimizer:
         total_nn_evaluations = 0
 
         # Initialize bounds for shared parameters
-        sd_spat_range = (config.param_range_low - config.param_step // 2, config.param_range_high)
+        sd_spat_range = (config.param_grid_low, config.param_range_high)
         # sd_motor is one component of the total response error, so it can never
         # exceed the empirical error SD; sd_motor_max carries that data-informed
         # cap (min-over-conditions error SD). Capping the range and sizing the
@@ -1354,7 +1354,7 @@ class GridBasedMultiConditionOptimizer:
             for i in range(self.n_conditions):
                 cname = self.condition_names[i]
                 f1, f2 = float(feat1_best[i]), float(feat2_best[i])
-                feat_low = config.param_range_low - config.param_step // 2
+                feat_low = config.param_grid_low
                 if f1 <= feat_low + current_feat_step:
                     print(f"  BOUNDARY: {cname} sd_feat1={f1:.1f} near lower bound {feat_low}")
                 if f1 >= config.param_range_high - current_feat_step:
@@ -1406,7 +1406,7 @@ class GridBasedMultiConditionOptimizer:
 
             # Update ranges, ensuring they stay within bounds
             sd_spat_range = (
-                max(config.param_range_low - config.param_step // 2, best_sd_spat - new_spat_half_range),
+                max(config.param_grid_low, best_sd_spat - new_spat_half_range),
                 min(config.param_range_high, best_sd_spat + new_spat_half_range)
             )
             sd_motor_range = (
@@ -1503,10 +1503,13 @@ def create_condition_grid(cond_idx_and_params, feat_grid_size, current_step):
     """
     cond_idx, best_feat1, best_feat2 = cond_idx_and_params
 
+    # Clamp to the grid the surfaces actually cover, matching the coarse stage's
+    # feat_low. Using param_range_low here floored refined sd_feat at 10 while the
+    # coarse sweep could already reach 5, so low-noise fits railed at 10.
     feat1_vals = centered_grid(best_feat1, feat_grid_size, current_step,
-                               config.param_range_low, config.param_range_high)
+                               config.param_grid_low, config.param_range_high)
     feat2_vals = centered_grid(best_feat2, feat_grid_size, current_step,
-                               config.param_range_low, config.param_range_high)
+                               config.param_grid_low, config.param_range_high)
 
     feat1_grid, feat2_grid = jnp.meshgrid(feat1_vals, feat2_vals, indexing='ij')
     n_points = feat_grid_size * feat_grid_size

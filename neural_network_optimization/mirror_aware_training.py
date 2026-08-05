@@ -110,7 +110,9 @@ def load_averaged_surfaces(folder: str = "combined_mirrored_surfaces_10k",
         List of surface data dictionaries.
     """
     if param_low is None:
-        param_low = config.param_range_low
+        # The L2 grid reaches a half-step below param_range_low; defaulting to
+        # param_range_low would drop those surfaces (~7% of the set) without a word.
+        param_low = config.param_grid_low
     if param_high is None:
         param_high = config.param_range_high
 
@@ -289,11 +291,11 @@ def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_
     resolved_surfaces_folder = resolve_input_path(surfaces_folder, results_dir)
     resolved_save_dir = resolve_results_path(save_dir, results_dir)
 
-    # param_low extends one half-step below param_range_low (e.g. 5 when step=10)
-    # so L2 grid surfaces (sp=5, sf=5, etc.) are included automatically.
+    # config.param_grid_low extends one half-step below param_range_low (e.g. 5 when
+    # step=10) so L2 grid surfaces (sp=5, sf=5, etc.) are included automatically.
     surfaces_list = load_averaged_surfaces(
         folder=str(resolved_surfaces_folder),
-        param_low=config.param_range_low - config.param_step // 2,
+        param_low=config.param_grid_low,
         param_high=config.param_range_high
     )
     
@@ -345,7 +347,7 @@ def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_
         batch_size=batch_size,
         n_epochs=n_epochs,
         n_samples=n_samples,
-        data_range=f"{config.param_range_low}-{config.param_range_high}",
+        data_range=f"{config.param_grid_low}-{config.param_range_high}",
         surfaces_folder=str(resolved_surfaces_folder),
         model_type="MirrorAwareMu1Predictor",
         loss_type="combined_probabilistic",
