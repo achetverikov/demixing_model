@@ -1372,18 +1372,27 @@ class GridBasedMultiConditionOptimizer:
 
             # Check if we should zoom in on shared parameters
             zoom_check_start_time = time.time()
+            # Stop once every dimension actually being searched is resolved to
+            # min_grid_step. Previously this compared sd_spat against a FICTIONAL motor
+            # schedule -- the uncapped [0.1, 50] range, computed even when motor noise was
+            # skipped and no motor axis existed -- and stopped as soon as EITHER reached
+            # tolerance. Since that phantom value fell below tolerance first, sd_spat was
+            # left far coarser than min_grid_step implies (2.5 deg at the production
+            # shared_grid_size=40, not 1.0). Comparing the real spacings, and requiring all
+            # of them, also removes the original motivation for the phantom schedule: a
+            # small empirical motor cap can no longer end the search early, because
+            # sd_spat must reach tolerance on its own regardless.
             current_spat_step = (sd_spat_range[1] - sd_spat_range[0]) / (shared_grid_size - 1)
-            # Termination references the LEGACY uncapped motor schedule (full [0.1,50]
-            # range over shared_grid_size points, zoomed by zoom_factor each stage) so
-            # that capping/shrinking the actual motor axis cannot change the number of
-            # stages or the sd_spat resolution at which we stop. Without this, a small
-            # empirical cap would make motor_step tiny and stop early with coarse sd_spat.
-            current_motor_step = (50.0 - 0.1) / (shared_grid_size - 1) * (zoom_factor ** (stage - 1))
+            current_motor_step = ((sd_motor_range[1] - sd_motor_range[0]) / (motor_grid_size - 1)
+                                  if not self.skip_motor_noise else 0.0)
+            active_steps = ([current_spat_step] if self.skip_motor_noise
+                            else [current_spat_step, current_motor_step])
 
             if verbosity > 0:
-                print(f"Current grid steps: spat={current_spat_step:.2f}, motor={current_motor_step:.2f}")
+                motor_desc = "skipped" if self.skip_motor_noise else f"{current_motor_step:.2f}"
+                print(f"Current grid steps: spat={current_spat_step:.2f}, motor={motor_desc}")
 
-            if min(current_spat_step, current_motor_step) <= min_grid_step:
+            if max(active_steps) <= min_grid_step:
                 if verbosity > 0:
                     print(f"Optimization stopped: minimum grid step {min_grid_step} reached")
                 break
