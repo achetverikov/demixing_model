@@ -97,10 +97,13 @@ def get_grid_level_info(level: int = 1) -> Dict:
         n = len(param_vals)
         expected_total = n ** 3 + n ** 2  # cube + one extra run per diagonal (sf1==sf2)
     elif level == 2:
-        step_size = config.param_step // 2
+        # Use the config properties so the generator and every consumer share one
+        # definition of the Level-2 grid; the old local `param_step // 2` agreed with
+        # config.param_grid_step only for even param_step.
+        step_size = config.param_grid_step
         description = f"Fine grid (step={step_size})"
         # L2 extends one step below L1 so values like 5 are included.
-        fine_start = config.param_range_low - step_size
+        fine_start = config.param_grid_low
         fine_param_vals = np.arange(fine_start, config.param_range_high + step_size, step_size)
         coarse_param_vals = np.arange(config.param_range_low, config.param_range_high + config.param_step, config.param_step)
 
