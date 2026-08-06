@@ -70,7 +70,7 @@ class Config:
         Anything that selects, clamps, or filters parameters wants this bound;
         using ``param_range_low`` directly silently excludes the finest surfaces.
         """
-        return self.param_range_low - self.param_step // 2
+        return self.param_range_low - self.param_grid_step
 
     @property
     def param_grid_step(self) -> float:

@@ -1504,7 +1504,12 @@ def centered_grid(center, num_points, step_size, lower, upper):
     """
     half = step_size * (num_points - 1) / 2
     shift = jnp.maximum(lower - (center - half), 0.0) + jnp.minimum(upper - (center + half), 0.0)
-    return center + shift + jnp.linspace(-half, half, num_points)
+    shifted = center + shift + jnp.linspace(-half, half, num_points)
+    # When the window is wider than the domain both shift terms are non-zero and cancel,
+    # leaving the grid unclamped and out of bounds (e.g. num_points=21, step=10 gave
+    # [2.5, 202.5]). In that case the only sensible grid spans the domain exactly.
+    return jnp.where(2 * half >= (upper - lower),
+                     jnp.linspace(lower, upper, num_points), shifted)
 
 
 def create_condition_grid(cond_idx_and_params, feat_grid_size, current_step):
