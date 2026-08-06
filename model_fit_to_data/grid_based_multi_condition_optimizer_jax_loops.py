@@ -1172,11 +1172,19 @@ class GridBasedMultiConditionOptimizer:
             print(f"Motor-noise range capped at sd_motor <= {sd_motor_hi:.1f} "
                   f"(empirical error SD); motor axis: {motor_grid_size} points")
         sd_motor_range = (sd_motor_low, sd_motor_hi)
-        center = (config.param_range_low + config.param_range_high) / 2
+        # The first feature pass must cover the whole supported domain, otherwise the
+        # search can never reach parameter values it never looks at. Centre on the domain
+        # midpoint and, when the fixed schedule below is too fine to span it with
+        # feat_grid_size points, prepend the exact spanning step. Previously the centre
+        # used param_range_low (the Level-1 floor, 10) and the prepended step was
+        # int()-truncated, so the first pass covered [10, 200] at feat_grid_size=20 and
+        # [10.5, 199.5] at 10 — never reaching param_grid_low = 5 at all.
+        center = (config.param_grid_low + config.param_range_high) / 2
         feat_step_schedule = [10, 6, 4, 2, 1] # Decreasing step sizes
-        if (config.param_range_high - config.param_range_low) > (10 * (feat_grid_size - 1) ):
-            feat_step_schedule = [int((config.param_range_high - config.param_range_low)/(feat_grid_size-1))]+feat_step_schedule
-        feat_step_schedule = jnp.array(feat_step_schedule)
+        full_span_step = (config.param_range_high - config.param_grid_low) / (feat_grid_size - 1)
+        if full_span_step > feat_step_schedule[0]:
+            feat_step_schedule = [full_span_step] + feat_step_schedule
+        feat_step_schedule = jnp.array(feat_step_schedule, dtype=jnp.float32)
         print(f"feat_step_schedule: {feat_step_schedule}")
 
         best_overall_loss = float('inf')
