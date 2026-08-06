@@ -2,8 +2,6 @@
 
 The Demixing Model explains why a remembered/perceived/evaluated item can be biased toward or away from another item. The central idea is that the brain must separate two noisy, overlapping memory representations. Depending on how similar the items are and where the noise occurs, this separation can produce either attraction or repulsion. This is a normative, ideal-observer model: attraction or repulsion is unavoidable when the observer attempts to estimate the stimulus parameters accurately.
 
-![Two Demixing Model workflows: fit behavioral data or generate predictions](docs/images/workflow_overview.svg)
-
 The computationally expensive simulations have already been summarized in two trained model files included in `pretrained/`. **You can fit experimental data or generate theoretical predictions without downloading additional model data.**
 
 ## Generating predictions and fitting the model to data
