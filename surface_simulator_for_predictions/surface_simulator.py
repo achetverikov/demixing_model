@@ -32,6 +32,10 @@ from shared.utils import (AveragedSurface, SurfaceUnpickler, resolve_input_path,
 RESULTS_DIR = "results"
 CHECKPOINT_PREFIX = "neural_net_checkpoints"
 CHECKPOINT_EPOCH = 1500
+PRETRAINED_CHECKPOINTS = {
+    20: "pretrained/model_epoch1500_10ktrain_20samples.pkl",
+    100: "pretrained/model_epoch1500_10ktrain_100samples.pkl",
+}
 
 def _generate_mu2_bias_curve_batch(mu2_surfaces_batch: jnp.ndarray, target_feat_indices: jnp.ndarray) -> jnp.ndarray:
     """Generate mu2 bias curves for batch of mu2 surfaces using linear integration (not circular)."""
@@ -275,7 +279,10 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
     if explicit_checkpoint_path:
         resolved_checkpoint_path = Path(explicit_checkpoint_path)
     else:
-        checkpoint_path = f'{CHECKPOINT_PREFIX}_{n_samples}samples/model_epoch_{CHECKPOINT_EPOCH:04d}.pkl'
+        checkpoint_path = PRETRAINED_CHECKPOINTS.get(
+            n_samples,
+            f'{CHECKPOINT_PREFIX}_{n_samples}samples/model_epoch_{CHECKPOINT_EPOCH:04d}.pkl',
+        )
         resolved_checkpoint_path = resolve_input_path(checkpoint_path, RESULTS_DIR)
 
     # Initialize optimizer for simulation only (no datasets needed) - but only if using NN surfaces
@@ -422,6 +429,7 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
     # Save results
     print(f"Saving results to {output_path}...")
     try:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         if output_path.endswith('.arrow') or output_path.endswith('.parquet'):
             results_df.to_parquet(output_path, index=False)
         else:
@@ -437,9 +445,20 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
 def main():
     """Parse CLI args and run surface simulation."""
     parser = argparse.ArgumentParser(description='Simulate surfaces from CSV/Arrow parameters')
-    parser.add_argument('input_path', help='Path to CSV or Arrow file with parameters')
-    parser.add_argument('n_samples', type=int, help='Number of samples used for training (e.g., 20, 100)')
-    parser.add_argument('output_path', help='Path to save results (Arrow/CSV file)')
+    # The three required inputs may be given positionally (legacy form, used by the smoke
+    # scripts) or by name. Named forms win if both are supplied.
+    parser.add_argument('input_path', nargs='?',
+                        help='Path to CSV or Arrow file with parameters')
+    parser.add_argument('n_samples', nargs='?', type=int,
+                        help='Number of samples used for training (e.g., 20, 100)')
+    parser.add_argument('output_path', nargs='?',
+                        help='Path to save results (Arrow/CSV file)')
+    parser.add_argument('--input-path', dest='input_path_named',
+                        help='Named form of the first positional argument')
+    parser.add_argument('--n-samples', dest='n_samples_named', type=int,
+                        help='Named form of the second positional argument')
+    parser.add_argument('--output-path', dest='output_path_named',
+                        help='Named form of the third positional argument')
     parser.add_argument('--skip-motor-noise', action='store_true', 
                        help='Skip motor noise computation (sd_motor = 0)')
     parser.add_argument('--surface-source', choices=['nn', 'raw'], default='nn',
@@ -451,6 +470,14 @@ def main():
                             'auto-derived from n_samples).')
 
     args = parser.parse_args()
+
+    for name in ('input_path', 'n_samples', 'output_path'):
+        named = getattr(args, f'{name}_named')
+        if named is not None:
+            setattr(args, name, named)
+        if getattr(args, name) is None:
+            parser.error(f'{name} is required (give it positionally or as '
+                         f'--{name.replace("_", "-")})')
 
     if args.surface_source == 'raw' and not args.averaged_surfaces_dir:
         parser.error('--averaged-surfaces-dir is required when --surface-source raw')
