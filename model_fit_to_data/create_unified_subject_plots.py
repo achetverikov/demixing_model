@@ -47,8 +47,6 @@ global_motor_kernel_cache = {}
 
 RESULTS_DIR = "results"
 MODEL_FIT_RESULTS_PREFIX = "model_fit_to_data_results_v2"
-CHECKPOINT_PREFIX = "neural_net_checkpoints"
-CHECKPOINT_EPOCH = 1500
 
 # Colorblind-friendly method palette. Keep likelihood and CRPS visually separated
 # because they are often compared directly in the summary plots.
@@ -1644,9 +1642,7 @@ def create_unified_plots_with_summaries(
         f"{MODEL_FIT_RESULTS_PREFIX}{motor_str}{corr_str}/"
         f"{n_samples}samples/{outliers_str}/extended_fit_results.pkl"
     )
-    default_checkpoint_path = (
-        f"{CHECKPOINT_PREFIX}_{n_samples}samples/model_epoch_{CHECKPOINT_EPOCH:04d}.pkl"
-    )
+    default_checkpoint_path = f"pretrained/model_epoch1500_10ktrain_{n_samples}samples.pkl"
     resolved_results_path = resolve_input_path(results_path or default_results_path, results_dir)
     resolved_checkpoint_path = resolve_input_path(
         checkpoint_path or default_checkpoint_path, results_dir

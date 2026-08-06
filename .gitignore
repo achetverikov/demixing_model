@@ -19,7 +19,9 @@ __pycache__/
 /debug*/
 *.csv
 !example_data/data_color_comb*.csv
+!example_data/prediction_parameters.csv
 *.png
+!docs/images/*.png
 *.pkl
 !pretrained/*.pkl
 *.arrow

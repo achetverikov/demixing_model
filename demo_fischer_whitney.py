@@ -8,12 +8,12 @@ fits the model, and generates plots.
 
 Source papers:
 
-Fischer, J. & Whitney, D. Serial dependence in visual perception. Nat. Neurosci. 17, 738-743 (2014).
+Fischer, J., & Whitney, D. (2014). Serial dependence in visual perception. Nature Neuroscience, 17(5), 738–743. https://doi.org/10.1038/nn.3689
 
 Ozkirli, A., Chetverikov, A. & Pascucci, D. Large-scale mega-analysis indicates that serial dependence deteriorates perceptual decision-making. Nat Hum Behav (2025). https://doi.org/10.1038/s41562-025-02362-8
 
 Run from the repo root:
-    PYTHONPATH=. /workspaces/.venv/bin/python demo_fischer_whitney.py
+    /workspaces/.venv/bin/python demo_fischer_whitney.py
 """
 
 import os
@@ -112,7 +112,7 @@ def prepare_data() -> Path:
         print(f"Prepared CSV already exists: {PREPARED_CSV}  (delete to re-download)")
         return PREPARED_CSV
 
-    print("Downloading Fischer & Whitney (2014b) data…")
+    print("Downloading Fischer and Whitney (2014) data…")
     df = pd.read_csv(DATA_URL, sep=";")
     print(f"  {len(df)} trials, {df['obs'].nunique()} observers")
 
