@@ -443,7 +443,7 @@ class GridBasedMultiConditionOptimizer:
 
     def __init__(self, checkpoint_path: str, condition_datasets: Optional[Dict[str, jax.Array]] = None, corr_weight = 0.25, skip_motor_noise: bool = False, emp_density_weights_sd: float = 20.0, density_smoothing_sigma: float = None,
                  density_bandwidth_mode: str = 'pooled',
-                 density_bandwidth_rule: str = 'silverman'):
+                 density_bandwidth_rule: str = 'sj'):
         """Initialize the grid-based multi-condition optimizer.
 
         Args:
@@ -462,8 +462,8 @@ class GridBasedMultiConditionOptimizer:
                 it has a lower median effect than 'pooled' but a worse tail, because a
                 single divergent condition drags the mean. Switching modes changes the
                 fit target -- refit.
-            density_bandwidth_rule: 'silverman' (default, R's bw.nrd0 and what every
-                fit so far used) or 'sj' (Sheather-Jones, R's bw.SJ). R's own docs
+            density_bandwidth_rule: 'sj' (default, Sheather-Jones, R's bw.SJ) or
+                'silverman' (R's bw.nrd0, what every fit before 2026-08 used). R's docs
                 recommend SJ -- nrd0 "has remained the default for historical and
                 compatibility reasons, rather than as a general recommendation, where
                 e.g. \"SJ\" would rather fit" (?density). Silverman runs ~11% narrower
