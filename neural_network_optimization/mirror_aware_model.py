@@ -17,6 +17,56 @@ from typing import Tuple
 from shared.config import config
 
 
+def periodic_linear_resize_mu1(inputs, output_rows):
+    """Linearly resample NHWC inputs along the circular mu1 axis.
+
+    Integer numerators keep exactly corresponding lattice shifts bit-identical;
+    in particular, a 16-row roll on the 64-row decoder output becomes a 45-row
+    roll on the 180-row surface.
+    """
+    input_rows = inputs.shape[1]
+    numerators = jnp.arange(output_rows, dtype=jnp.int32) * input_rows
+    lower = numerators // output_rows
+    upper = (lower + 1) % input_rows
+    fraction = (numerators % output_rows).astype(inputs.dtype) / output_rows
+    fraction = fraction.reshape((1, output_rows, 1, 1))
+    return (jnp.take(inputs, lower, axis=1) * (1 - fraction) +
+            jnp.take(inputs, upper, axis=1) * fraction)
+
+
+def _apply_circular_mu1_conv_transpose(inputs, layer, kernel_size, strides):
+    """Apply a transposed convolution with periodic padding on axis 1 only."""
+    pad_rows = max(0, (kernel_size[0] - strides[0] + 1) // 2)
+    if pad_rows == 0:
+        return layer(inputs)
+
+    padded = jnp.concatenate(
+        (inputs[:, -pad_rows:], inputs, inputs[:, :pad_rows]), axis=1)
+    output = layer(padded)
+    crop_rows = pad_rows * strides[0]
+    return output[:, crop_rows:-crop_rows]
+
+
+class CircularMu1ConvTranspose(nn.Module):
+    """ConvTranspose that wraps mu1 while retaining normal feat-edge padding."""
+    features: int
+    kernel_size: Tuple[int, int]
+    strides: Tuple[int, int]
+    use_bias: bool = True
+
+    @nn.compact
+    def __call__(self, inputs):
+        layer = nn.ConvTranspose(
+            features=self.features,
+            kernel_size=self.kernel_size,
+            strides=self.strides,
+            padding='SAME',
+            use_bias=self.use_bias,
+        )
+        return _apply_circular_mu1_conv_transpose(
+            inputs, layer, self.kernel_size, self.strides)
+
+
 def normalize_to_density_flexible(log_probs, mu1_bias_range=None):
     """
     Normalize log probabilities to proper probability densities that integrate to 1.
@@ -95,15 +145,42 @@ class MirrorAwareMu1Predictor(nn.Module):
         h = h.reshape((-1, 8, 16, self.latent_size))
 
         # CNN decoder
+        kernel_size = (4, 4)
+        strides = (2, 2)
         for ch in self.cnn_channels[:-1]:
-            h = nn.relu(nn.ConvTranspose(features=ch, kernel_size=(4, 4), strides=(2, 2), padding='SAME')(h))
-        h = nn.ConvTranspose(features=self.cnn_channels[-1], kernel_size=(3, 3), strides=(1, 1), padding='SAME')(h)
+            layer = nn.ConvTranspose(
+                features=ch, kernel_size=kernel_size,
+                strides=strides, padding='SAME')
+            if config.mu1_inclusive_legacy:
+                h = layer(h)
+            else:
+                h = _apply_circular_mu1_conv_transpose(
+                    h, layer, kernel_size, strides)
+            h = nn.relu(h)
 
-        # Reshape to get surface with configurable output shape
-        h = jnp.transpose(h, (0, 3, 1, 2))
-        new_size = (h.shape[0], h.shape[1], self.output_shape[0], self.output_shape[1])
-        h = jax.image.resize(h, shape=new_size, method='linear')
-        h = jnp.transpose(h, (0, 2, 3, 1))
+        kernel_size = (3, 3)
+        strides = (1, 1)
+        layer = nn.ConvTranspose(
+            features=self.cnn_channels[-1], kernel_size=kernel_size,
+            strides=strides, padding='SAME')
+        if config.mu1_inclusive_legacy:
+            h = layer(h)
+        else:
+            h = _apply_circular_mu1_conv_transpose(
+                h, layer, kernel_size, strides)
+
+        if config.mu1_inclusive_legacy:
+            # Preserve the exact architecture used by metadata-free checkpoints.
+            h = jnp.transpose(h, (0, 3, 1, 2))
+            new_size = (h.shape[0], h.shape[1],
+                        self.output_shape[0], self.output_shape[1])
+            h = jax.image.resize(h, shape=new_size, method='linear')
+            h = jnp.transpose(h, (0, 2, 3, 1))
+        else:
+            h = periodic_linear_resize_mu1(h, self.output_shape[0])
+            new_size = (h.shape[0], h.shape[1],
+                        self.output_shape[1], h.shape[3])
+            h = jax.image.resize(h, shape=new_size, method='linear')
         
         # Extract surface
         log_probs = h.squeeze(-1)  # Shape: (batch, mu1_bias_points, feat_diff_points)
