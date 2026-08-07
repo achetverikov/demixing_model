@@ -1,5 +1,15 @@
 # README figure sources
 
+`generate_pipeline_figure.py` creates an experimental pipeline figure that is not currently embedded in the main README. Its construction panels are illustrations grounded in the model code rather than a literal depiction of one simulation or the exact neural-network architecture. The likelihood surface, prediction curves, behavioral observations, and fitted curve are read from project outputs.
+
+The committed figure uses a broad surface from the full simulation outputs and the 100-sample predictions prepared for CSH2026. Its defaults match the local outputs used for rendering:
+
+```bash
+python docs/generate_pipeline_figure.py
+```
+
+Because averaged surfaces are not currently shipped, regenerating the figure requires a local `averaged_sf1_*.pkl` surface supplied with `--surface`. The CSH2026 curves default to `../results/csh2026_100samples_circular/sim_model_preds_raw_nn.csv` and can be replaced with `--csh-predictions`. The fitting inputs can likewise be changed with `--trials` and `--fit-curves`.
+
 `generate_readme_figures.py` creates the two data-derived figures embedded in the main README. It does not reuse the repository's older diagnostic images. The prediction figure reads the output of the documented prediction example:
 
 ```bash

@@ -16,7 +16,8 @@ INK = "#18212b"
 GRID = "#d8dee6"
 
 
-def plot_fitting_example(trials_path: Path, curves_path: Path, objective: str, output: Path):
+def prepare_fitting_data(trials_path: Path, curves_path: Path, objective: str):
+    """Return binned behavioral data and mean fitted curves for plotting."""
     trials = pd.read_csv(trials_path)
     if "is_combined" in trials:
         trials = trials[~trials["is_combined"].astype(bool)]
@@ -43,6 +44,11 @@ def plot_fitting_example(trials_path: Path, curves_path: Path, objective: str, o
         bias=("mu_bias", "mean"),
         sem=("mu_bias", "sem"),
     )
+    return empirical, fitted
+
+
+def plot_fitting_example(trials_path: Path, curves_path: Path, objective: str, output: Path):
+    empirical, fitted = prepare_fitting_data(trials_path, curves_path, objective)
 
     fig, ax = plt.subplots(figsize=(8.7, 5.2))
     ax.axhline(0, color="#7b8794", linewidth=1, zorder=0)
