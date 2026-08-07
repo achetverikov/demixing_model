@@ -46,16 +46,17 @@ def expectation_loss(pred_log_density, target_log_density):
     Returns:
         Scalar MSE between predicted and target circular expectations.
     """
-    from shared.config import config
-    
+    from shared.mu1_axis import assert_mu1_axis, mu1_grid
+
     # Normalize to proper densities
     pred_density = jnp.exp(pred_log_density)
     target_density = jnp.exp(target_log_density)
 
-    # Grid setup - mu1_error values for expectation calculation from config
-    mu1_error_min, mu1_error_max = config.mu1_bias_range
-    n_mu1_points = pred_log_density.shape[1]  # Get actual number of points from data
-    mu1_error_values = jnp.linspace(mu1_error_min, mu1_error_max, n_mu1_points)
+    # Read the mu1_error coordinates, never reconstruct them: an inclusive
+    # linspace over the range tuple gives a 2.0112° step and a phantom +180
+    # sample once the axis is periodic.
+    assert_mu1_axis(pred_log_density.shape[1], name="expectation_loss input")
+    mu1_error_values = mu1_grid()
 
     # Compute expectations: sum over mu1_error (axis=1)
     # No dx factor needed since densities are already properly normalized
@@ -74,8 +75,11 @@ def smoothness_regularization(log_density):
     Returns:
         Scalar regularization loss (mean squared finite differences along both axes).
     """
-    # Gradients along both spatial dimensions
-    grad_mu1 = jnp.diff(log_density, axis=1)  # Along mu1_error
+    # Gradients along both spatial dimensions.  mu1_error is circular, so the
+    # wrap-around step (last row -> first row) is a real adjacent-row step and
+    # gets the same weight as any other; jnp.diff would give it zero weight.
+    # feat_diff stays non-periodic — it is a bounded interval, not a circle.
+    grad_mu1 = log_density - jnp.roll(log_density, 1, axis=1)  # Along mu1_error
     grad_feat = jnp.diff(log_density, axis=2)  # Along feat_diff
 
     return jnp.mean(grad_mu1 ** 2) + jnp.mean(grad_feat ** 2)

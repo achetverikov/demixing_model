@@ -22,6 +22,7 @@ from pathlib import Path
 import pickle
 
 from shared.config import config
+from shared.mu1_axis import bin_indices, periodic_integral
 from shared.utils import load_checkpoint, compute_single_density_asymmetry
 
 
@@ -57,8 +58,10 @@ def _generate_nn_bias_curve_batch(log_surfaces_batch: jnp.ndarray, target_feat_i
         cos_vals = jnp.cos(jnp.radians(mu1_bias_grid)).reshape(-1, 1)
         sin_vals = jnp.sin(jnp.radians(mu1_bias_grid)).reshape(-1, 1)
 
-        cos_expectations = jnp.trapezoid(cos_vals * target_prob_profiles, x=mu1_bias_grid, axis=0)
-        sin_expectations = jnp.trapezoid(sin_vals * target_prob_profiles, x=mu1_bias_grid, axis=0)
+        # Periodic quadrature: trapezoid over x=grid spans only 358 of the 360
+        # degrees and half-weights the two ends.
+        cos_expectations = periodic_integral(cos_vals * target_prob_profiles, axis=0)
+        sin_expectations = periodic_integral(sin_vals * target_prob_profiles, axis=0)
 
         circular_means = jnp.degrees(jnp.arctan2(sin_expectations, cos_expectations))
         return circular_means
@@ -534,8 +537,9 @@ class GridBasedMultiConditionOptimizer:
             feat_indices = jnp.round((feat_diff_vals - config.feat_diff_range[0]) / config.feat_diff_step).astype(int)
             feat_indices = jnp.clip(feat_indices, 0, len(config.create_grid('feat_diff')) - 1)
 
-            bias_indices = jnp.round((bias_vals - config.mu1_bias_range[0]) / config.mu1_bias_step).astype(int)
-            bias_indices = jnp.clip(bias_indices, 0, len(config.create_grid('mu1_bias')) - 1)
+            # Bias is circular: wrap, never clip.  Clipping sends (179, 180) onto
+            # the last row (+178) instead of round-tripping it to bin 0.
+            bias_indices = bin_indices(bias_vals)
 
             condition_data.append({
                 'name': condition_name,
@@ -900,8 +904,9 @@ class GridBasedMultiConditionOptimizer:
             w_c = gw.sum(axis=1)  # (n_feat,) — effective support weight per fd point
 
             # Weighted histogram: Q_c[j, k] = sum_i gw[j,i] * I(bias_bin[i]==k) / w_c[j]
-            bias_bin = np.clip(
-                np.round((bias_vals - bias_low) / bias_step_val).astype(int), 0, n_bias_pts - 1
+            # Circular binning: wrap rather than clip (see _prepare_all_condition_data).
+            bias_bin = np.mod(
+                np.round((bias_vals - bias_low) / bias_step_val).astype(int), n_bias_pts
             )
             one_hot = np.zeros((len(bias_vals), n_bias_pts))
             one_hot[np.arange(len(bias_vals)), bias_bin] = 1.0

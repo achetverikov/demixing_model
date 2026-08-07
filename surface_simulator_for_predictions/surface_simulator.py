@@ -26,6 +26,7 @@ from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
     _generate_nn_bias_curve_batch,
 )
 from shared.config import config
+from shared.mu1_axis import guard_surface_mu1_axis, periodic_integral
 from shared.utils import (AveragedSurface, SurfaceUnpickler, resolve_input_path,
                           ensure_averaged_surface_file)
 
@@ -156,18 +157,21 @@ def compute_predicted_sd_curves_batch(log_surfaces_batch, feat_vals):
     angles_rad = jnp.radians(mu1_bias_grid)  # Shape: (n_mu1_bias,)
     cos_angles = jnp.cos(angles_rad)  # Shape: (n_mu1_bias,)
     sin_angles = jnp.sin(angles_rad)  # Shape: (n_mu1_bias,)
-    bias_step = float(jnp.diff(mu1_bias_grid)[0])
     
     # Vectorized circular SD computation for all surfaces and feature values
-    # Compute mean cos and sin using trapezoidal integration
+    # Compute mean cos and sin using periodic quadrature (sum x cell width)
     # prob_profiles: (n_surfaces, n_mu1_bias, n_feat_vals)
     # cos_angles: (n_mu1_bias,) -> broadcast to (1, n_mu1_bias, 1)
-    mean_cos = jnp.trapezoid(prob_profiles * cos_angles[None, :, None], x=mu1_bias_grid, axis=1)  # Shape: (n_surfaces, n_feat_vals)
-    mean_sin = jnp.trapezoid(prob_profiles * sin_angles[None, :, None], x=mu1_bias_grid, axis=1)  # Shape: (n_surfaces, n_feat_vals)
-    
-    # Compute circular standard deviations
-    r = jnp.sqrt(mean_cos**2 + mean_sin**2)
-    r_safe = jnp.maximum(r, 1e-10)  # Avoid log(0)
+    mass = periodic_integral(prob_profiles, axis=1)  # Shape: (n_surfaces, n_feat_vals)
+    mean_cos = periodic_integral(prob_profiles * cos_angles[None, :, None], axis=1)  # Shape: (n_surfaces, n_feat_vals)
+    mean_sin = periodic_integral(prob_profiles * sin_angles[None, :, None], axis=1)  # Shape: (n_surfaces, n_feat_vals)
+
+    # Compute circular standard deviations. Dividing by the column's own mass
+    # keeps the resultant a true mean resultant length rather than relying on
+    # the columns being exactly rectangle-normalized (MODEL_PIPELINE_FOR_AGENTS
+    # D.10); numerically a no-op for normalized surfaces.
+    r = jnp.sqrt(mean_cos**2 + mean_sin**2) / jnp.where(mass > 0, mass, jnp.nan)
+    r_safe = jnp.minimum(jnp.maximum(r, 1e-10), 1.0 - 1e-10)  # clamp to (0, 1)
     circular_sds = jnp.degrees(jnp.sqrt(-2 * jnp.log(r_safe)))  # Shape: (n_surfaces, n_feat_vals)
     
     return circular_sds
@@ -207,7 +211,8 @@ def load_averaged_surface(sd_feat1: float, sd_feat2: float, sd_spat: float, n_sa
             surface_data = SurfaceUnpickler(f).load()
         
         surface_obj = surface_data['surface']
-        
+        guard_surface_mu1_axis(surface_obj, source=str(file_path))
+
         # Select appropriate components based on parameter ordering
         if sd_feat1 <= sd_feat2:
             # Use lower-noise component surfaces (comp1)

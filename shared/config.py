@@ -24,6 +24,12 @@ class Config:
 
     n_samples: int = 100
 
+    #: Force the pre-fix *inclusive* mu1_bias axis (181 points, both ±180).
+    #: Only ``shared.mu1_axis.legacy_mu1_axis()`` should ever set this, and only
+    #: to run a legacy checkpoint at the row count it was trained on before its
+    #: output is trimmed.  Never set it to persist data.
+    mu1_inclusive_legacy: bool = False
+
     @property
     def data_range(self):
         """Return the configured parameter range bounds."""
@@ -36,14 +42,27 @@ class Config:
     
     @property
     def mu1_bias_grid_size(self) -> int:
-        """Number of mu1 bias grid points."""
-        return (self.mu1_bias_range[1] - self.mu1_bias_range[0]) // self.mu1_bias_step + 1
-    
+        """Number of mu1 bias grid points.
+
+        The mu1_bias axis is **circular**, so it is represented half-open: no
+        ``+1``, because ``mu1_bias_range[1]`` (+180°) is the same angle as
+        ``mu1_bias_range[0]`` (-180°) and must not occupy a second cell.  The
+        range tuple keeps its inclusive-looking ``(-180, 180)`` — it describes
+        the period, not an inclusive endpoint list.  See ``shared/mu1_axis.py``.
+        """
+        n = (self.mu1_bias_range[1] - self.mu1_bias_range[0]) // self.mu1_bias_step
+        return n + 1 if self.mu1_inclusive_legacy else n
+
     def create_grid(self, param_name: str):
         """Create grid using arange with step size for given parameter.
-        
+
         Args:
             param_name: One of 'feat_diff', 'mu1_bias', 'mu2_bias'
+
+        ``mu1_bias`` is special-cased as **stop-exclusive** because it is the one
+        genuinely circular axis: including both ±180 would give one physical
+        angle two cells and break the FFT period of the motor-noise convolution.
+        ``feat_diff`` and ``mu2_bias`` are bounded intervals and stay inclusive.
         """
         import jax.numpy as jnp
         
@@ -56,7 +75,11 @@ class Config:
         
         param_range = getattr(self, range_attr)
         param_step = getattr(self, step_attr)
-        
+
+        if param_name == 'mu1_bias' and not self.mu1_inclusive_legacy:
+            # Circular axis: stop-exclusive, so +180 is not a second copy of -180.
+            return jnp.arange(param_range[0], param_range[1], param_step)
+
         return jnp.arange(param_range[0], param_range[1] + param_step, param_step)
     
     @property

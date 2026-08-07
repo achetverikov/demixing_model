@@ -19,6 +19,7 @@ parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
+from shared.mu1_axis import guard_surface_mu1_axis
 from shared.utils import (
     Surface, AveragedSurface, SurfaceUnpickler,
     ensure_averaged_surface_file, _build_bundle_index,
@@ -170,6 +171,11 @@ class SurfaceDataManager:
                 surface = data['surface']
             else:
                 surface = data  # Fallback if it's directly a Surface object
+
+            # Legacy 181-row surfaces carry their own stale mu1 axis in the
+            # pickle, so a config change alone cannot fix them: guard, and point
+            # at the on-disk migration.
+            guard_surface_mu1_axis(surface, source=str(path))
 
             # Cache the result
             self._surface_cache[file_path] = surface

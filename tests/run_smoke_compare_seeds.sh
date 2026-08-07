@@ -105,8 +105,8 @@ for fname in sorted(std_names):
     with open(pipe_dir / fname, "rb") as f:
         pipe_surf = pickle.load(f)["surface"]
 
-    # 1. Shape check — mu1: (181, 90), mu2: (167, 90)
-    expected = {f: (181, 90) for f in MU1_FIELDS}
+    # 1. Shape check — mu1: (180, 90), mu2: (167, 90)   [mu1 is the half-open circle]
+    expected = {f: (180, 90) for f in MU1_FIELDS}
     expected.update({f: (167, 90) for f in OTHER_FIELDS})
     for field in MU1_FIELDS + OTHER_FIELDS:
         a = np.asarray(getattr(std_surf,  field), dtype=np.float32)
@@ -163,7 +163,7 @@ for fname in sorted(std_names):
 
     stem = fname.replace(".pkl", "")
     for field in MU1_FIELDS:
-        a = np.asarray(getattr(std_surf,  field), dtype=np.float32)  # (181, 90)
+        a = np.asarray(getattr(std_surf,  field), dtype=np.float32)  # (180, 90)
         b = np.asarray(getattr(pipe_surf, field), dtype=np.float32)
         diff = b - a
 

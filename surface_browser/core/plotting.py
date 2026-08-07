@@ -17,6 +17,8 @@ parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
+from shared.mu1_axis import sign_masks
+
 
 class Plot:
     """Fluent interface for creating surface plots."""
@@ -76,9 +78,15 @@ class Plot:
         for i in range(len(feat_diff_values)):
             prob_profile = likelihood_surface[:, i] / np.sum(likelihood_surface[:, i])
             
-            # Simple asymmetry: (sum(p>0)-sum(p<0))*100
-            prob_positive = np.sum(prob_profile[bias_values > 0])
-            prob_negative = np.sum(prob_profile[bias_values < 0])
+            # Simple asymmetry: (sum(p>0)-sum(p<0))*100.  On the circular mu1
+            # axis both 0 and the antipode (-180) are sign-ambiguous and are
+            # excluded from both sides; mu2 is a linear axis and only 0 is.
+            if dimension == 1:
+                pos_mask, neg_mask = (np.asarray(m) for m in sign_masks(bias_values))
+            else:
+                pos_mask, neg_mask = bias_values > 0, bias_values < 0
+            prob_positive = np.sum(prob_profile[pos_mask])
+            prob_negative = np.sum(prob_profile[neg_mask])
             asymmetry = (prob_positive - prob_negative) * 100
             asymmetry_values.append(asymmetry)
         

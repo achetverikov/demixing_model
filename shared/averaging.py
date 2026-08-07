@@ -25,6 +25,11 @@ from shared.utils import AveragedSurface
 # Outlier pre-filter
 # ---------------------------------------------------------------------------
 
+def _wrap_bias_deg(x):
+    """Wrap angles in degrees onto the half-open circle [-180, 180)."""
+    return jnp.mod(x + 180.0, 360.0) - 180.0
+
+
 @jax.jit
 def prefilter_isolated_samples(samples, feat_bin_size=8, bias_bin_size=8,
                                 min_neighbors=3):
@@ -35,35 +40,43 @@ def prefilter_isolated_samples(samples, feat_bin_size=8, bias_bin_size=8,
     NaN-flagged samples get zero weight in the KDE.
 
     Note the bin sizes are in different units: feat_bin_size counts grid steps
-    (8 steps = 16° on the 2° grid) while bias_bin_size is in degrees. At grid
-    edges/corners the 3×3 neighbour indices are clipped independently, so the
-    same boundary bin is counted more than once (up to 4× at a corner) — the
-    effective threshold there is laxer than "min_neighbors across 9 distinct
-    bins" (MODEL_PIPELINE_FOR_AGENTS.md S3.2b).
+    (8 steps = 16° on the 2° grid) while bias_bin_size is in degrees. The feat
+    axis is bounded, so its ±1 neighbour indices are clipped at the edges and the
+    same boundary bin is counted more than once — the effective threshold there
+    is laxer than "min_neighbors across 9 distinct bins"
+    (MODEL_PIPELINE_FOR_AGENTS.md S3.2b). The bias axis is CIRCULAR, so its
+    neighbourhood WRAPS: a sample at 178° has −178° as a neighbour. (Before the
+    circularity fix the bias neighbourhood was clipped like the feat one, which
+    made samples near the ±180 seam look isolated and removed them.)
     Returns (filtered_samples, n_removed).
     """
     feat_diff_n, sample_n = samples.shape
 
     feat_coords = jnp.arange(feat_diff_n)[:, None].repeat(sample_n, axis=1).flatten()
-    bias_coords = samples.flatten()
+    # Wrap onto [-180, 180) so exactly +180 shares a bin with -180 instead of
+    # landing alone in the (right-inclusive) last histogram bin.
+    bias_coords = _wrap_bias_deg(samples).flatten()
 
     feat_bins = jnp.arange(0, feat_diff_n + feat_bin_size, feat_bin_size)
+    # Histogram EDGES: n+1 edges for n bins, so the closing +180 edge is correct
+    # here — unlike a grid, where a duplicated ±180 point would be a defect.
     bias_bins = jnp.arange(-180, 180 + bias_bin_size, bias_bin_size)
 
     hist, _, _ = jnp.histogram2d(feat_coords, bias_coords,
                                   bins=[feat_bins, bias_bins])
+    n_bias_bins = hist.shape[1]
 
     def check_sample_neighborhood(feat_idx, sample_idx):
         bias_val = samples[feat_idx, sample_idx]
         feat_bin_idx = feat_idx // feat_bin_size
-        bias_bin_idx = jnp.clip(
-            (bias_val + 180) // bias_bin_size, 0, hist.shape[1] - 1
+        bias_bin_idx = jnp.mod(
+            (_wrap_bias_deg(bias_val) + 180) // bias_bin_size, n_bias_bins
         ).astype(jnp.int32)
         neighbor_sum = 0
         for df in [-1, 0, 1]:
             for db in [-1, 0, 1]:
                 f_idx = jnp.clip(feat_bin_idx + df, 0, hist.shape[0] - 1)
-                b_idx = jnp.clip(bias_bin_idx + db, 0, hist.shape[1] - 1)
+                b_idx = jnp.mod(bias_bin_idx + db, n_bias_bins)
                 neighbor_sum += hist[f_idx, b_idx]
         return jnp.where(neighbor_sum >= min_neighbors, bias_val, jnp.nan)
 

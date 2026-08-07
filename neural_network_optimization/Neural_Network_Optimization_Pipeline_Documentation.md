@@ -84,7 +84,7 @@ safe to re-run either way — it skips combinations whose averaged surface alrea
         'sd_spat': float
     },
     'surface': AveragedSurface(
-        mu1_comp1_surface,   # shape (181, 90) — bias × feat_diff grid
+        mu1_comp1_surface,   # shape (180, 90) — bias × feat_diff grid (half-open circle)
         mu1_comp2_surface,
         mu2_surface,
         ...
@@ -104,7 +104,7 @@ Convention: `sf1 ≤ sf2` (canonical order).
 config.param_range_low  = 10
 config.param_range_high = 200
 config.param_step       = 10
-config.mu1_surface_shape = (181, 90)   # (bias_points, feat_diff_points)
+config.mu1_surface_shape = (180, 90)   # (bias_points, feat_diff_points)
 ```
 
 `--feat-bandwidth` is expressed in feature-difference **grid steps**, not degrees.

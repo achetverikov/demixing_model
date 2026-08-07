@@ -32,6 +32,7 @@ from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
     _compute_curve_losses,
 )
 from shared.config import config
+from shared.mu1_axis import mu1_cell_width, periodic_integral, sign_masks
 from shared import seed_manager
 from shared.utils import (
     compute_target_bias_rolling_curve_core,
@@ -97,7 +98,8 @@ def _pooled_bias_weighted_crps(log_surfaces, datasets, feat_grid, distance_matri
         feat_diff, bias = values[:, 0], values[:, 1]
         kernel = np.exp(-0.5 * ((feat_grid[:, None] - feat_diff[None, :]) / weights_sd) ** 2)
         support = kernel.sum(axis=1)
-        bias_bin = np.clip(np.round((bias - bias_low) / bias_step).astype(int), 0, n_bias - 1)
+        # Circular binning: wrap, never clip (the mu1_bias axis is a circle).
+        bias_bin = np.mod(np.round((bias - bias_low) / bias_step).astype(int), n_bias)
         one_hot = np.zeros((len(bias), n_bias), dtype=float)
         one_hot[np.arange(len(bias)), bias_bin] = 1.0
         supports.append(support)
@@ -120,37 +122,115 @@ def _pooled_bias_weighted_crps(log_surfaces, datasets, feat_grid, distance_matri
     return float(np.sum(fd_weights * (2 * cross - self_energy)) / np.sum(fd_weights))
 
 
-def compute_empirical_sd_curve(feat_diff_values, bias_values, n_bins=18):
-    """Compute empirical standard deviation curve binned by feature difference - fully vectorized."""
-    # Create bins for feature difference
+SD_N_BINS = 18
+
+
+def _feat_diff_bin_edges(n_bins=SD_N_BINS):
+    """Edges and centers of the feature-difference bins used by both SD curves."""
     feat_min, feat_max = config.feat_diff_range[0], config.feat_diff_range[1]
     bin_edges = np.linspace(feat_min, feat_max, n_bins + 1)
-    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    return bin_edges, (bin_edges[:-1] + bin_edges[1:]) / 2
 
-    # Vectorized binning - assign each trial to a bin
-    bin_indices = np.digitize(feat_diff_values, bin_edges) - 1
-    bin_indices = np.clip(bin_indices, 0, n_bins - 1)  # Ensure within bounds
 
-    # Initialize output array
+def _feat_diff_bin_indices(feat_diff_values, n_bins=SD_N_BINS):
+    """Assign trials to SD bins.
+
+    Shared by the empirical curve and by the model-pooling weights so the two SD
+    estimators aggregate over exactly the same partition of trials.
+    """
+    bin_edges, _ = _feat_diff_bin_edges(n_bins)
+    indices = np.digitize(np.asarray(feat_diff_values, dtype=float), bin_edges) - 1
+    return np.clip(indices, 0, n_bins - 1)
+
+
+def compute_empirical_sd_curve(feat_diff_values, bias_values, n_bins=SD_N_BINS):
+    """Empirical circular SD of the report bias, binned by feature difference.
+
+    Small-sample correction: the sample resultant length is biased *upward*
+    (``E[r̄²] = ρ² + (1−ρ²)/n`` — a handful of unit vectors cannot cancel), and
+    because the SD is ``sqrt(-2 ln r)`` that propagates to an *under*-estimate of
+    the SD: roughly −27% at n=3, −8% at n=10, −3% at n=25, −1% at n=50, and
+    close to scale-free in true SD over 10–60°. The model-side estimator is an
+    integral with no sampling error, so uncorrected this reads on the plot as
+    "the model overestimates variability". We therefore substitute the unbiased
+    resultant ``ρ̂² = (n·r̄² − 1)/(n − 1)`` for the raw ``r̄²``: Kutil (2012),
+    Statistics 46(4) 549–561, eq. (5), derived from iid alone (no von Mises
+    assumption). Note it is unbiased in ρ², NOT in ρ — (Eρ̂')² = E(ρ̂'²) − V(ρ̂'),
+    so a small downward residual survives at very low n (~6% at n=3, vs ~27%
+    uncorrected). Kutil's eq. (28) removes more of it at the cost of variance;
+    not used here. Bias is traded for variance, which is the right trade only
+    because these curves are averaged across subjects before being read.
+
+    Bins whose ``ρ̂²`` is non-positive are consistent with a uniform bias
+    distribution, for which this parameterization of circular SD is unbounded;
+    they are returned as NaN rather than clamped to a large finite value (the
+    old ``maximum(r, 1e-10)`` floor would have plotted them at ~389°).
+
+    The correction removes bias, not variance — low-count bins remain noisy,
+    which is why the per-bin trial counts are returned alongside.
+
+    Returns:
+        (bin_centers, sds, counts), all length ``n_bins``.
+    """
+    _, bin_centers = _feat_diff_bin_edges(n_bins)
+    bin_indices = _feat_diff_bin_indices(feat_diff_values, n_bins)
+    bias_values = np.asarray(bias_values, dtype=float)
+
     empirical_sds = np.full(n_bins, np.nan)
+    bin_counts = np.zeros(n_bins, dtype=int)
 
-    # Process all bins at once using unique bin indices
-    unique_bins = np.unique(bin_indices)
+    for bin_idx in np.unique(bin_indices):
+        bin_bias_values = bias_values[bin_indices == bin_idx]
+        n = len(bin_bias_values)
+        bin_counts[bin_idx] = n
 
-    for bin_idx in unique_bins:
-        mask = bin_indices == bin_idx
-        bin_bias_values = bias_values[mask]
+        if n < 2:
+            continue
 
-        if len(bin_bias_values) > 1:
-            # Vectorized circular standard deviation computation
-            angles_rad = np.radians(bin_bias_values)
-            mean_cos = np.mean(np.cos(angles_rad))
-            mean_sin = np.mean(np.sin(angles_rad))
-            r = np.sqrt(mean_cos**2 + mean_sin**2)
-            circular_sd = np.degrees(np.sqrt(-2 * np.log(np.maximum(r, 1e-10))))
-            empirical_sds[bin_idx] = circular_sd
+        angles_rad = np.radians(bin_bias_values)
+        r2 = np.mean(np.cos(angles_rad)) ** 2 + np.mean(np.sin(angles_rad)) ** 2
+        r2_unbiased = (n * r2 - 1.0) / (n - 1.0)
+        if r2_unbiased <= 0:
+            continue
 
-    return bin_centers, empirical_sds
+        r = np.sqrt(min(r2_unbiased, 1.0))  # ==1 for identical values -> SD 0
+        empirical_sds[bin_idx] = np.degrees(np.sqrt(-2 * np.log(r)))
+
+    return bin_centers, empirical_sds, bin_counts
+
+
+def compute_feat_bin_weights(feat_diff_values, feat_vals, n_bins=SD_N_BINS):
+    """Per-bin mixture weights over model feature columns, taken from the data.
+
+    The empirical SD in a bin is the spread of *every trial in that bin pooled
+    together*, so the comparable model quantity is the spread of the MIXTURE of
+    the per-column bias densities, mixed in the proportion the trials actually
+    occupy. Reading those proportions off the data — rather than assuming trials
+    fill the bin uniformly — is what makes this safe for designs where feature
+    difference takes a handful of discrete values instead of spanning the bin
+    (Moors): there the weight collapses onto the single column carrying the
+    trials, the pooled model SD reduces to the unpooled one, and the model is
+    not inflated by columns no trial ever visited. For continuously sampled
+    designs the weight spreads over the ~5 columns a bin covers and reproduces
+    the same law-of-total-variance broadening the empirical estimator has.
+
+    Returns:
+        (n_bins, len(feat_vals)); rows sum to 1, or to 0 for bins with no trials.
+    """
+    feat_vals = np.asarray(feat_vals, dtype=float)
+    feat_diff_values = np.asarray(feat_diff_values, dtype=float)
+    bin_indices = _feat_diff_bin_indices(feat_diff_values, n_bins)
+
+    # Same nearest-column mapping the model SD curve uses on its feat_vals.
+    columns = np.round(
+        (feat_diff_values - config.feat_diff_range[0]) / config.feat_diff_step
+    ).astype(int)
+    columns = np.clip(columns, 0, len(feat_vals) - 1)
+
+    weights = np.zeros((n_bins, len(feat_vals)), dtype=float)
+    np.add.at(weights, (bin_indices, columns), 1.0)
+    totals = weights.sum(axis=1, keepdims=True)
+    return np.divide(weights, totals, out=np.zeros_like(weights), where=totals > 0)
 
 
 
@@ -158,14 +238,18 @@ def compute_empirical_sd_curve(feat_diff_values, bias_values, n_bins=18):
 def compute_predicted_sd_curves_batch(log_surfaces_batch, feat_vals):
     """Batch version: Compute predicted SD curves for multiple surfaces at once - fully vectorized.
 
-    Estimator caveat: the sine/cosine moments below are trapezoidal integrals of
-    the raw column values, NOT divided by trapezoid(p). The NN columns are
-    normalized by discrete sum × dx (rectangle rule), so their trapezoidal
-    integral is close to but not exactly 1 (endpoint bins carry half weight),
-    and the resultant length inherits that mismatch. The empirical counterpart
-    (compute_empirical_sd_curve) uses normalized trial means, so the two SD
-    estimators are not operationally identical — see
-    MODEL_PIPELINE_FOR_AGENTS.md D.10.
+    This is the FINE-GRID model SD, one value per 2° feature column, and it is
+    what `fitted_curves.csv` exports as `sd_deg`. It is NOT the curve plotted
+    against the empirical SD — see compute_pooled_predicted_sd_curves_batch,
+    which pools columns into the empirical bins so the two are comparable.
+
+    The sine/cosine moments are periodic integrals (plain sum × cell width),
+    matching the rectangle rule the NN columns are normalized under, and are
+    divided by the mixture mass explicitly so the estimator does not depend on
+    that normalization holding (MODEL_PIPELINE_FOR_AGENTS.md D.10; before the
+    circularity fix these were trapezoidal integrals over x=grid, which
+    half-weighted the endpoint bins and spanned 358° of the 360° period, and the
+    missing division then biased the model SD upward).
     """
     mu1_bias_grid = config.create_grid('mu1_bias')
     n_surfaces, n_mu1_bias, n_feat_diff = log_surfaces_batch.shape
@@ -188,20 +272,66 @@ def compute_predicted_sd_curves_batch(log_surfaces_batch, feat_vals):
     sin_angles = jnp.sin(angles_rad)  # Shape: (n_mu1_bias,)
 
     # Vectorized circular SD computation for all surfaces and feature values.
-    # The NN columns are continuous densities normalized by discrete sum × dx
-    # (rectangle rule, see normalize_to_density_flexible); the trapezoidal
-    # moments here treat them as ≈normalized without re-dividing (docstring).
     # prob_profiles: (n_surfaces, n_mu1_bias, n_feat_vals)
     # cos_angles: (n_mu1_bias,) -> broadcast to (1, n_mu1_bias, 1)
-    mean_cos = jnp.trapezoid(prob_profiles * cos_angles[None, :, None], x=mu1_bias_grid, axis=1)
-    mean_sin = jnp.trapezoid(prob_profiles * sin_angles[None, :, None], x=mu1_bias_grid, axis=1)
+    mass = periodic_integral(prob_profiles, axis=1)
+    mean_cos = periodic_integral(prob_profiles * cos_angles[None, :, None], axis=1)
+    mean_sin = periodic_integral(prob_profiles * sin_angles[None, :, None], axis=1)
 
     # Compute circular standard deviations
-    r = jnp.sqrt(mean_cos**2 + mean_sin**2)
+    r = jnp.sqrt(mean_cos**2 + mean_sin**2) / jnp.where(mass > 0, mass, jnp.nan)
     r_safe = jnp.minimum(jnp.maximum(r, 1e-10), 1.0 - 1e-10)  # clamp to (0, 1)
     circular_sds = jnp.degrees(jnp.sqrt(-2 * jnp.log(r_safe)))  # Shape: (n_surfaces, n_feat_vals)
 
     return circular_sds
+
+
+def compute_predicted_sd_curves_batch_pooled(log_surfaces_batch, bin_weights_batch):
+    """Model SD pooled into the empirical SD's feature-difference bins.
+
+    Row 3 of the plots compares a model SD against an empirical SD computed over
+    ~10 model-degree bins of trials. Evaluating the model at a single 2° column
+    is not the same quantity: pooling trials whose bias means differ adds a
+    between-column term to the empirical spread that the single-column model
+    value has none of, inflating the data curve wherever the bias curve is
+    steep. Mixing the model columns with the bin's own trial distribution
+    (compute_feat_bin_weights) puts that term on both sides.
+
+    Because the weights come from the data, discrete-level designs (Moors)
+    degenerate correctly: a bin whose trials all sit at one feature difference
+    mixes exactly one column and the pooled value equals the unpooled one.
+
+    Args:
+        log_surfaces_batch: (n_surfaces, n_mu1_bias, n_feat_diff) log densities.
+        bin_weights_batch: (n_surfaces, n_bins, n_feat_vals) mixture weights,
+            rows summing to 1 (or 0 for bins with no trials → NaN output).
+
+    Returns:
+        (n_surfaces, n_bins) circular SDs in model degrees.
+    """
+    mu1_bias_grid = config.create_grid('mu1_bias')
+    n_feat_diff = log_surfaces_batch.shape[2]
+
+    prob_surfaces = jnp.exp(log_surfaces_batch)
+    weights = jnp.asarray(bin_weights_batch)
+    if weights.shape[2] != n_feat_diff:
+        raise ValueError(
+            f"bin weights span {weights.shape[2]} feature columns but the "
+            f"surfaces have {n_feat_diff}"
+        )
+
+    # Mixture density per (surface, bin): sum_f w[b, f] * p[:, f]
+    mixtures = jnp.einsum('smf,sbf->smb', prob_surfaces, weights)
+
+    angles_rad = jnp.radians(mu1_bias_grid)
+    mass = periodic_integral(mixtures, axis=1)
+    mean_cos = periodic_integral(mixtures * jnp.cos(angles_rad)[None, :, None], axis=1)
+    mean_sin = periodic_integral(mixtures * jnp.sin(angles_rad)[None, :, None], axis=1)
+
+    # Empty bins have zero mass -> NaN, matching the empirical curve's gaps.
+    r = jnp.sqrt(mean_cos**2 + mean_sin**2) / jnp.where(mass > 0, mass, jnp.nan)
+    r_safe = jnp.minimum(jnp.maximum(r, 1e-10), 1.0 - 1e-10)
+    return jnp.degrees(jnp.sqrt(-2 * jnp.log(r_safe)))
 
 
 def _sanitize_result_key_part(value: str) -> str:
@@ -328,6 +458,10 @@ def prepare_all_subjects_data(
     all_params_3d = []
     all_motor_noise = []
     param_mapping = {}  # Maps (subject_id, experiment, condition, optimizer) -> index in batch
+    # Maps (subject_id, experiment, condition) -> feature differences of the
+    # trials the empirical SD curve will be built from, used to pool the model
+    # SD over the same bins.
+    condition_feat_diff = {}
     batch_idx = 0
 
     # Use full feature grid from config (model space 0–180°)
@@ -364,10 +498,24 @@ def prepare_all_subjects_data(
                 'available_optimizers': available_optimizers
             }
 
+            # Which trials the empirical SD will use depends on the branch taken
+            # further down (saved curves -> first stored result only; recompute
+            # -> every dataset of the condition). Mirror that choice here so the
+            # pooling weights are built from exactly the same trials.
+            saved_curves_branch = bool(sample_result.get('empirical_curves'))
+
             # Collect parameters for all condition×optimizer combinations
             for condition_name, cond_data_list in noise_conditions.items():
                 cond_data = cond_data_list[0]
                 result = cond_data['result']
+
+                sd_sources = ([cond_data_list[0]['result']] if saved_curves_branch
+                              else [cd['result'] for cd in cond_data_list])
+                feat_diff_arrays = [np.asarray(src['data_df'])[:, 0]
+                                    for src in sd_sources if 'data_df' in src]
+                if feat_diff_arrays:
+                    condition_feat_diff[(subject_id, experiment, condition_name)] = (
+                        np.concatenate(feat_diff_arrays))
 
                 for opt in available_optimizers:
                     param_key = f'{opt}_fitted_params'
@@ -469,6 +617,25 @@ def prepare_all_subjects_data(
         print("Computing standard deviation curves for all surfaces...")
         all_predicted_sd = compute_predicted_sd_curves_batch(log_surfaces_batch, feat_vals)
 
+        # Bin-pooled twin of the same curve, for the comparison against the
+        # empirical SD. Weights are per condition, not per optimizer, so build
+        # the unique rows once and gather them into batch order.
+        zero_weights = np.zeros((SD_N_BINS, len(feat_vals)))
+        unique_weight_rows = [zero_weights]
+        weight_row_of_condition = {}
+        for condition_key, feat_diff_vals in condition_feat_diff.items():
+            weight_row_of_condition[condition_key] = len(unique_weight_rows)
+            unique_weight_rows.append(
+                compute_feat_bin_weights(feat_diff_vals, feat_vals))
+
+        weight_rows = jnp.asarray(np.stack(unique_weight_rows))
+        weight_index = jnp.asarray([
+            weight_row_of_condition.get(key[:3], 0)
+            for key, _ in sorted(param_mapping.items(), key=lambda item: item[1])
+        ])
+        all_predicted_sd_pooled = compute_predicted_sd_curves_batch_pooled(
+            log_surfaces_batch, weight_rows[weight_index])
+
         print("Mapping results back to subject structure...")
     else:
         report_order_bwcrps = {}
@@ -505,7 +672,8 @@ def prepare_all_subjects_data(
                             experiment_optimizer_curves[condition_name][opt] = {
                                 'bias': all_bias_curves[idx],
                                 'asymmetry': all_asymm_curves[idx],
-                                'predicted_sd': all_predicted_sd[idx]
+                                'predicted_sd': all_predicted_sd[idx],
+                                'predicted_sd_pooled': all_predicted_sd_pooled[idx],
                             }
 
             # Collect all condition datasets for this subject at once
@@ -573,7 +741,7 @@ def prepare_all_subjects_data(
                     if 'data_df' in result:
                         data_array = np.array(result['data_df'])
                         empirical_sd = compute_empirical_sd_curve(
-                            data_array[:, 0], data_array[:, 1], n_bins=18)
+                            data_array[:, 0], data_array[:, 1], n_bins=SD_N_BINS)
 
                     bias_curve_smoothed = saved_curves.get('target_bias_curve')
                     if bias_curve_smoothed is None and 'data_df' in result:
@@ -626,7 +794,7 @@ def prepare_all_subjects_data(
                         empirical_sd = None
                         if mapping['raw_data']:
                             condition_array = np.array(mapping['raw_data'])
-                            empirical_sd = compute_empirical_sd_curve(condition_array[:, 0], condition_array[:, 1], n_bins=18)
+                            empirical_sd = compute_empirical_sd_curve(condition_array[:, 0], condition_array[:, 1], n_bins=SD_N_BINS)
 
                         # Get the separate empirical feature grids from optimizer
                         empirical_bias_grid = None
@@ -813,6 +981,13 @@ def create_unified_subject_plot(
             # Plot standard deviation curves (third row)
             ax3 = axes[2, col]
 
+            # Model SD is shown bin-pooled, on the empirical curve's own bins, so
+            # both sides carry the same between-column mixing (see
+            # compute_predicted_sd_curves_batch_pooled). Results predating that
+            # field fall back to the fine-grid curve.
+            _, sd_bin_centers = _feat_diff_bin_edges()
+            display_sd_bin_centers = sd_bin_centers * angle_display_scale
+
             for opt in available_optimizers:
                 if opt not in condition_optimizer_curves:
                     continue
@@ -820,14 +995,24 @@ def create_unified_subject_plot(
                 color = opt_colors.get(opt, 'black')
                 label = opt_labels.get(opt, opt.capitalize())
 
-                ax3.plot(display_feat_vals,
-                        condition_optimizer_curves[opt]['predicted_sd'] * angle_display_scale,
-                        color=color, linewidth=2, label=f'{label}', linestyle='-')
+                pooled_sd = condition_optimizer_curves[opt].get('predicted_sd_pooled')
+                pooled_sd = None if pooled_sd is None else np.asarray(pooled_sd)
+                if pooled_sd is not None and np.any(~np.isnan(pooled_sd)):
+                    pooled_display = pooled_sd * angle_display_scale
+                    pooled_valid = ~np.isnan(pooled_display)
+                    ax3.plot(display_sd_bin_centers[pooled_valid],
+                             pooled_display[pooled_valid],
+                             color=color, linewidth=2, marker='o', markersize=4,
+                             label=f'{label}', linestyle='-')
+                else:
+                    ax3.plot(display_feat_vals,
+                            condition_optimizer_curves[opt]['predicted_sd'] * angle_display_scale,
+                            color=color, linewidth=2, label=f'{label}', linestyle='-')
 
             # Plot empirical standard deviation
             empirical_sd = condition_empirical_curves.get('sd')
             if empirical_sd is not None:
-                emp_bin_centers, emp_sd_values = empirical_sd
+                emp_bin_centers, emp_sd_values = empirical_sd[0], empirical_sd[1]
                 valid_mask = ~np.isnan(emp_sd_values)
                 if np.any(valid_mask):
                     ax3.plot(emp_bin_centers[valid_mask] * angle_display_scale,
@@ -982,7 +1167,10 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
             # Collect precomputed curves from all subjects for this experiment+condition
             stage_bias_curves = {opt: [] for opt in available_optimizers}
             stage_asymm_curves = {opt: [] for opt in available_optimizers}
+            # Fine-grid SD feeds the CSV export; the bin-pooled twin is what the
+            # SD panel plots against the empirical curve.
             stage_sd_curves = {opt: [] for opt in available_optimizers}
+            stage_sd_pooled_curves = {opt: [] for opt in available_optimizers}
 
             # Collect parameters and empirical curves
             all_parameters = {opt: [] for opt in available_optimizers}
@@ -1016,6 +1204,9 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                         stage_asymm_curves[opt].append(optimizer_curves[opt]['asymmetry'])
                         if 'predicted_sd' in optimizer_curves[opt]:
                             stage_sd_curves[opt].append(optimizer_curves[opt]['predicted_sd'])
+                        if optimizer_curves[opt].get('predicted_sd_pooled') is not None:
+                            stage_sd_pooled_curves[opt].append(
+                                optimizer_curves[opt]['predicted_sd_pooled'])
                         params = parameters.get('params', {}).get(opt, parameters.get(opt))
                         if params is not None:
                             all_parameters[opt].append(params)
@@ -1049,6 +1240,8 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                     all_parameters[opt] = jnp.array(all_parameters[opt])
                 if len(stage_sd_curves[opt]) > 0:
                     stage_sd_curves[opt] = jnp.array(stage_sd_curves[opt])
+                if len(stage_sd_pooled_curves[opt]) > 0:
+                    stage_sd_pooled_curves[opt] = np.array(stage_sd_pooled_curves[opt])
 
             # Drop optimizers that had no subjects with data for this condition;
             # stage_bias_curves[opt] stays a plain list when conversion was skipped.
@@ -1209,6 +1402,8 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
             sem_stage_asymm = {}
             avg_stage_sd = {}
             sem_stage_sd = {}
+            avg_stage_sd_pooled = {}
+            sem_stage_sd_pooled = {}
 
             for opt in available_optimizers:
                 avg_stage_bias[opt] = jnp.mean(stage_bias_curves[opt], axis=0)
@@ -1218,6 +1413,13 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                 if isinstance(stage_sd_curves[opt], jnp.ndarray):
                     avg_stage_sd[opt] = jnp.mean(stage_sd_curves[opt], axis=0)
                     sem_stage_sd[opt] = jnp.std(stage_sd_curves[opt], axis=0) / jnp.sqrt(len(stage_sd_curves[opt]))
+                # Bins empty for a subject are NaN, so aggregate them the same
+                # way the empirical SD is aggregated below.
+                if isinstance(stage_sd_pooled_curves[opt], np.ndarray):
+                    pooled = stage_sd_pooled_curves[opt]
+                    n_valid = np.sum(~np.isnan(pooled), axis=0).clip(1)
+                    avg_stage_sd_pooled[opt] = np.nanmean(pooled, axis=0)
+                    sem_stage_sd_pooled[opt] = np.nanstd(pooled, axis=0) / np.sqrt(n_valid)
 
             # Use the separate binned and rolling-smoothed empirical curves from
             # prepared data. Empty subject-level bins were converted to NaN above,
@@ -1314,11 +1516,29 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
             # === PLOT 3: Response variability (circular SD vs feat_diff) ===
             ax3 = axes[2, col]
 
+            # Model curves are bin-pooled onto the empirical bins where that
+            # field exists; older prepared results fall back to the fine grid.
+            _, sd_bin_centers = _feat_diff_bin_edges()
+            display_sd_bin_centers = sd_bin_centers * angle_display_scale
+
             for opt in available_optimizers:
-                if opt not in avg_stage_sd:
-                    continue
                 color = opt_colors.get(opt, 'black')
                 label = opt_labels.get(opt, opt.capitalize())
+                if opt in avg_stage_sd_pooled:
+                    avg_sd_display = avg_stage_sd_pooled[opt] * angle_display_scale
+                    sem_sd_display = sem_stage_sd_pooled[opt] * angle_display_scale
+                    pooled_valid = ~np.isnan(avg_sd_display)
+                    ax3.plot(display_sd_bin_centers[pooled_valid],
+                             avg_sd_display[pooled_valid], color=color,
+                             linestyle='-', linewidth=2, marker='o', markersize=4,
+                             label=label)
+                    ax3.fill_between(display_sd_bin_centers[pooled_valid],
+                                     (avg_sd_display - sem_sd_display)[pooled_valid],
+                                     (avg_sd_display + sem_sd_display)[pooled_valid],
+                                     alpha=0.3, color=color)
+                    continue
+                if opt not in avg_stage_sd:
+                    continue
                 avg_sd_display = avg_stage_sd[opt] * angle_display_scale
                 sem_sd_display = sem_stage_sd[opt] * angle_display_scale
                 ax3.plot(display_feat_vals, avg_sd_display, color=color, linestyle='-', linewidth=2, label=label)
@@ -1363,11 +1583,13 @@ def _model_slice(log_surf: np.ndarray, feat_grid: np.ndarray, mu1_grid: np.ndarr
     w = np.exp(-0.5 * ((feat_grid - target_fd) / weights_sd) ** 2)
     w /= w.sum()
     surf = np.exp(log_surf - log_surf.max(axis=0, keepdims=True))
-    surf /= surf.sum(axis=0, keepdims=True) * config.mu1_bias_step
+    dx = mu1_cell_width()
+    surf /= surf.sum(axis=0, keepdims=True) * dx
     prob = surf @ w
-    E    = float(np.sum(mu1_grid * prob) * config.mu1_bias_step)
-    asym = float(np.sum(prob[mu1_grid > 0]) * config.mu1_bias_step
-                 - np.sum(prob[mu1_grid < 0]) * config.mu1_bias_step)
+    E    = float(np.sum(mu1_grid * prob) * dx)
+    # Signed split excludes both 0 and the antipode (-180) — see sign_masks.
+    pos_mask, neg_mask = (np.asarray(m) for m in sign_masks(mu1_grid))
+    asym = float(np.sum(prob[pos_mask]) * dx - np.sum(prob[neg_mask]) * dx)
     return prob, E, asym
 
 
@@ -1500,9 +1722,10 @@ def create_pdf_slice_plots(
 
                     ax.fill_between(mu1_grid * angle_display_scale, prob_display, alpha=0.55, color='#6baed6')
                     ax.plot(mu1_grid * angle_display_scale, prob_display, color='#2171b5', lw=1.2)
-                    ax.fill_between(mu1_grid * angle_display_scale, prob_display, where=(mu1_grid > 0),
+                    shade_pos, shade_neg = (np.asarray(m) for m in sign_masks(mu1_grid))
+                    ax.fill_between(mu1_grid * angle_display_scale, prob_display, where=shade_pos,
                                     alpha=0.35, color='forestgreen')
-                    ax.fill_between(mu1_grid * angle_display_scale, prob_display, where=(mu1_grid < 0),
+                    ax.fill_between(mu1_grid * angle_display_scale, prob_display, where=shade_neg,
                                     alpha=0.35, color='tomato')
 
                     ax.plot(bias_plot_grid, emp / angle_display_scale, color='darkorange', lw=1.5, alpha=0.85,

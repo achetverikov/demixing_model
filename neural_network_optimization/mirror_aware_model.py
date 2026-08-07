@@ -31,11 +31,18 @@ def normalize_to_density_flexible(log_probs, mu1_bias_range=None):
     """
     if mu1_bias_range is None:
         mu1_bias_range = config.mu1_bias_range
-    
-    # Grid spacing for mu1_error dimension
+
+    # Periodic cell width: period / n.  The mu1_bias axis is a circle, so the
+    # range tuple is a period, not an inclusive endpoint pair — the old
+    # (max-min)/(n-1) form is the inclusive-grid convention and becomes silently
+    # wrong (2.0112°) at 180 rows.  Under the legacy inclusive axis the old form
+    # is kept so a legacy checkpoint reproduces its training-time forward exactly
+    # before its output is trimmed.
     mu1_error_min, mu1_error_max = mu1_bias_range
     n_mu1_points = log_probs.shape[1]
-    dmu1 = (mu1_error_max - mu1_error_min) / (n_mu1_points - 1)
+    period = mu1_error_max - mu1_error_min
+    dmu1 = (period / (n_mu1_points - 1) if config.mu1_inclusive_legacy
+            else period / n_mu1_points)
 
     # Normalize using logsumexp (ensures discrete probabilities sum to 1)
     log_probs_discrete = log_probs - jax.scipy.special.logsumexp(log_probs, axis=1, keepdims=True)

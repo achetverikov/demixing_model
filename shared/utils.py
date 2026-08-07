@@ -15,6 +15,10 @@ import inspect, pickle
 import gzip
 from shared.surface_folder_parsing import load_surface
 from shared.config import config
+from shared.mu1_axis import (assert_mu1_axis, legacy_mu1_axis, mu1_cell_width,
+                            mu1_size, periodic_integral, sign_masks,
+                            trim_legacy_rows, GRID_CONVENTION,
+                            LEGACY_MU1_GRID_SIZE)
 from shared.plotting import plot_surface_comparison
 from jax.scipy.special import logsumexp
 
@@ -84,6 +88,12 @@ def save_checkpoint(state, epoch, loss, save_dir="checkpoints", prefix="model"):
         'loss': loss,
         'timestamp': datetime.now().isoformat(),
         'apply_fn': state.apply_fn,  # Keep reference to model
+        # Declare the mu1_bias axis convention this model emits.  Legacy
+        # checkpoints predate this key; its ABSENCE is the only available signal
+        # that a file is the old dual-endpoint (181-row) model, so load_checkpoint
+        # treats a missing key as legacy — see _wrap_legacy_mu1_apply_fn.
+        'grid_convention': GRID_CONVENTION,
+        'mu1_bias_grid_size': mu1_size(),
     }
 
     # Save checkpoint
@@ -92,6 +102,51 @@ def save_checkpoint(state, epoch, loss, save_dir="checkpoints", prefix="model"):
 
     print(f"Checkpoint saved: {checkpoint_path}")
     return checkpoint_path
+
+
+def _renormalize_mu1_log_density(log_density):
+    """Renormalize a log-density over the mu1_bias axis (the second-to-last one)."""
+    discrete = log_density - logsumexp(log_density, axis=-2, keepdims=True)
+    return discrete - jnp.log(mu1_cell_width())
+
+
+def _wrap_legacy_mu1_apply_fn(apply_fn):
+    """Run a legacy (dual-endpoint) checkpoint and trim its output to the circle.
+
+    The model's output shape is read from config at call time, so with the
+    periodic axis in force a legacy checkpoint would silently *interpolate*
+    181 -> 180 rows — exactly the resampling this migration exists to avoid.  So
+    the forward pass is run under the legacy inclusive axis, at the row count the
+    model was trained on, and the duplicated +180 row is then **trimmed** and the
+    result renormalized.  Trim and resize are different operations; that is the
+    whole point.
+    """
+    def legacy_apply(*args, **kwargs):
+        with legacy_mu1_axis():
+            out = apply_fn(*args, **kwargs)
+        if out.ndim < 2 or out.shape[-2] != LEGACY_MU1_GRID_SIZE:
+            raise ValueError(
+                f"Checkpoint carries no grid_convention metadata, so it is "
+                f"treated as legacy ({LEGACY_MU1_GRID_SIZE} mu1 rows), but its "
+                f"output has shape {out.shape}. Refusing to guess.")
+        trimmed = out[..., :-1, :]
+        return _renormalize_mu1_log_density(trimmed)
+
+    return legacy_apply
+
+
+def _wrap_periodic_mu1_apply_fn(apply_fn):
+    """Assert a modern checkpoint really emits the periodic row count."""
+    def checked_apply(*args, **kwargs):
+        out = apply_fn(*args, **kwargs)
+        if out.ndim >= 2 and out.shape[-2] != mu1_size():
+            raise ValueError(
+                f"Checkpoint metadata declares grid_convention="
+                f"{GRID_CONVENTION!r} ({mu1_size()} mu1 rows) but its output has "
+                f"shape {out.shape}.")
+        return out
+
+    return checked_apply
 
 
 def load_checkpoint(checkpoint_path):
@@ -115,10 +170,30 @@ def load_checkpoint(checkpoint_path):
     with open(checkpoint_path, 'rb') as f:
         checkpoint_data = pickle.load(f)
 
+    # Which mu1_bias convention does this checkpoint emit?  Absence of the key
+    # means legacy 181-row: old files cannot be edited, so absence is the only
+    # available signal.
+    convention = checkpoint_data.get('grid_convention')
+    if convention is None:
+        apply_fn = _wrap_legacy_mu1_apply_fn(checkpoint_data['apply_fn'])
+        print(f"Legacy checkpoint (no grid_convention): running at "
+              f"{LEGACY_MU1_GRID_SIZE} mu1 rows and trimming to {mu1_size()}.")
+    elif convention == GRID_CONVENTION:
+        declared = checkpoint_data.get('mu1_bias_grid_size')
+        if declared is not None and int(declared) != mu1_size():
+            raise ValueError(
+                f"Checkpoint declares mu1_bias_grid_size={declared} but the "
+                f"current config axis has {mu1_size()} points.")
+        apply_fn = _wrap_periodic_mu1_apply_fn(checkpoint_data['apply_fn'])
+    else:
+        raise ValueError(
+            f"Checkpoint declares unknown grid_convention {convention!r}; "
+            f"expected {GRID_CONVENTION!r} or no key at all (legacy).")
+
     # Reconstruct training state
     state = train_state.TrainState(
         step=checkpoint_data['step'],
-        apply_fn=checkpoint_data['apply_fn'],
+        apply_fn=apply_fn,
         params=checkpoint_data['params'],
         tx=None,  # Will need to be set separately
         opt_state=checkpoint_data['opt_state']
@@ -597,8 +672,10 @@ def compute_single_bias_curve(log_surfaces: jnp.ndarray, target_feat_indices: jn
     cos_vals = jnp.cos(jnp.radians(mu1_bias_grid)).reshape(-1, 1)
     sin_vals = jnp.sin(jnp.radians(mu1_bias_grid)).reshape(-1, 1)
 
-    cos_expectations = jnp.trapezoid(cos_vals * target_prob_profiles, x=mu1_bias_grid, axis=0)
-    sin_expectations = jnp.trapezoid(sin_vals * target_prob_profiles, x=mu1_bias_grid, axis=0)
+    # Periodic quadrature (sum x cell width): trapezoid over x=grid spans only
+    # grid[-1]-grid[0] = 358 deg of the 360 deg period and half-weights the ends.
+    cos_expectations = periodic_integral(cos_vals * target_prob_profiles, axis=0)
+    sin_expectations = periodic_integral(sin_vals * target_prob_profiles, axis=0)
 
     circular_means = jnp.degrees(jnp.arctan2(sin_expectations, cos_expectations))
     return circular_means
@@ -625,13 +702,15 @@ def compute_single_density_asymmetry(log_surfaces: jnp.ndarray, target_feat_indi
     # Extract probabilities for target feature indices
     target_probs = probs[:, target_feat_indices]
     
-    # Compute asymmetry for each target feature difference
-    positive_mask = mu1_bias_grid > 0
-    negative_mask = mu1_bias_grid < 0
-    
+    # Compute asymmetry for each target feature difference.  Both 0 and the
+    # antipode (-180) are excluded from both masks: on a circle they are the two
+    # sign-ambiguous angles.  Counting -180 as negative injects a spurious
+    # asymmetry at exactly the row that carries mass for broad sd_feat.
+    positive_mask, negative_mask = sign_masks(mu1_bias_grid)
+
     # Vectorized computation across all target indices with proper discretization
-    dx = config.mu1_bias_step  # Grid spacing for numerical integration
-    
+    dx = mu1_cell_width()  # Periodic cell width for numerical integration
+
     # Use jnp.where instead of boolean indexing to avoid concreteness issues
     positive_probs = jnp.where(positive_mask[:, None], target_probs, 0.0)
     negative_probs = jnp.where(negative_mask[:, None], target_probs, 0.0)
@@ -699,9 +778,14 @@ def _compute_empirical_density_asymmetry_core(real_feat_diff, real_bias, feat_di
         distances = feat_diff_grid
     else:
         distances = jnp.arange(4, int(max_diss * 2) + 1, 4)  # [4, 8, ..., circ_space]
-    # 181 points spanning ±max_diss: step 2° for circ_space=360 (the model-space
-    # default used by the fitter), step 1° for circ_space=180.
-    bias_range = jnp.linspace(-max_diss, max_diss, 181)
+    # 180 points spanning [-max_diss, +max_diss): step 2° for circ_space=360 (the
+    # model-space default used by the fitter), step 1° for circ_space=180.  The
+    # axis is circular, so it is half-open — +max_diss is the same angle as
+    # -max_diss and must not occupy a second cell (it used to, via a 181-point
+    # inclusive linspace, mirroring the model-side defect).
+    n_bias_points = 180
+    dx_empirical = (2 * max_diss) / n_bias_points
+    bias_range = -max_diss + dx_empirical * jnp.arange(n_bias_points)
     
     # Vectorized weight matrix computation with logsumexp for numerical stability
     dist_matrix = distances[:, None] - real_feat_diff[None, :]  # Broadcasting
@@ -718,14 +802,15 @@ def _compute_empirical_density_asymmetry_core(real_feat_diff, real_bias, feat_di
     # weight_matrix @ kernel_matrix.T gives density for each (distance, bias_point) combination
     density_matrix = weight_matrix @ kernel_matrix.T
     
-    # Split into positive and negative regions for asymmetry computation
+    # Split into positive and negative regions for asymmetry computation.  The
+    # antipode (-max_diss) is as sign-ambiguous as 0 and is excluded from both
+    # masks, matching the model side (compute_single_density_asymmetry).
     pos_mask = bias_range > 0
-    neg_mask = bias_range < 0
-    
-    # Sum densities in positive and negative regions for each distance
-    # Account for grid spacing in numerical integration
-    dx_empirical = bias_range[1] - bias_range[0]  # circ_space/180 deg: 2.0 for 360, 1.0 for 180
-    
+    neg_mask = (bias_range < 0) & (bias_range > -max_diss)
+
+    # Sum densities in positive and negative regions for each distance.
+    # dx_empirical (the periodic cell width) is set with the grid above.
+
     # Use jnp.where instead of boolean indexing to avoid concreteness issues
     pos_densities_matrix = jnp.where(pos_mask[None, :], density_matrix, 0.0)
     neg_densities_matrix = jnp.where(neg_mask[None, :], density_matrix, 0.0)

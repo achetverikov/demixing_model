@@ -284,13 +284,21 @@ def model_grid_indices(
     grid_min: float,
     grid_step: float,
     grid_size: int,
+    circular: bool = False,
 ) -> np.ndarray:
-    """Match the fitter's JAX/float32 round-to-grid indexing path."""
+    """Match the fitter's JAX/float32 round-to-grid indexing path.
+
+    ``circular=True`` wraps out-of-range indices instead of clipping them, which
+    is what the mu1_bias axis needs — it is a circle, so an angle just past the
+    last grid point belongs in bin 0, not in the last bin.  feat_diff is a
+    bounded interval and keeps the clip.
+    """
     indices = jnp.round(
         (jnp.asarray(values, dtype=jnp.float32) - np.float32(grid_min))
         / np.float32(grid_step)
     ).astype(jnp.int32)
-    indices = jnp.clip(indices, 0, grid_size - 1)
+    indices = (jnp.mod(indices, grid_size) if circular
+               else jnp.clip(indices, 0, grid_size - 1))
     return np.asarray(indices, dtype=int)
 
 
@@ -350,6 +358,7 @@ def prepare_condition_rows(
         grid_min=config.mu1_bias_range[0],
         grid_step=config.mu1_bias_step,
         grid_size=config.mu1_bias_grid_size,
+        circular=True,
     )
 
     cleaned["feat_idx"] = feat_idx

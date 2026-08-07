@@ -241,13 +241,17 @@ def compute_empirical_likelihood_surface(sd_feat1, sd_feat2, sd_spat, feat_diff_
     Note:
         - Uses CircularGaussianKDE for mu1 (always circular)
         - Uses CircularGaussianKDE for mu2 if wrap_2nd=True, else normal Gaussian KDE
-        - Grid sizes determined by: arange(start, stop + step, step)
+        - Grid sizes determined by: arange(start, stop + step, step), except the
+          circular mu1_bias axis which is half-open: arange(start, stop, step)
     """
     from shared.utils import Surface
 
-    # Create grids using step sizes
+    # Create grids using step sizes.  mu1_bias is the one circular axis and is
+    # therefore stop-EXCLUSIVE: +180 is the same angle as -180 and must not get
+    # a second row (see shared/mu1_axis.py).  This generator does not go through
+    # config, so the convention has to be spelled out here too.
     feat_diff_vals = jnp.arange(feat_diff_range[0], feat_diff_range[1] + feat_diff_step, feat_diff_step)
-    mu1_bias_vals = jnp.arange(mu1_bias_range[0], mu1_bias_range[1] + mu1_bias_step, mu1_bias_step)
+    mu1_bias_vals = jnp.arange(mu1_bias_range[0], mu1_bias_range[1], mu1_bias_step)
     mu2_bias_vals = jnp.arange(mu2_bias_range[0], mu2_bias_range[1] + mu2_bias_step, mu2_bias_step)
 
     n_feat_diff, n_mu1_bias, n_mu2_bias = len(feat_diff_vals), len(mu1_bias_vals), len(mu2_bias_vals)

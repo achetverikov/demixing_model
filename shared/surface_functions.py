@@ -18,12 +18,13 @@ def normalize_to_density(log_probs):
     Returns:
         Normalized log densities with same shape
     """
-    from shared.config import config
-    
-    # Grid spacing for mu1_error dimension from config
-    mu1_error_min, mu1_error_max = config.mu1_bias_range
-    n_mu1_points = log_probs.shape[1]
-    dmu1 = (mu1_error_max - mu1_error_min) / (n_mu1_points - 1)
+    from shared.mu1_axis import assert_mu1_axis, mu1_cell_width
+
+    # Periodic cell width: period / n, NOT the inclusive-grid (max-min)/(n-1).
+    # The two coincide numerically on the correct grid; the inclusive form is
+    # what silently produced a 2.0112° step once the row count changed.
+    assert_mu1_axis(log_probs.shape[1], name="normalize_to_density input")
+    dmu1 = mu1_cell_width()
 
     # Normalize using logsumexp (ensures discrete probabilities sum to 1)
     log_probs_discrete = log_probs - jax.scipy.special.logsumexp(log_probs, axis=1, keepdims=True)
