@@ -438,6 +438,82 @@ def _compute_curve_losses(predicted_curves: jnp.ndarray, target_curves: jnp.ndar
     return losses
 
 
+def compute_bwcrps_condition_targets(fd_vals, bias_vals, fd_grid, D_circ, weights_sd,
+                                     bias_low, bias_step, n_bias):
+    """Empirical BWCRPS/balanced-CRPS targets for ONE condition.
+
+    Extracted verbatim from update_dataset so it can be imported. It previously
+    existed only inline, which forced the cross-tree parity test in
+    bayesian_biases_zoo to hand-copy it -- and a hand copy tracks whichever tree it
+    was written against, which is how the density half of that test went stale
+    through three separate changes without failing.
+
+    Returns:
+        target_d      (n_feat, n_bias) expected circular distance from each bias bin
+                      to the Gaussian-weighted empirical distribution at each fd point
+        support_mask  (n_feat,) binary data-support mask, used by balanced_crps
+        bias_weights  (n_feat,) squared smoothed mean bias x mask, used by bias_weighted_crps
+    """
+    fd_vals = np.asarray(fd_vals)
+    bias_vals = np.asarray(bias_vals)
+
+    # Gaussian weights over feat_diff distance: shape (n_feat, n_trials)
+    gw = np.exp(-0.5 * ((fd_vals[None, :] - fd_grid[:, None]) / weights_sd) ** 2)
+    w_c = gw.sum(axis=1)  # (n_feat,) — effective support weight per fd point
+
+    # Weighted histogram: Q_c[j, k] = sum_i gw[j,i] * I(bias_bin[i]==k) / w_c[j]
+    # Circular binning: wrap rather than clip (see _prepare_all_condition_data).
+    bias_bin = np.mod(
+        np.round((bias_vals - bias_low) / bias_step).astype(int), n_bias
+    )
+    one_hot = np.zeros((len(bias_vals), n_bias))
+    one_hot[np.arange(len(bias_vals)), bias_bin] = 1.0
+    Q_c = (gw @ one_hot) / np.maximum(w_c[:, None], 1e-10)  # (n_feat, n_bias)
+
+    # target_d[j, k] = (Q_c @ D_circ)[j, k]  (D_circ is symmetric)
+    target_d = Q_c @ D_circ   # (n_feat, n_bias)
+
+    # Loss weights: binary mask — 1 where there is data support, 0 elsewhere.
+    # Threshold at 1% of the median weight so edge fd bins with marginal
+    # support are excluded, but weighting is otherwise uniform (not trial-count-proportional).
+    support_threshold = np.median(w_c) * 0.01
+    support_mask = (w_c > support_threshold).astype(np.float32)
+
+    # Bias-weighted CRPS: weight each fd point by the squared smoothed
+    # signed mean bias. Squaring discards the sign, so feat_diff ranges
+    # with large-magnitude observed mean bias contribute more to the loss.
+    mean_bias = (gw @ bias_vals) / np.maximum(w_c, 1e-10)   # (n_feat,)
+    return target_d, support_mask, mean_bias ** 2 * support_mask
+
+
+def bwcrps_energy_score(prob_surfaces, target_d, fd_weights, D_circ, norm_floor=None):
+    """Weighted energy score shared by balanced_crps and bias_weighted_crps.
+
+    loss[u, c] = sum_j w[c,j] * (2 * cross[u,c,j] - E2[u,j]) / sum_j w[c,j]
+
+    Extracted from the two objective branches, which differed only in which weights
+    they pass and whether the normaliser is floored (bias weights can be all-zero
+    for a condition; the binary support mask cannot, so balanced_crps divides raw).
+    Exposed for the same reason as compute_bwcrps_condition_targets.
+
+    Args:
+        prob_surfaces: (n_unique, n_bias, n_feat), normalized over the bias axis.
+    """
+    n_unique, n_bias, n_feat = prob_surfaces.shape
+    prob_fk = prob_surfaces.transpose(0, 2, 1).reshape(-1, n_bias)
+    Dp = prob_fk @ D_circ
+    E2 = (prob_fk * Dp).sum(axis=1).reshape(n_unique, n_feat)
+
+    T_w = target_d * fd_weights[:, :, None]
+    cross_uc = jnp.einsum('ukj,cjk->uc', prob_surfaces, T_w)
+    E2_uc = E2 @ fd_weights.T
+
+    norm_c = fd_weights.sum(axis=1)
+    if norm_floor is not None:
+        norm_c = jnp.maximum(norm_c, norm_floor)
+    return (2.0 * cross_uc - E2_uc) / norm_c[None, :]
+
+
 class GridBasedMultiConditionOptimizer:
     """Simplified grid-based multi-condition optimizer with direct NN loading."""
 
@@ -959,37 +1035,12 @@ class GridBasedMultiConditionOptimizer:
         fd_bias_weights_list = []
         for cond_name in self.condition_names:
             dataset_np = np.array(self.condition_datasets[cond_name])
-            fd_vals = dataset_np[:, 0]
-            bias_vals = dataset_np[:, 1]
-
-            # Gaussian weights over feat_diff distance: shape (n_feat, n_trials)
-            gw = np.exp(-0.5 * ((fd_vals[None, :] - fd_grid_np[:, None]) / self.emp_density_weights_sd) ** 2)
-            w_c = gw.sum(axis=1)  # (n_feat,) — effective support weight per fd point
-
-            # Weighted histogram: Q_c[j, k] = sum_i gw[j,i] * I(bias_bin[i]==k) / w_c[j]
-            # Circular binning: wrap rather than clip (see _prepare_all_condition_data).
-            bias_bin = np.mod(
-                np.round((bias_vals - bias_low) / bias_step_val).astype(int), n_bias_pts
-            )
-            one_hot = np.zeros((len(bias_vals), n_bias_pts))
-            one_hot[np.arange(len(bias_vals)), bias_bin] = 1.0
-            Q_c = (gw @ one_hot) / np.maximum(w_c[:, None], 1e-10)  # (n_feat, n_bias)
-
-            # target_d[j, k] = (Q_c @ D_circ)[j, k]  (D_circ is symmetric)
-            target_d_list.append(Q_c @ D_np)   # (n_feat, n_bias)
-
-            # Loss weights: binary mask — 1 where there is data support, 0 elsewhere.
-            # Threshold at 1% of the median weight so edge fd bins with marginal
-            # support are excluded, but weighting is otherwise uniform (not trial-count-proportional).
-            support_threshold = np.median(w_c) * 0.01
-            support_mask = (w_c > support_threshold).astype(np.float32)
+            target_d, support_mask, bias_weights = compute_bwcrps_condition_targets(
+                dataset_np[:, 0], dataset_np[:, 1], fd_grid_np, D_np,
+                self.emp_density_weights_sd, bias_low, bias_step_val, n_bias_pts)
+            target_d_list.append(target_d)
             fd_weights_list.append(support_mask)
-
-            # Bias-weighted CRPS: weight each fd point by the squared smoothed
-            # signed mean bias. Squaring discards the sign, so feat_diff ranges
-            # with large-magnitude observed mean bias contribute more to the loss.
-            mean_bias = (gw @ bias_vals) / np.maximum(w_c, 1e-10)   # (n_feat,)
-            fd_bias_weights_list.append(mean_bias ** 2 * support_mask)
+            fd_bias_weights_list.append(bias_weights)
 
         self.unified_target_d = jnp.array(np.stack(target_d_list))         # (n_cond, n_feat, n_bias)
         self.unified_fd_weights = jnp.array(np.stack(fd_weights_list))      # (n_cond, n_feat) — binary mask
@@ -1120,23 +1171,8 @@ class GridBasedMultiConditionOptimizer:
             log_prob_norm = surfaces - jax.scipy.special.logsumexp(surfaces, axis=1, keepdims=True)
             prob_surfaces = jnp.exp(log_prob_norm)  # (n_unique, n_bias, n_feat)
 
-            # E2_model[u, j]: self-energy of the model distribution at each fd point
-            prob_fk = prob_surfaces.transpose(0, 2, 1).reshape(-1, n_bias)   # (n_unique*n_feat, n_bias)
-            Dp = prob_fk @ self.D_circ_matrix                                  # (n_unique*n_feat, n_bias)
-            E2 = (prob_fk * Dp).sum(axis=1).reshape(n_unique_surfaces, n_feat) # (n_unique, n_feat)
-
-            # Cross term: sum_{j,k} w[c,j] * p[u,k,j] * target_d[c,j,k]
-            # T_w[c,j,k] = w[c,j] * target_d[c,j,k]
-            T_w = self.unified_target_d * self.unified_fd_weights[:, :, None]  # (n_cond, n_feat, n_bias)
-            # einsum 'ukj,cjk->uc' — contract over bias (k) and feat (j)
-            cross_uc = jnp.einsum('ukj,cjk->uc', prob_surfaces, T_w)           # (n_unique, n_cond)
-
-            # Weighted E2: sum_j w[c,j] * E2[u,j]
-            E2_uc = E2 @ self.unified_fd_weights.T   # (n_unique, n_cond)
-
-            norm_c = self.unified_fd_weights.sum(axis=1)                        # (n_cond,)
-            loss_uc = (2.0 * cross_uc - E2_uc) / norm_c[None, :]               # (n_unique, n_cond)
-
+            loss_uc = bwcrps_energy_score(prob_surfaces, self.unified_target_d,
+                                          self.unified_fd_weights, self.D_circ_matrix)
             losses = loss_uc[surface_indices, condition_indices]
 
         elif fitting_method == "bias_weighted_crps":
@@ -1147,19 +1183,11 @@ class GridBasedMultiConditionOptimizer:
             log_prob_norm = surfaces - jax.scipy.special.logsumexp(surfaces, axis=1, keepdims=True)
             prob_surfaces = jnp.exp(log_prob_norm)  # (n_unique, n_bias, n_feat)
 
-            prob_fk = prob_surfaces.transpose(0, 2, 1).reshape(-1, n_bias)
-            Dp = prob_fk @ self.D_circ_matrix
-            E2 = (prob_fk * Dp).sum(axis=1).reshape(n_unique_surfaces, n_feat)
-
-            T_w = self.unified_target_d * self.unified_bias_fd_weights[:, :, None]
-            cross_uc = jnp.einsum('ukj,cjk->uc', prob_surfaces, T_w)
-
-            E2_uc = E2 @ self.unified_bias_fd_weights.T
-
-            norm_c = self.unified_bias_fd_weights.sum(axis=1)
-            # Avoid division by zero for conditions where all bias weights are 0
-            loss_uc = (2.0 * cross_uc - E2_uc) / jnp.maximum(norm_c[None, :], 1e-10)
-
+            # norm_floor: bias weights can be all-zero for a condition, unlike the
+            # binary support mask balanced_crps uses.
+            loss_uc = bwcrps_energy_score(prob_surfaces, self.unified_target_d,
+                                          self.unified_bias_fd_weights,
+                                          self.D_circ_matrix, norm_floor=1e-10)
             losses = loss_uc[surface_indices, condition_indices]
 
         else:
