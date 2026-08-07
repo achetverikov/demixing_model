@@ -751,17 +751,52 @@ def compute_single_density_asymmetry(log_surfaces: jnp.ndarray, target_feat_indi
     return asymmetry
 
 
-def _compute_empirical_density_asymmetry_core(real_feat_diff, real_bias, feat_diff_grid, weights_sd=20, circ_space=360):
+KDE_BW_FLOOR = 1e-6
+"""Lower bound on the bias-KDE bandwidth, purely a divide-by-zero guard.
+
+Degenerate input (near-identical bias values) drives Silverman's rule toward 0 and
+the kernel normalization divides by it, yielding NaN (MODEL_PIPELINE_FOR_AGENTS.md
+D.11). Matches the guard already used in the BBZ twin. This is deliberately far
+below any bandwidth real data produce -- the smallest observed is ~0.42 model
+degrees -- so it never binds and never changes a target. A *resolution* floor (one
+that binds, e.g. half the 2-degree bias cell) is a separate, target-changing
+decision; the plotting-side twin uses 1.0 for that reason.
+"""
+
+
+def silverman_bandwidth(real_bias, floor=KDE_BW_FLOOR):
+    """Silverman's rule-of-thumb bandwidth, the default bias-KDE bandwidth.
+
+    Exposed separately so a caller can compute ONE bandwidth over several
+    conditions and pass it back in via `kernel_bw`, rather than letting each
+    condition pick its own (see `_compute_empirical_density_asymmetry_core`).
+    Identical to R's `bw.nrd0`.
+    """
+    real_bias = jnp.asarray(real_bias)
+    bias_std = jnp.std(real_bias)
+    iqr = jnp.quantile(real_bias, 0.75) - jnp.quantile(real_bias, 0.25)
+    bw = 0.9 * jnp.minimum(bias_std, iqr / 1.34) * (len(real_bias) ** (-1 / 5))
+    return jnp.maximum(bw, floor)
+
+
+def _compute_empirical_density_asymmetry_core(real_feat_diff, real_bias, feat_diff_grid, weights_sd=20, circ_space=360,
+                                              kernel_bw=None):
     """
     Core computation for empirical density asymmetry with all matrix operations.
-    
+
     Args:
         real_feat_diff: Array of feature difference values, shape (n_trials,)
         real_bias: Array of bias values, shape (n_trials,)
         feat_diff_grid: Grid of feature difference values to compute asymmetry at
         weights_sd: Standard deviation for Gaussian weights in feat_diff dimension
         circ_space: Circular space size (360 for full circle)
-        
+        kernel_bw: Bias-KDE bandwidth. None (default) estimates it from THIS call's
+            trials via Silverman's rule, so each condition gets its own smoothing --
+            and conditions differ in error spread by construction, which is the axis
+            the experiment manipulates. Pass an explicit value to share one bandwidth
+            across conditions (`silverman_bandwidth` over the pooled trials, or the
+            mean of the per-condition estimates).
+
     Returns:
         distances: feat_diff_grid values
         asymmetry_values: Asymmetry values at each grid point
@@ -773,19 +808,21 @@ def _compute_empirical_density_asymmetry_core(real_feat_diff, real_bias, feat_di
         errors sit near 0 and the bandwidth is a few degrees, but motion-direction
         data routinely carry a second mode of 180-degree-off reversals sitting
         exactly on the boundary, where truncation both loses mass and mis-signs it.
-        The mass is still NOT renormalized before the signed integration.
 
-        The Silverman bandwidth below has no lower bound, so degenerate input
-        (near-identical bias values) drives kernel_bw toward 0 and the kernel
-        normalization divides by it (see MODEL_PIPELINE_FOR_AGENTS.md D.11).
+        Each trial's kernel carries unit mass, so the returned signed difference is
+        a proportion of a unit-mass distribution. circhelp divides instead by
+        (P+ + P-), excluding the sign-ambiguous 0-cell -- a different denominator
+        convention, applied consistently on our model and target sides alike.
     """
     max_diss = circ_space / 2
 
-    # Auto bandwidth using Silverman's rule
-    bias_std = jnp.std(real_bias)
-    n = len(real_bias)
-    kernel_bw = 0.9 * jnp.minimum(bias_std, (jnp.quantile(real_bias, 0.75) - jnp.quantile(real_bias, 0.25)) / 1.34) * (n ** (-1/5))
-    
+    # Bandwidth: Silverman over this call's trials unless the caller supplies one.
+    if kernel_bw is None:
+        kernel_bw = silverman_bandwidth(real_bias)
+    else:
+        kernel_bw = jnp.maximum(jnp.asarray(kernel_bw), KDE_BW_FLOOR)
+
+
     # Use provided feat_diff_grid or create default distances
     if feat_diff_grid is not None:
         distances = feat_diff_grid
