@@ -516,6 +516,27 @@ def test_legacy_surfaces_raise_rather_than_being_silently_dropped(tmp_path):
         load_filtered_surfaces(str(tmp_path), low=10, high=100)
 
 
+def test_training_loader_raises_on_legacy_surfaces(tmp_path):
+    """The training path is a fourth loader, and its bare `except` swallows.
+
+    Both of its per-file loops print-and-continue on any exception, so a guard
+    raised inside them would leave a silently shorter training set instead of an
+    error — and training on legacy targets teaches the network to reproduce the
+    duplicated wrap row.  Hence the guard runs outside those handlers.
+    """
+    import pickle
+    import sys as _sys
+    _nn = str(Path(__file__).resolve().parents[1] / "neural_network_optimization")
+    if _nn not in _sys.path:
+        _sys.path.insert(0, _nn)
+    from mirror_aware_training import load_averaged_surfaces
+
+    path = tmp_path / "averaged_sf1_30.0_sf2_40.0_sp_50.0.pkl"
+    path.write_bytes(pickle.dumps(_legacy_surface_payload()))
+    with pytest.raises(ValueError, match="migrat"):
+        load_averaged_surfaces(str(tmp_path))
+
+
 def test_load_filtered_surfaces_accepts_migrated_surfaces(tmp_path):
     import pickle
     from cloud.migrate_surfaces_to_periodic_mu1 import migrate_loose_file

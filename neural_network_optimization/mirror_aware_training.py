@@ -22,6 +22,7 @@ from flax.training import train_state
 from mirror_aware_model import MirrorAwareMu1Predictor, normalize_to_density_flexible
 from loss_functions import combined_probabilistic_loss, kl_divergence_loss, expectation_loss, smoothness_regularization
 from shared.config import config, averaged_surfaces_dir
+from shared.mu1_axis import guard_surface_mu1_axis
 from shared.utils import save_checkpoint, cleanup_old_checkpoints, save_training_log_smart, resolve_input_path, resolve_results_path
 # from shared.surface_functions import entropy_smooth_columns_with_mask
 from shared.utils import AveragedSurface
@@ -125,6 +126,15 @@ def load_averaged_surfaces(folder: str = "combined_mirrored_surfaces_10k",
         surfaces_list = _load_from_bundles(folder_path, param_low, param_high)
     else:
         surfaces_list = _load_from_files(folder_path, param_low, param_high)
+
+    # Guard the mu1 axis OUTSIDE the loaders: both wrap their per-file work in a
+    # bare `except Exception` that prints and continues, so a guard raised in
+    # there would be swallowed and leave a silently shorter training set — the
+    # one failure mode that looks like success. Training on legacy 181-row
+    # targets would teach the network to reproduce the duplicated wrap row it
+    # exists to be rid of.
+    for data in surfaces_list:
+        guard_surface_mu1_axis(data['surface'], source=str(folder))
 
     print(f"Loaded {len(surfaces_list)} averaged surfaces from {folder}")
     return surfaces_list
