@@ -30,6 +30,7 @@ warnings.filterwarnings('ignore')
 from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
     GridBasedMultiConditionOptimizer,
 )
+from model_fit_to_data import density_objective
 from shared.config import config
 from shared.mu1_axis import mu1_cell_width, periodic_integral, sign_masks
 from shared import seed_manager
@@ -72,46 +73,12 @@ LOSS_EVALUATION_METHODS = [
     'balanced_crps', 'bias_weighted_crps',
 ]
 
-#: Placeholder for a condition whose density CCC decomposition cannot be formed.
+#: Placeholder when a density CCC decomposition cannot be formed.
 _NAN_CCC_COMPONENTS = {'ccc': np.nan, 'r': np.nan, 'C_b': np.nan}
 
-
-def _ccc_components(predicted: np.ndarray, target: np.ndarray) -> Dict[str, float]:
-    """Decompose Lin's concordance correlation into precision and accuracy.
-
-    ``CCC = r * C_b``, where ``r`` is the Pearson correlation (precision: does the
-    predicted curve have the right shape?) and ``C_b`` the bias correction factor
-    (accuracy: does it have the right amplitude and offset?).  The density
-    objective is ``1 - CCC``; splitting it is what makes an amplitude failure
-    visible, since a curve that is 10x too small can still have ``r`` near 1.
-
-    Returns NaN for ``r`` and ``C_b`` when either variance is 0 -- they are
-    genuinely undefined there, and 0 would be a plausible-looking lie (a real
-    measurement of "no correlation", or of maximal scale mismatch).  ``ccc``
-    itself is reported as 0 in that case only when the covariance is 0 too, which
-    is the value the scorer uses.
-    """
-    predicted = np.asarray(predicted, dtype=float).reshape(-1)
-    target = np.asarray(target, dtype=float).reshape(-1)
-    if predicted.size != target.size or predicted.size < 2:
-        return dict(_NAN_CCC_COMPONENTS)
-
-    pred_mean, target_mean = predicted.mean(), target.mean()
-    pred_var = predicted.var()
-    target_var = target.var()
-    covariance = ((predicted - pred_mean) * (target - target_mean)).mean()
-    denominator = pred_var + target_var + (pred_mean - target_mean) ** 2
-
-    ccc = np.nan if denominator <= 0 else 2 * covariance / denominator
-    if pred_var <= 0 or target_var <= 0:
-        return {'ccc': float(ccc), 'r': np.nan, 'C_b': np.nan}
-
-    r = covariance / np.sqrt(pred_var * target_var)
-    # C_b = CCC / r, written out so it stays finite when r is near 0.
-    scale_ratio = np.sqrt(pred_var / target_var)
-    location_shift = (pred_mean - target_mean) / np.sqrt(np.sqrt(pred_var * target_var))
-    C_b = 2.0 / (scale_ratio + 1.0 / scale_ratio + location_shift ** 2)
-    return {'ccc': float(ccc), 'r': float(r), 'C_b': float(C_b)}
+#: The decomposition itself lives with the objective, so the exported components
+#: and the fitted loss cannot come from two different definitions of CCC.
+_ccc_components = density_objective.ccc_components
 
 
 def _angle_display_scale(circ_space: int = 360) -> float:

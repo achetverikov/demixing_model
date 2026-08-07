@@ -22,52 +22,22 @@ from pathlib import Path
 import pickle
 
 try:
+    from density_objective import DEGENERATE_TARGET_EPS, check_targets_fittable, degenerate_targets
     from run_fingerprint import effective_feat_step_schedule
 except ModuleNotFoundError:  # imported as `model_fit_to_data.<module>` from the repo root
+    from model_fit_to_data.density_objective import (
+        DEGENERATE_TARGET_EPS, check_targets_fittable, degenerate_targets,
+    )
     from model_fit_to_data.run_fingerprint import effective_feat_step_schedule
 from shared.config import config
 from shared.mu1_axis import bin_indices, periodic_integral
 from shared.utils import load_checkpoint, compute_single_density_asymmetry
 
 
-#: Below this variance a density-asymmetry target curve is constant, and the
-#: density objective **refuses to run** against it (user decision, 2026-08-07).
-#:
-#: CCC is undefined against a constant target (its denominator collapses with its
-#: numerator), and the answer the formula returns there is actively wrong: two
-#: identical constant curves score 1, the WORST possible loss, for a perfect match.
-#: The alternative to raising -- silently dropping the condition from the fit --
-#: was rejected: a condition vanishing from a group's total without anyone
-#: noticing is exactly the kind of quiet result change that is impossible to catch
-#: downstream, and a constant target is far more likely to mean something is wrong
-#: with the data or the target construction than to be a legitimate input.
-#:
-#: The test is on the target alone -- not on the prediction, not on the pair -- so
-#: it does not depend on the parameters being tried and cannot fire partway
-#: through a search. A constant *prediction* against a varying target is a
-#: different case and stays scoreable: it earns loss 1 legitimately.
-#:
-#: The value matches the scorer's own denominator guard on purpose (see
-#: `_compute_curve_losses`, loss_type="ccc").
-#:
-#: **This is defensive machinery: on the current data it never fires.** Measured
-#: 2026-08-07 over the 681 EMPIRICAL target curves in
-#: `results/observer_models/*/density_asymmetry_curves.parquet` (`model ==
-#: "empirical"`, grouped by condition_id x subject): minimum variance 2.2e-04,
-#: 1% quantile 4.6e-04 -- six orders of magnitude above this threshold, and not one
-#: curve below it in any dataset.
-#:
-#: An earlier count of "3 degenerate curves, all in moors, min variance 1.9e-15"
-#: pooled all 1342 curves in those files, which are mostly **model predictions**
-#: (31 model labels per cell). Those 3 are fitted models that collapsed to a flat
-#: prediction -- a constant PREDICTION against a varying target, which is a case
-#: this policy deliberately keeps and scores 1. Nothing keyed on the target was
-#: ever near degeneracy.
-#:
-#: This is a scientific choice, not a mathematical necessity: a constant
-#: prediction against a constant target is a legitimately correct answer in an MSE
-#: sense, and this policy discards it as uninformative rather than scoring it.
-DEGENERATE_TARGET_EPS = 1e-10
+# DEGENERATE_TARGET_EPS, check_targets_fittable and the CCC definition live in
+# density_objective, so the hierarchical and exhaustive backends cannot drift
+# apart on the objective they are both supposed to be computing.
+# Re-exported here because callers have imported it from this module.
 
 
 def _generate_nn_bias_curve_batch(log_surfaces_batch: jnp.ndarray, target_feat_indices: jnp.ndarray) -> jnp.ndarray:
@@ -1091,7 +1061,7 @@ class GridBasedMultiConditionOptimizer:
         # See DEGENERATE_TARGET_EPS and _check_density_targets_fittable.
         density_target_var = np.var(np.asarray(density_curves), axis=1)
         self.density_target_var = density_target_var
-        self.density_degenerate_conditions = density_target_var < DEGENERATE_TARGET_EPS
+        self.density_degenerate_conditions = degenerate_targets(density_curves)
         for i, name in enumerate(self.condition_names):
             # Near-constant targets are defined but numerically unstable under CCC.
             # Warn; the refusal is at eps and nowhere else. Scale-relative, so this
@@ -1145,35 +1115,16 @@ class GridBasedMultiConditionOptimizer:
     def _check_density_targets_fittable(self, fitting_method: str) -> None:
         """Refuse to run a density objective against a constant target curve.
 
-        Raises rather than dropping the offending condition. A condition that
-        disappears from a group's total leaves no trace anyone downstream can act
-        on, and its shared parameters would then be fitted to a different set of
-        conditions than the run claims; a constant target is also far more likely
-        to signal a data or target-construction problem than a legitimate input.
-
         Scoped to the density objectives on purpose: a flat density-asymmetry
         target says nothing about whether the condition can be fit by likelihood
         or CRPS, so those must not be blocked by it. Evaluated at trace time from
-        a concrete numpy array, so it fires before any candidate is scored --
-        including on the cross-objective evaluation path, which reaches this same
-        branch.
+        a concrete array, so it fires before any candidate is scored -- including
+        on the cross-objective evaluation path, which reaches the same branch.
+
+        The rule itself lives in `density_objective.check_targets_fittable`, so
+        the exhaustive backend enforces it identically.
         """
-        degenerate = np.asarray(self.density_degenerate_conditions)
-        if not degenerate.any():
-            return
-        offenders = ", ".join(
-            f"{self.condition_names[i]} (var={self.density_target_var[i]:.2e})"
-            for i in np.flatnonzero(degenerate)
-        )
-        raise ValueError(
-            f"'{fitting_method}' cannot be fitted: the empirical density-asymmetry target is "
-            f"constant (var < {DEGENERATE_TARGET_EPS:.0e}) for {int(degenerate.sum())} of "
-            f"{self.n_conditions} conditions: {offenders}. A constant target carries no "
-            "information to fit and CCC is undefined against it, returning its worst value for "
-            "a perfect match. Check the trial data and the density-target construction for "
-            "these conditions; fit them with a non-density objective, or drop them from the "
-            "input explicitly rather than letting a fit silently omit them."
-        )
+        check_targets_fittable(self.unified_target_density, self.condition_names, fitting_method)
 
     def _optimize_all_conditions_hierarchical_jit(self, surfaces: jnp.ndarray,
                                                   cond_params_with_idx: jnp.ndarray,
