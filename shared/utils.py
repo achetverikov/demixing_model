@@ -4,6 +4,7 @@ import json
 import random
 import re
 import subprocess
+import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -777,6 +778,139 @@ def silverman_bandwidth(real_bias, floor=KDE_BW_FLOOR):
     iqr = jnp.quantile(real_bias, 0.75) - jnp.quantile(real_bias, 0.25)
     bw = 0.9 * jnp.minimum(bias_std, iqr / 1.34) * (len(real_bias) ** (-1 / 5))
     return jnp.maximum(bw, floor)
+
+
+_SJ_DELMAX = 1000.0  # R's cutoff: skip pair distances beyond sqrt(DELMAX) bandwidths
+
+
+def _sj_pair_histogram(x, nb=1000):
+    """Pair-distance counts on R's binning, so each functional evaluation is O(nb).
+
+    R bins for the same reason -- it is what makes an O(n^2) selector tractable and
+    is the whole speed story behind `stats::bw.SJ`. The convention has to be copied
+    exactly or the bandwidths disagree by several percent: R assigns each VALUE a bin
+    via truncation toward zero (`trunc(abs(x)/d) * sign(x)`, matching the C cast in
+    band_den_bin) and then uses the difference of bin indices as the distance --
+    which is NOT the same as binning the distances, because the two truncations do
+    not compose. Distance counts then come from the autocorrelation of the bin
+    counts, as C_bw_den_binned does.
+
+    Returns (bin_width, counts) with counts[k] the number of unordered pairs whose
+    bin indices differ by k.
+    """
+    x = np.asarray(x, dtype=float)
+    n = len(x)
+    rng = np.ptp(x) * 1.01
+    if not np.isfinite(rng) or rng <= 0:
+        return None, None
+    d = rng / nb
+
+    idx = (np.trunc(np.abs(x) / d) * np.sign(x)).astype(np.int64)
+    idx -= idx.min()
+    bin_counts = np.bincount(idx, minlength=nb + 1).astype(np.float64)
+
+    ac = np.correlate(bin_counts, bin_counts, mode="full")
+    counts = ac[len(bin_counts) - 1:][:nb].copy()
+    counts[0] = (counts[0] - n) / 2.0   # drop the i == j diagonal, then unorder
+    return d, counts
+
+
+def _sj_functional(counts, d, n, h, order):
+    """R's bw_phi4 / bw_phi6: the integrated squared density-derivative functionals.
+
+    phi4(u) = exp(-u^2/2) (u^4 - 6u^2 + 3), phi6(u) = exp(-u^2/2) (u^6 - 15u^4 +
+    45u^2 - 15), summed over ordered pairs (off-diagonal twice, plus the diagonal
+    term phi4(0) = 3 / phi6(0) = -15).
+    """
+    delta = (np.arange(len(counts)) * d / h) ** 2
+    keep = delta < _SJ_DELMAX
+    delta = delta[keep]
+    weight = counts[keep]
+    if order == 4:
+        term = np.exp(-delta / 2) * (delta ** 2 - 6 * delta + 3)
+        total = 2 * np.sum(term * weight) + 3 * n
+        power = 5.0
+    else:
+        term = np.exp(-delta / 2) * (delta ** 3 - 15 * delta ** 2 + 45 * delta - 15)
+        total = 2 * np.sum(term * weight) - 15 * n
+        power = 7.0
+    return total / (n * (n - 1) * h ** power * np.sqrt(2 * np.pi))
+
+
+def sheather_jones_bandwidth(real_bias, nb=1000, fallback=True):
+    """Sheather-Jones solve-the-equation bandwidth, a port of `stats::bw.SJ`.
+
+    R's own documentation recommends this over the Silverman default it ships:
+    "The default, \"nrd0\", has remained the default for historical and
+    compatibility reasons, rather than as a general recommendation, where e.g.
+    \"SJ\" would rather fit" (?density). Silverman is the more fragile rule -- it
+    takes min(sd, IQR/1.34), which misjudges heavy-tailed or multimodal error
+    distributions; on one moors cell it came out 5.1x the SJ value.
+
+    scipy has no SJ, hence the port. Constants, the DELMAX cutoff, the pair
+    binning and the bracket expansion all follow R's implementation so the two
+    agree; verified against `stats::bw.SJ` on real data.
+
+    Args:
+        real_bias: samples (a single condition's, or pooled across conditions).
+        nb: pair-distance bins, as in R.
+        fallback: if True, fall back to Silverman when the sample is too sparse for
+            SJ to have a solution. R raises instead; a fitting pipeline should not
+            die on one degenerate cell.
+    """
+    x = np.asarray(real_bias, dtype=float)
+    n = len(x)
+    if n < 2:
+        raise ValueError("need at least 2 data points")
+
+    scale = min(np.std(x, ddof=1), (np.percentile(x, 75) - np.percentile(x, 25)) / 1.349)
+    d, counts = _sj_pair_histogram(x, nb=nb)
+
+    def sd_h(h):
+        return _sj_functional(counts, d, n, h, order=4)
+
+    def td_h(h):
+        return _sj_functional(counts, d, n, h, order=6)
+
+    def _fallback(reason):
+        if not fallback:
+            raise RuntimeError(f"bw.SJ failed: {reason}")
+        warnings.warn(f"Sheather-Jones bandwidth failed ({reason}); "
+                      "falling back to Silverman", RuntimeWarning)
+        return float(silverman_bandwidth(x))
+
+    if d is None or scale <= 0:
+        return _fallback("degenerate sample")
+
+    td = -td_h(1.23 * scale * n ** (-1 / 9))
+    if not np.isfinite(td) or td <= 0:
+        return _fallback("sample is too sparse to find TD")
+    alph2 = 1.357 * (sd_h(1.24 * scale * n ** (-1 / 7)) / td) ** (1 / 7)
+    if not np.isfinite(alph2):
+        return _fallback("sample is too sparse to find alph2")
+
+    c1 = 1 / (2 * np.sqrt(np.pi) * n)
+
+    def f_sd(h):
+        return (c1 / sd_h(alph2 * h ** (5 / 7))) ** (1 / 5) - h
+
+    hmax = 1.144 * scale * n ** (-1 / 5)
+    lower, upper = 0.1 * hmax, hmax
+    for itry in range(1, 100):
+        try:
+            if f_sd(lower) * f_sd(upper) <= 0:
+                break
+        except (FloatingPointError, ValueError):
+            return _fallback("functional evaluation failed")
+        if itry % 2:
+            upper *= 1.2
+        else:
+            lower /= 1.2
+    else:
+        return _fallback("no solution in the specified range of bandwidths")
+
+    from scipy.optimize import brentq
+    return float(brentq(f_sd, lower, upper, xtol=0.1 * 0.1 * hmax))
 
 
 def _compute_empirical_density_asymmetry_core(real_feat_diff, real_bias, feat_diff_grid, weights_sd=20, circ_space=360,

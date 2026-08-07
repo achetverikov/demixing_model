@@ -442,7 +442,8 @@ class GridBasedMultiConditionOptimizer:
     """Simplified grid-based multi-condition optimizer with direct NN loading."""
 
     def __init__(self, checkpoint_path: str, condition_datasets: Optional[Dict[str, jax.Array]] = None, corr_weight = 0.25, skip_motor_noise: bool = False, emp_density_weights_sd: float = 20.0, density_smoothing_sigma: float = None,
-                 density_bandwidth_mode: str = 'per_condition'):
+                 density_bandwidth_mode: str = 'pooled',
+                 density_bandwidth_rule: str = 'silverman'):
         """Initialize the grid-based multi-condition optimizer.
 
         Args:
@@ -451,12 +452,23 @@ class GridBasedMultiConditionOptimizer:
             corr_weight: Weight for correlation loss in combined fitting
             skip_motor_noise: If True, skip all motor noise computations (sd_motor fixed to 0)
             density_bandwidth_mode: How the empirical density target picks its bias-KDE
-                bandwidth. 'per_condition' (default, and what every existing fit used)
-                estimates one per condition; 'pooled' estimates a single bandwidth from
-                all the subject's trials at once; 'average' takes the mean of the
-                per-condition estimates. The latter two match circhelp's behaviour
-                within one call and stop the target's smoothing from varying along the
-                manipulated axis. Changing this changes the fit target -- refit.
+                bandwidth. 'pooled' (default) estimates a single bandwidth from all the
+                subject's trials at once, so the target's smoothing does not vary along
+                the axis the experiment manipulates -- matching what circhelp does
+                within one density_asymmetry call. 'per_condition' is the legacy
+                behaviour every fit before 2026-08 used, where each condition estimates
+                its own (measured spread within one csh2026 subject: 1.51x median,
+                3.29x max). 'average' takes the mean of the per-condition estimates;
+                it has a lower median effect than 'pooled' but a worse tail, because a
+                single divergent condition drags the mean. Switching modes changes the
+                fit target -- refit.
+            density_bandwidth_rule: 'silverman' (default, R's bw.nrd0 and what every
+                fit so far used) or 'sj' (Sheather-Jones, R's bw.SJ). R's own docs
+                recommend SJ -- nrd0 "has remained the default for historical and
+                compatibility reasons, rather than as a general recommendation, where
+                e.g. \"SJ\" would rather fit" (?density). Silverman runs ~11% narrower
+                on these datasets and is the more fragile rule on heavy-tailed or
+                multimodal errors. Changing this changes the fit target -- refit.
         """
         self.checkpoint_path = checkpoint_path
         self.condition_datasets = condition_datasets
@@ -467,6 +479,7 @@ class GridBasedMultiConditionOptimizer:
         self.emp_density_weights_sd = emp_density_weights_sd
         self.density_smoothing_sigma = density_smoothing_sigma  # None → derived from emp_density_weights_sd
         self.density_bandwidth_mode = density_bandwidth_mode
+        self.density_bandwidth_rule = density_bandwidth_rule
 
         if condition_datasets:
             print(f"Initializing GridBasedMultiConditionOptimizer with {self.n_conditions} conditions:")
@@ -849,7 +862,7 @@ class GridBasedMultiConditionOptimizer:
         # as the balanced-CRPS block below does. See codex_audit.md #3.
         from shared.utils import (_compute_empirical_density_asymmetry_core,
                                   compute_target_bias_rolling_curve_core,
-                                  silverman_bandwidth)
+                                  sheather_jones_bandwidth, silverman_bandwidth)
         feat_diff_grid = self.feat_diff_grid
 
         # Bias-KDE bandwidth. Default (None) lets each condition estimate its own from
@@ -858,31 +871,49 @@ class GridBasedMultiConditionOptimizer:
         # manipulates (measured up to 3.29x within one csh2026 subject). 'pooled' and
         # 'average' share one bandwidth across the subject's conditions, matching what
         # circhelp does within a single density_asymmetry call.
+        if self.density_bandwidth_rule == 'silverman':
+            estimate_bw = silverman_bandwidth
+        elif self.density_bandwidth_rule == 'sj':
+            estimate_bw = sheather_jones_bandwidth
+        else:
+            raise ValueError(
+                f"unknown density_bandwidth_rule {self.density_bandwidth_rule!r}; "
+                "expected 'silverman' or 'sj'")
+
+        bias_by_condition = [condition_dataframes[i][:, 1]
+                             for i in range(len(self.condition_names))]
         shared_bw = None
         if self.density_bandwidth_mode == 'pooled':
-            shared_bw = silverman_bandwidth(
-                jnp.concatenate([condition_dataframes[i][:, 1]
-                                 for i in range(len(self.condition_names))]))
+            shared_bw = estimate_bw(jnp.concatenate(bias_by_condition))
         elif self.density_bandwidth_mode == 'average':
-            shared_bw = jnp.mean(jnp.stack([
-                silverman_bandwidth(condition_dataframes[i][:, 1])
-                for i in range(len(self.condition_names))]))
-        elif self.density_bandwidth_mode != 'per_condition':
+            shared_bw = jnp.mean(jnp.stack(
+                [jnp.asarray(estimate_bw(b)) for b in bias_by_condition]))
+        elif self.density_bandwidth_mode == 'per_condition':
+            # Only needs an explicit value when the rule is not the core's default.
+            if self.density_bandwidth_rule != 'silverman':
+                shared_bw = None  # filled per condition below
+        else:
             raise ValueError(
                 f"unknown density_bandwidth_mode {self.density_bandwidth_mode!r}; "
                 "expected 'per_condition', 'pooled' or 'average'")
 
-        def density_curve_wrapper(feat_diff_vals, bias_vals, grid):
+        per_condition_bw = None
+        if shared_bw is None and self.density_bandwidth_rule != 'silverman':
+            per_condition_bw = [estimate_bw(b) for b in bias_by_condition]
+
+        def density_curve_wrapper(feat_diff_vals, bias_vals, grid, kernel_bw):
             """Wrapper to extract only asymmetry values from density computation."""
             distances, asymmetry_values = _compute_empirical_density_asymmetry_core(
                 feat_diff_vals, bias_vals, grid,
-                weights_sd=self.emp_density_weights_sd, kernel_bw=shared_bw)
+                weights_sd=self.emp_density_weights_sd, kernel_bw=kernel_bw)
             return asymmetry_values
 
         density_curves = jnp.stack([
             density_curve_wrapper(condition_dataframes[i][:, 0],
                                   condition_dataframes[i][:, 1],
-                                  feat_diff_grid)
+                                  feat_diff_grid,
+                                  shared_bw if shared_bw is not None
+                                  else (per_condition_bw[i] if per_condition_bw else None))
             for i in range(len(self.condition_names))
         ])
 
