@@ -126,7 +126,9 @@ Do not run multiple fitting or surface-generation jobs on one GPU. Stop other GP
 
 ### Fitting appears to restart or skip work
 
-Fitting resumes by default from `<output-dir>/extended_progress.json`. Use a new output directory or pass `--no-resume` for an intentional fresh run. Do not mix results produced with different checkpoints or circular-space settings.
+Fitting resumes by default from `<output-dir>/extended_fit_results.pkl` — that pickle, not `extended_progress.json`, which is a human-readable summary nothing reads back. Use a new output directory or pass `--no-resume` for an intentional fresh run.
+
+Results produced with a different checkpoint, dataset, objective definition, grid, or circular-space setting cannot be mixed, and the fitter enforces this rather than trusting you to remember: every run computes a fingerprint of those settings and stores it in `<output-dir>/extended_run_fingerprint.json`. If the fingerprint of the results already in the output directory differs from the current run — or is missing, as it is for any fit made before this check existed — the run refuses to start and prints which fields differ. Pass `--force-refit` to discard those results and refit from scratch, or fit into a different directory. `--force-refit` is not needed to *add* a method to a run whose fingerprint matches; that resumes normally.
 
 ### Generated artifacts are not where expected
 

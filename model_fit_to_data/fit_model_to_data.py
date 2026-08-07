@@ -29,16 +29,55 @@ import numpy as np
 import pandas as pd
 
 from grid_based_multi_condition_optimizer_jax_loops import (
+    DEGENERATE_TARGET_EPS,
     GridBasedMultiConditionOptimizer,
     apply_motor_noise_with_precomputed_kernel,
     create_motor_noise_kernel_fft,
 )
+try:
+    from run_fingerprint import (
+        StaleResultsError,
+        compute_run_fingerprint,
+        enforce_fingerprint,
+        write_fingerprint_sidecar,
+    )
+except ModuleNotFoundError:  # imported as `model_fit_to_data.fit_model_to_data`
+    from model_fit_to_data.run_fingerprint import (
+        StaleResultsError,
+        compute_run_fingerprint,
+        enforce_fingerprint,
+        write_fingerprint_sidecar,
+    )
 from shared.utils import filter_data_for_fitting, resolve_input_path, resolve_results_path
 
 
 LOSS_EVALUATION_METHODS = [
-    'density', 'expectation', 'smoothed_exp', 'likelihood', 'crps', 'balanced_crps', 'bias_weighted_crps',
+    'density', 'density_legacy', 'expectation', 'smoothed_exp', 'likelihood',
+    'crps', 'balanced_crps', 'bias_weighted_crps',
 ]
+
+#: Hierarchical search settings this script fits with. Named rather than inlined
+#: at the call site so the run fingerprint describes the search that actually
+#: ran; `min_grid_step` / `zoom_factor` repeat `fit_hierarchical_grid`'s defaults
+#: because a default that is not recorded does not identify a run.
+HIERARCHICAL_GRID_SPEC = {
+    'shared_grid_size': 40,
+    'feat_grid_size': 20,
+    'min_grid_step': 1.0,
+    'zoom_factor': 0.5,
+}
+
+#: Settings of the empirical density-asymmetry target. These repeat the
+#: optimizer's own defaults and are passed explicitly for the same reason as
+#: above: they change the fit target, so the run fingerprint has to state them,
+#: and a value the fingerprint reads from one place while the fit reads it from
+#: another can drift.
+DENSITY_CURVE_SPEC = {
+    'emp_density_weights_sd': 20.0,
+    'density_smoothing_sigma': None,
+    'density_bandwidth_mode': 'pooled',
+    'density_bandwidth_rule': 'sj',
+}
 
 try:
     from rich.console import Console
@@ -176,20 +215,33 @@ def load_data(data_path: str, outlier_col: Optional[str], include_outliers: bool
     return df
 
 
-def load_results(output_dir: str):
+def load_results(output_dir: str, expected_fingerprint: Optional[Dict] = None):
     """Load previously saved fit results from disk.
 
     Args:
         output_dir: Directory that may contain ``extended_fit_results.pkl``.
+        expected_fingerprint: Run fingerprint payload of the run about to extend
+            these results. When given, the sidecar written alongside the pickle
+            must match it or loading raises (see
+            ``run_fingerprint.enforce_fingerprint``). When ``None`` — the
+            default, and what any out-of-file caller gets — no check runs and
+            behaviour is unchanged; the explicit ``is not None`` gate below, not
+            the default value alone, is what preserves that.
 
     Returns:
         Tuple of (results dict, completed set) where results maps condition
         keys to fit result dicts and completed is the set of already-processed
         condition key prefixes (without the trailing ``#<hash>`` suffix).
         Both are empty when no results file exists.
+
+    Raises:
+        run_fingerprint.StaleResultsError: when ``expected_fingerprint`` is
+            given and the results on disk were produced differently.
     """
     results_file = Path(output_dir) / 'extended_fit_results.pkl'
     if not results_file.exists():
+        if expected_fingerprint is not None:
+            enforce_fingerprint(output_dir, expected_fingerprint, results_present=False)
         return {}, set()
     try:
         with open(results_file, 'rb') as f:
@@ -212,11 +264,14 @@ def load_results(output_dir: str):
             )
         return {}, set()
     results = canonicalize_result_keys(results)
+    if expected_fingerprint is not None:
+        enforce_fingerprint(output_dir, expected_fingerprint, results_present=bool(results))
     completed = {key.rsplit('#', 1)[0] for key in results}
     return results, completed
 
 
-def save_results(results: Dict, output_dir: str, label: str = None):
+def save_results(results: Dict, output_dir: str, label: str = None,
+                 fingerprint: Optional[Dict] = None):
     """Persist fit results to disk and write a JSON progress summary.
 
     JAX arrays are converted to NumPy before pickling.  Internal
@@ -227,6 +282,9 @@ def save_results(results: Dict, output_dir: str, label: str = None):
         output_dir: Output directory (created if absent).
         label: Human-readable label of the last completed condition written
             into ``extended_progress.json``; ``None`` suppresses the log line.
+        fingerprint: Run fingerprint payload to install alongside the pickle, or
+            ``None`` to leave any existing sidecar untouched. Writing both here,
+            on one call, is what keeps them from diverging.
     """
     output_path = Path(output_dir)
     output_path.mkdir(exist_ok=True, parents=True)
@@ -244,6 +302,12 @@ def save_results(results: Dict, output_dir: str, label: str = None):
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp_results_file, results_file)
+
+    # Sidecar strictly AFTER the pickle: both writes are individually atomic, but
+    # two replaces are not one transaction, and a new sidecar over old results is
+    # a matching digest on stale fits. Pickle-first fails closed instead.
+    if fingerprint is not None:
+        write_fingerprint_sidecar(output_path, fingerprint)
 
     progress = {
         'total_completed': len(results),
@@ -437,8 +501,8 @@ def process_subject(
             status.start()
         try:
             result = optimizer.fit_hierarchical_grid(fitting_method=method, verbosity=1,
-                                                     shared_grid_size=40, feat_grid_size=20,
-                                                     sd_motor_max=emp_motor_cap)
+                                                     sd_motor_max=emp_motor_cap,
+                                                     **HIERARCHICAL_GRID_SPEC)
         finally:
             if status is not None:
                 status.stop()
@@ -531,6 +595,7 @@ def run_fitting(
     methods: List[str] = None,
     min_trials: int = 30,
     resume: bool = True,
+    force_refit: bool = False,
     max_subjects: Optional[int] = None,
     corr_weight: float = 0.25,
     skip_motor_noise: bool = True,
@@ -583,7 +648,43 @@ def run_fitting(
     if missing_cols:
         raise ValueError(f"Columns not found in CSV: {missing_cols}")
 
-    existing_results, completed = load_results(resolved_output) if resume else ({}, set())
+    fingerprint = compute_run_fingerprint(
+        data_path=data_path,
+        checkpoint_path=resolved_checkpoint,
+        circ_space=circ_space,
+        # Every objective the run may WRITE, not the ones it was asked to fit:
+        # `evaluate_parameter_losses` scores all of them at each fitted method's
+        # parameters, so a change to any one invalidates the stored evaluations.
+        evaluation_methods=LOSS_EVALUATION_METHODS,
+        search_backend='hierarchical',
+        curve_cache_key=None,
+        skip_motor_noise=skip_motor_noise,
+        exp_col=exp_col,
+        subject_col=subject_col,
+        condition_col=condition_col,
+        x_col=x_col,
+        y_col=y_col,
+        outlier_col=outlier_col,
+        include_outliers=include_outliers,
+        min_trials=min_trials,
+        corr_weight=corr_weight,
+        grid_spec=HIERARCHICAL_GRID_SPEC,
+        density_curve_spec=DENSITY_CURVE_SPEC,
+        degenerate_eps=DEGENERATE_TARGET_EPS,
+    )
+
+    # --force-refit discards whatever is on disk, so the fingerprint check has
+    # nothing to protect and is skipped. --no-resume does NOT get that pass: it
+    # overwrites results in place, which is exactly the silent mixing this check
+    # exists to stop, so it still has to match (or be forced).
+    if force_refit:
+        log("--force-refit: ignoring any existing results; refitting from scratch.", "yellow")
+        existing_results, completed = {}, set()
+    elif resume:
+        existing_results, completed = load_results(resolved_output, expected_fingerprint=fingerprint)
+    else:
+        load_results(resolved_output, expected_fingerprint=fingerprint)
+        existing_results, completed = {}, set()
 
     log("Initializing optimizer...", "bold cyan")
     dummy = jnp.asarray(np.random.uniform(-180, 180, (100, 2)))
@@ -595,6 +696,7 @@ def run_fitting(
         optimizer = GridBasedMultiConditionOptimizer(
             str(resolved_checkpoint), {'dummy': dummy},
             skip_motor_noise=skip_motor_noise, corr_weight=corr_weight,
+            **DENSITY_CURVE_SPEC,
         )
     finally:
         if status is not None:
@@ -681,7 +783,7 @@ def run_fitting(
                 )
                 existing_results.update(results)
                 n_done += 1
-                save_results(existing_results, resolved_output, subject_id)
+                save_results(existing_results, resolved_output, subject_id, fingerprint=fingerprint)
 
                 elapsed = time.time() - t_start
                 eta = (n_total - n_done) * elapsed / n_done
@@ -694,7 +796,7 @@ def run_fitting(
                 log(f"  Error processing {subject_id}: {e}", "bold red")
                 raise
 
-    save_results(existing_results, resolved_output, 'FINAL')
+    save_results(existing_results, resolved_output, 'FINAL', fingerprint=fingerprint)
     total = time.time() - t_start
     log(f"\nDone. {len(existing_results)} conditions fitted in {total/60:.1f}m.", "bold green")
 
@@ -725,12 +827,19 @@ if __name__ == '__main__':
     parser.add_argument('--include-outliers', action='store_true',
                         help='Skip outlier filtering.')
     parser.add_argument('--include-methods', nargs='+', default=['density'],
-                        choices=['density', 'expectation', 'smoothed_exp', 'likelihood', 'crps', 'balanced_crps', 'bias_weighted_crps'],
+                        choices=['density', 'density_legacy', 'expectation', 'smoothed_exp', 'likelihood',
+                                 'crps', 'balanced_crps', 'bias_weighted_crps'],
                         help='Optimisation method(s) to run.')
     parser.add_argument('--min-trials', type=int, default=30,
                         help='Minimum trials per condition to include.')
     parser.add_argument('--resume', action=argparse.BooleanOptionalAction, default=True,
-                        help='Resume from existing results.')
+                        help='Resume from existing results. Either way the run fingerprint of '
+                             'any results already in --output-dir must match this run.')
+    parser.add_argument('--force-refit', action='store_true',
+                        help='Discard existing results in --output-dir and refit from scratch, '
+                             'skipping the run-fingerprint check. This is the escape hatch for a '
+                             'fingerprint mismatch; it is NOT needed to add a method to a run '
+                             'whose fingerprint matches, which resumes normally.')
     parser.add_argument('--max-subjects', type=int, default=None,
                         help='Stop after this many subject×experiment groups.')
     parser.add_argument('--corr-weight', type=float, default=0.25)
@@ -747,23 +856,30 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    run_fitting(
-        data_path=args.data_path,
-        checkpoint_path=args.checkpoint_path,
-        output_dir=args.output_dir,
-        exp_col=args.exp_col,
-        subject_col=args.subject_col,
-        condition_col=args.condition_col,
-        x_col=args.x_col,
-        y_col=args.y_col,
-        outlier_col=args.outlier_col,
-        include_outliers=args.include_outliers,
-        methods=args.include_methods,
-        min_trials=args.min_trials,
-        resume=args.resume,
-        max_subjects=args.max_subjects,
-        corr_weight=args.corr_weight,
-        skip_motor_noise=args.skip_motor_noise,
-        results_dir=args.results_dir,
-        circ_space=args.circ_space,
-    )
+    try:
+        run_fitting(
+            data_path=args.data_path,
+            checkpoint_path=args.checkpoint_path,
+            output_dir=args.output_dir,
+            exp_col=args.exp_col,
+            subject_col=args.subject_col,
+            condition_col=args.condition_col,
+            x_col=args.x_col,
+            y_col=args.y_col,
+            outlier_col=args.outlier_col,
+            include_outliers=args.include_outliers,
+            methods=args.include_methods,
+            min_trials=args.min_trials,
+            resume=args.resume,
+            force_refit=args.force_refit,
+            max_subjects=args.max_subjects,
+            corr_weight=args.corr_weight,
+            skip_motor_noise=args.skip_motor_noise,
+            results_dir=args.results_dir,
+            circ_space=args.circ_space,
+        )
+    except StaleResultsError as exc:
+        # A wall of traceback would bury the field diff, which is the whole
+        # point of the message.
+        log(f"\nRefusing to fit into this output directory:\n{exc}", "bold red")
+        sys.exit(2)

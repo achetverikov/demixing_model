@@ -29,7 +29,6 @@ warnings.filterwarnings('ignore')
 
 from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
     GridBasedMultiConditionOptimizer,
-    _compute_curve_losses,
 )
 from shared.config import config
 from shared.mu1_axis import mu1_cell_width, periodic_integral, sign_masks
@@ -69,9 +68,50 @@ OPTIMIZER_LABELS = {
     'smoothed_exp': 'Smoothed Exp',
 }
 LOSS_EVALUATION_METHODS = [
-    'density', 'expectation', 'smoothed_exp', 'likelihood', 'crps',
+    'density', 'density_legacy', 'expectation', 'smoothed_exp', 'likelihood', 'crps',
     'balanced_crps', 'bias_weighted_crps',
 ]
+
+#: Placeholder for a condition whose density CCC decomposition cannot be formed.
+_NAN_CCC_COMPONENTS = {'ccc': np.nan, 'r': np.nan, 'C_b': np.nan}
+
+
+def _ccc_components(predicted: np.ndarray, target: np.ndarray) -> Dict[str, float]:
+    """Decompose Lin's concordance correlation into precision and accuracy.
+
+    ``CCC = r * C_b``, where ``r`` is the Pearson correlation (precision: does the
+    predicted curve have the right shape?) and ``C_b`` the bias correction factor
+    (accuracy: does it have the right amplitude and offset?).  The density
+    objective is ``1 - CCC``; splitting it is what makes an amplitude failure
+    visible, since a curve that is 10x too small can still have ``r`` near 1.
+
+    Returns NaN for ``r`` and ``C_b`` when either variance is 0 -- they are
+    genuinely undefined there, and 0 would be a plausible-looking lie (a real
+    measurement of "no correlation", or of maximal scale mismatch).  ``ccc``
+    itself is reported as 0 in that case only when the covariance is 0 too, which
+    is the value the scorer uses.
+    """
+    predicted = np.asarray(predicted, dtype=float).reshape(-1)
+    target = np.asarray(target, dtype=float).reshape(-1)
+    if predicted.size != target.size or predicted.size < 2:
+        return dict(_NAN_CCC_COMPONENTS)
+
+    pred_mean, target_mean = predicted.mean(), target.mean()
+    pred_var = predicted.var()
+    target_var = target.var()
+    covariance = ((predicted - pred_mean) * (target - target_mean)).mean()
+    denominator = pred_var + target_var + (pred_mean - target_mean) ** 2
+
+    ccc = np.nan if denominator <= 0 else 2 * covariance / denominator
+    if pred_var <= 0 or target_var <= 0:
+        return {'ccc': float(ccc), 'r': np.nan, 'C_b': np.nan}
+
+    r = covariance / np.sqrt(pred_var * target_var)
+    # C_b = CCC / r, written out so it stays finite when r is near 0.
+    scale_ratio = np.sqrt(pred_var / target_var)
+    location_shift = (pred_mean - target_mean) / np.sqrt(np.sqrt(pred_var * target_var))
+    C_b = 2.0 / (scale_ratio + 1.0 / scale_ratio + location_shift ** 2)
+    return {'ccc': float(ccc), 'r': float(r), 'C_b': float(C_b)}
 
 
 def _angle_display_scale(circ_space: int = 360) -> float:
@@ -1079,7 +1119,6 @@ def organize_preprocessed_results_by_experiment(prepared_all_subjects: Dict) -> 
 def create_extended_summary_plots(prepared_all_subjects: Dict,
                                  output_dir: str = 'model_fit_to_data_results_v2',
                                  create_individual_plots: bool = True,
-                                 corr_weight: float = 0.25,
                                  circ_space: int = 360) -> Tuple[List, List]:
     """Create extended summary plots using preprocessed data.
 
@@ -1094,7 +1133,6 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
         prepared_all_subjects: Dictionary from prepare_all_subjects_data() with all precomputed curves
         output_dir: Output directory for plots
         create_individual_plots: Whether to create individual plots
-        corr_weight: Weight for correlation loss in combined fitting (for density optimizer loss components)
 
     Returns:
         Tuple of (curve_data_for_csv, parameter_data_for_csv) for CSV export
@@ -1304,8 +1342,7 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                     opt_losses = []
                     opt_eval_losses = {method: [] for method in LOSS_EVALUATION_METHODS}
                     opt_pooled_bwcrps = []
-                    opt_mse_losses = []
-                    opt_corr_losses = []
+                    opt_ccc_stats = []
 
                     for result in valid_results:
                         experiment_data = result['experiment_data']
@@ -1325,45 +1362,26 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                                 opt_eval_losses[loss_method].append(eval_losses.get(loss_method, np.nan))
                             opt_pooled_bwcrps.append(pooled_bwcrps)
 
-                            # Compute density loss components for density optimizer
+                            # Decompose the density fit into CCC and its two
+                            # factors. CCC = r * C_b splits the score into
+                            # precision (r, how well the curve shapes track) and
+                            # accuracy (C_b, whether the amplitude and offset are
+                            # right) -- and it was the missing accuracy term that
+                            # let the old objective accept curves an order of
+                            # magnitude too small, so exporting them separately is
+                            # what makes that visible per condition.
                             if opt == 'density':
-                                # Get target and predicted curves for this subject/condition
                                 optimizer_curves = experiment_data['optimizer_curves'].get(noise_condition, {})
                                 empirical_curves = experiment_data['empirical_curves'].get(noise_condition, {})
 
                                 if opt in optimizer_curves and empirical_curves.get('asymmetry') is not None:
-                                    predicted_asymm = jnp.array(optimizer_curves[opt]['asymmetry']).reshape(1, -1)
-                                    target_asymm = jnp.array(empirical_curves['asymmetry']).reshape(1, -1)
-
-                                    # Use the same function as the optimizer with exact same parameters
-                                    # Use the corr_weight passed to this function
-
-                                    # Compute total combined loss using optimizer's function
-                                    total_loss = _compute_curve_losses(predicted_asymm, target_asymm,
-                                                                     loss_type="combined", is_angular=False,
-                                                                     corr_weight=corr_weight)[0]
-
-                                    # Compute individual components manually (same as in _compute_curve_losses)
-                                    diff = predicted_asymm - target_asymm
-                                    mse_loss = jnp.mean(diff ** 2)
-
-                                    # Correlation component
-                                    corr_matrix = jnp.corrcoef(predicted_asymm.flatten(), target_asymm.flatten())
-                                    corr = corr_matrix[0, 1]
-                                    corr_loss = 1 - jnp.where(jnp.isnan(corr), 0.0, corr)
-
-                                    # Scale MSE by target range (same as in optimizer)
-                                    target_range = jnp.abs(jnp.max(target_asymm) - jnp.min(target_asymm))
-                                    mse_scaled = mse_loss / jnp.maximum(target_range, 1e-6)
-
-                                    opt_mse_losses.append(float(mse_scaled ))
-                                    opt_corr_losses.append(float(corr_loss))
+                                    predicted_asymm = np.asarray(optimizer_curves[opt]['asymmetry']).reshape(-1)
+                                    target_asymm = np.asarray(empirical_curves['asymmetry']).reshape(-1)
+                                    opt_ccc_stats.append(_ccc_components(predicted_asymm, target_asymm))
                                 else:
-                                    opt_mse_losses.append(np.nan)
-                                    opt_corr_losses.append(np.nan)
+                                    opt_ccc_stats.append(_NAN_CCC_COMPONENTS)
                             else:
-                                opt_mse_losses.append(np.nan)
-                                opt_corr_losses.append(np.nan)
+                                opt_ccc_stats.append(_NAN_CCC_COMPONENTS)
 
                     if not opt_params_list:
                         continue
@@ -1384,10 +1402,15 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                         param_df_data[f'eval_{loss_method}_loss'] = values
                     param_df_data['eval_bias_weighted_crps_pooled_loss'] = opt_pooled_bwcrps
 
-                    # Add density loss components for density optimizer
+                    # Add density loss components for density optimizer. NaN (not
+                    # 0) wherever a component is undefined: 0 is a real, meaningful
+                    # value for both r and C_b and would be indistinguishable from
+                    # a measurement. `density_loss` itself keeps its name and its
+                    # lower-is-better convention -- it now carries 1 - CCC.
                     if opt == 'density':
-                        param_df_data['density_mse_loss'] = opt_mse_losses
-                        param_df_data['density_corr_loss'] = opt_corr_losses
+                        param_df_data['density_ccc'] = [s['ccc'] for s in opt_ccc_stats]
+                        param_df_data['density_r'] = [s['r'] for s in opt_ccc_stats]
+                        param_df_data['density_C_b'] = [s['C_b'] for s in opt_ccc_stats]
 
                     # Add sd_motor if available
                     if opt_params_array.shape[1] > 3:
@@ -1861,7 +1884,9 @@ def create_unified_plots_with_summaries(
         create_individual_plots: Whether to generate per-subject plots.
         create_csv_exports: Whether to write CSV exports.
         skip_motor_noise: Whether motor noise was skipped in fitting.
-        corr_weight: Correlation weight used during fitting.
+        corr_weight: Correlation weight used during fitting. Only affects the
+            output path name here, and only reaches the `density_legacy`
+            objective during fitting; `density` is 1 - CCC and has no such term.
         results_path: Optional path to extended_fit_results.pkl.
         checkpoint_path: Optional checkpoint path for loading the model.
         output_dir: Optional output directory for plots/exports.
@@ -1931,7 +1956,7 @@ def create_unified_plots_with_summaries(
         print("\n=== Creating Summary Plots and Exports ===")
         curve_data_for_csv, parameter_data_for_csv = create_extended_summary_plots(
             prepared_all_subjects, resolved_output_dir, create_individual_plots=False,
-            corr_weight=corr_weight, circ_space=circ_space,
+            circ_space=circ_space,
         )
 
         if create_csv_exports:

@@ -21,9 +21,53 @@ import time
 from pathlib import Path
 import pickle
 
+try:
+    from run_fingerprint import effective_feat_step_schedule
+except ModuleNotFoundError:  # imported as `model_fit_to_data.<module>` from the repo root
+    from model_fit_to_data.run_fingerprint import effective_feat_step_schedule
 from shared.config import config
 from shared.mu1_axis import bin_indices, periodic_integral
 from shared.utils import load_checkpoint, compute_single_density_asymmetry
+
+
+#: Below this variance a density-asymmetry target curve is constant, and the
+#: density objective **refuses to run** against it (user decision, 2026-08-07).
+#:
+#: CCC is undefined against a constant target (its denominator collapses with its
+#: numerator), and the answer the formula returns there is actively wrong: two
+#: identical constant curves score 1, the WORST possible loss, for a perfect match.
+#: The alternative to raising -- silently dropping the condition from the fit --
+#: was rejected: a condition vanishing from a group's total without anyone
+#: noticing is exactly the kind of quiet result change that is impossible to catch
+#: downstream, and a constant target is far more likely to mean something is wrong
+#: with the data or the target construction than to be a legitimate input.
+#:
+#: The test is on the target alone -- not on the prediction, not on the pair -- so
+#: it does not depend on the parameters being tried and cannot fire partway
+#: through a search. A constant *prediction* against a varying target is a
+#: different case and stays scoreable: it earns loss 1 legitimately.
+#:
+#: The value matches the scorer's own denominator guard on purpose (see
+#: `_compute_curve_losses`, loss_type="ccc").
+#:
+#: **This is defensive machinery: on the current data it never fires.** Measured
+#: 2026-08-07 over the 681 EMPIRICAL target curves in
+#: `results/observer_models/*/density_asymmetry_curves.parquet` (`model ==
+#: "empirical"`, grouped by condition_id x subject): minimum variance 2.2e-04,
+#: 1% quantile 4.6e-04 -- six orders of magnitude above this threshold, and not one
+#: curve below it in any dataset.
+#:
+#: An earlier count of "3 degenerate curves, all in moors, min variance 1.9e-15"
+#: pooled all 1342 curves in those files, which are mostly **model predictions**
+#: (31 model labels per cell). Those 3 are fitted models that collapsed to a flat
+#: prediction -- a constant PREDICTION against a varying target, which is a case
+#: this policy deliberately keeps and scores 1. Nothing keyed on the target was
+#: ever near degeneracy.
+#:
+#: This is a scientific choice, not a mathematical necessity: a constant
+#: prediction against a constant target is a legitimately correct answer in an MSE
+#: sense, and this policy discards it as uninformative rather than scoring it.
+DEGENERATE_TARGET_EPS = 1e-10
 
 
 def _generate_nn_bias_curve_batch(log_surfaces_batch: jnp.ndarray, target_feat_indices: jnp.ndarray) -> jnp.ndarray:
@@ -416,6 +460,13 @@ def _compute_curve_losses(predicted_curves: jnp.ndarray, target_curves: jnp.ndar
         # Combined loss with weights
         losses = (1 - corr_weight) * mse_scaled + corr_weight * corr_losses
     elif loss_type == "ccc":
+        # Lin's concordance correlation: 1 - CCC = MSE / D with
+        # D = var_p + var_t + (mean_p - mean_t)^2, and CCC = r * C_b, so the loss
+        # scores precision (r) and accuracy (C_b) together. That is the whole
+        # point of using it here: the "combined" objective above scales its MSE
+        # term by `range` rather than `range**2`, which is dimensionally wrong and
+        # leaves the term too weak to constrain amplitude, so fits come out
+        # correlated-but-far-too-small. CCC is scale-invariant and cannot.
         pred_mean = jnp.mean(predicted_curves, axis=1)
         target_mean = jnp.mean(target_curves, axis=1)
         pred_centered = predicted_curves - pred_mean[:, None]
@@ -426,7 +477,19 @@ def _compute_curve_losses(predicted_curves: jnp.ndarray, target_curves: jnp.ndar
         target_var = jnp.mean(target_centered ** 2, axis=1)
         mean_diff_sq = (pred_mean - target_mean) ** 2
 
-        ccc = (2 * covariance) / jnp.maximum(pred_var + target_var + mean_diff_sq, 1e-10)
+        # D is zero only when prediction and target are the SAME constant, which a
+        # constant target cannot reach: a target with var < DEGENERATE_TARGET_EPS
+        # makes the density objective raise before any scoring happens (see
+        # `density_degenerate_conditions`), so every scored curve has
+        # D >= var_t >= eps. This guard is defensive, not load-bearing -- but it
+        # is kept, and its
+        # threshold is deliberately the same eps, because a mismatched pair would
+        # leave a live band of curves that reach the scorer and silently get their
+        # denominator altered. `where` (not `maximum`) so both branches are finite
+        # and a gradient taken through the dead one is not poisoned.
+        D = pred_var + target_var + mean_diff_sq
+        safe_D = jnp.where(D < DEGENERATE_TARGET_EPS, 1.0, D)
+        ccc = (2 * covariance) / safe_D
         losses = 1 - ccc
     elif loss_type == "nrmse":
         rmse = jnp.sqrt(jnp.mean(diff ** 2, axis=1))
@@ -556,6 +619,17 @@ class GridBasedMultiConditionOptimizer:
         self.density_smoothing_sigma = density_smoothing_sigma  # None → derived from emp_density_weights_sd
         self.density_bandwidth_mode = density_bandwidth_mode
         self.density_bandwidth_rule = density_bandwidth_rule
+        # Filled by update_dataset from the target curves alone; empty until then.
+        self.density_target_var = np.zeros(self.n_conditions)
+        self.density_degenerate_conditions = np.zeros(self.n_conditions, dtype=bool)
+
+        if corr_weight != 0.25:
+            # corr_weight is always passed, even at its default, and feeds export
+            # path naming — so a non-default value cannot be an error. It is now
+            # inert for 'density' (CCC has no correlation weight) and reaches only
+            # 'density_legacy'.
+            print(f"NOTE: corr_weight={corr_weight} affects only the 'density_legacy' objective; "
+                  "'density' is 1 - CCC and has no correlation-weight term.")
 
         if condition_datasets:
             print(f"Initializing GridBasedMultiConditionOptimizer with {self.n_conditions} conditions:")
@@ -1010,6 +1084,25 @@ class GridBasedMultiConditionOptimizer:
         self.unified_target_density = density_curves  # Shape: (n_conditions, n_feat_points)
         self.unified_target_bias_curve = smoothed_bias_curves  # Shape: (n_conditions, n_feat_points)
 
+        # Degenerate density targets: decided once, from the target alone. Recorded
+        # here rather than acted on, because the check is scoped to the density
+        # objective -- a flat density target says nothing about whether the same
+        # condition can be fit by likelihood or CRPS, so it must not break those.
+        # See DEGENERATE_TARGET_EPS and _check_density_targets_fittable.
+        density_target_var = np.var(np.asarray(density_curves), axis=1)
+        self.density_target_var = density_target_var
+        self.density_degenerate_conditions = density_target_var < DEGENERATE_TARGET_EPS
+        for i, name in enumerate(self.condition_names):
+            # Near-constant targets are defined but numerically unstable under CCC.
+            # Warn; the refusal is at eps and nowhere else. Scale-relative, so this
+            # does not fire on a genuinely small but well-resolved curve.
+            scale = float(np.max(np.abs(np.asarray(density_curves)[i])))
+            if (not self.density_degenerate_conditions[i] and scale > 0
+                    and np.sqrt(density_target_var[i]) < 1e-3 * scale):
+                print(f"  WARNING: {name} density target is near-constant "
+                      f"(sd={np.sqrt(density_target_var[i]):.2e} vs max|curve|={scale:.2e}); "
+                      "CCC is unstable here — treat its density fit with suspicion.")
+
         print(f"Target curves precomputed for {len(self.condition_names)} conditions (vmap)")
         print(f"Bias curves shape: {self.unified_target_bias.shape}")
         print(f"Bias weights shape: {self.unified_bias_weights.shape}")
@@ -1048,6 +1141,39 @@ class GridBasedMultiConditionOptimizer:
         print(f"  target_d shape: {self.unified_target_d.shape}, "
               f"fd_weights shape: {self.unified_fd_weights.shape}, "
               f"mean support: {self.unified_fd_weights.mean():.2f}")
+
+    def _check_density_targets_fittable(self, fitting_method: str) -> None:
+        """Refuse to run a density objective against a constant target curve.
+
+        Raises rather than dropping the offending condition. A condition that
+        disappears from a group's total leaves no trace anyone downstream can act
+        on, and its shared parameters would then be fitted to a different set of
+        conditions than the run claims; a constant target is also far more likely
+        to signal a data or target-construction problem than a legitimate input.
+
+        Scoped to the density objectives on purpose: a flat density-asymmetry
+        target says nothing about whether the condition can be fit by likelihood
+        or CRPS, so those must not be blocked by it. Evaluated at trace time from
+        a concrete numpy array, so it fires before any candidate is scored --
+        including on the cross-objective evaluation path, which reaches this same
+        branch.
+        """
+        degenerate = np.asarray(self.density_degenerate_conditions)
+        if not degenerate.any():
+            return
+        offenders = ", ".join(
+            f"{self.condition_names[i]} (var={self.density_target_var[i]:.2e})"
+            for i in np.flatnonzero(degenerate)
+        )
+        raise ValueError(
+            f"'{fitting_method}' cannot be fitted: the empirical density-asymmetry target is "
+            f"constant (var < {DEGENERATE_TARGET_EPS:.0e}) for {int(degenerate.sum())} of "
+            f"{self.n_conditions} conditions: {offenders}. A constant target carries no "
+            "information to fit and CCC is undefined against it, returning its worst value for "
+            "a perfect match. Check the trial data and the density-target construction for "
+            "these conditions; fit them with a non-density objective, or drop them from the "
+            "input explicitly rather than letting a fit silently omit them."
+        )
 
     def _optimize_all_conditions_hierarchical_jit(self, surfaces: jnp.ndarray,
                                                   cond_params_with_idx: jnp.ndarray,
@@ -1116,7 +1242,8 @@ class GridBasedMultiConditionOptimizer:
             losses = _compute_curve_losses(predicted_bias_curve_per_combo, target_bias_curve_per_combo,
                                            loss_type="mse", is_angular=True)
 
-        elif fitting_method == "density":
+        elif fitting_method in ("density", "density_legacy"):
+            self._check_density_targets_fittable(fitting_method)
             # Use precomputed target density curves (no function calls inside JIT)
             # Generate density asymmetry for ALL surfaces at once: shape (n_surfaces, n_feat_points)
             all_predicted_asymmetry = generate_nn_density_asymmetry_batch(surfaces, weights_sd=self.emp_density_weights_sd, smoothing_sigma=self.density_smoothing_sigma)
@@ -1126,9 +1253,16 @@ class GridBasedMultiConditionOptimizer:
             target_asymmetry_per_combo = self.unified_target_density[
                 condition_indices]  # Shape: (n_combos, n_feat_points)
 
-            # Compute losses using unified function (combined for density, angular=False)
-            losses = _compute_curve_losses(predicted_asymmetry_per_combo, target_asymmetry_per_combo,
-                                           loss_type="combined", is_angular=False, corr_weight=self.corr_weight)
+            if fitting_method == "density":
+                losses = _compute_curve_losses(predicted_asymmetry_per_combo, target_asymmetry_per_combo,
+                                               loss_type="ccc", is_angular=False)
+            else:
+                # `density_legacy` is the pre-2026-08 objective, kept solely so
+                # published numbers stay reproducible and explicable. It is not a
+                # tuning knob: `corr_weight` only reaches this branch.
+                losses = _compute_curve_losses(predicted_asymmetry_per_combo, target_asymmetry_per_combo,
+                                               loss_type="combined", is_angular=False,
+                                               corr_weight=self.corr_weight)
 
         elif fitting_method == "crps":
             # Energy score CRPS with circular distance.
@@ -1193,7 +1327,8 @@ class GridBasedMultiConditionOptimizer:
         else:
             raise ValueError(
                 f"Unknown fitting method: {fitting_method}. Must be one of "
-                f"'likelihood', 'expectation', 'smoothed_exp', 'density', 'crps', 'balanced_crps', 'bias_weighted_crps'")
+                f"'likelihood', 'expectation', 'smoothed_exp', 'density', 'density_legacy', "
+                f"'crps', 'balanced_crps', 'bias_weighted_crps'")
 
         # Find best parameter for each condition
         min_losses = jax.ops.segment_min(losses, condition_indices, num_segments=self.n_conditions)
@@ -1275,12 +1410,16 @@ class GridBasedMultiConditionOptimizer:
         # used param_range_low (the Level-1 floor, 10) and the prepended step was
         # int()-truncated, so the first pass covered [10, 200] at feat_grid_size=20 and
         # [10.5, 199.5] at 10 — never reaching param_grid_low = 5 at all.
+        # The schedule lives in run_fingerprint so the run identity records the
+        # steps actually walked rather than a literal that may have been
+        # extended; see effective_feat_step_schedule.
         center = (config.param_grid_low + config.param_range_high) / 2
-        feat_step_schedule = [10, 6, 4, 2, 1] # Decreasing step sizes
-        full_span_step = (config.param_range_high - config.param_grid_low) / (feat_grid_size - 1)
-        if full_span_step > feat_step_schedule[0]:
-            feat_step_schedule = [full_span_step] + feat_step_schedule
-        feat_step_schedule = jnp.array(feat_step_schedule, dtype=jnp.float32)
+        feat_step_schedule = jnp.array(
+            effective_feat_step_schedule(
+                feat_grid_size, config.param_grid_low, config.param_range_high
+            ),
+            dtype=jnp.float32,
+        )
         print(f"feat_step_schedule: {feat_step_schedule}")
 
         best_overall_loss = float('inf')
