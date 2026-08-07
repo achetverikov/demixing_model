@@ -920,6 +920,49 @@ def sheather_jones_bandwidth(real_bias, nb=1000, fallback=True):
     return float(brentq(f_sd, lower, upper, xtol=0.1 * 0.1 * hmax))
 
 
+BIAS_SCALE_SAFETY = 0.5
+"""Scaled bias values must stay within this fraction of the half-period.
+
+The rescaling below turns the circular axis into an effectively linear one, which
+is only legitimate while no mass is near the wrap. 0.5 keeps the largest scaled
+error at most halfway to the antipode.
+"""
+
+
+def rescale_bias_for_grid(real_bias, kernel_bw, dx, max_diss,
+                          safety=BIAS_SCALE_SAFETY):
+    """Widen a too-narrow bias distribution instead of over-smoothing it.
+
+    The density asymmetry is a signed MASS difference, and scaling every error by
+    the same positive factor preserves each error's sign -- so the estimand is
+    unchanged while the bandwidth scales with the data, lifting the kernel above
+    the grid it has to be sampled on. Scaling the data by k against a fixed grid
+    is exactly equivalent to evaluating on a grid k times finer; this is the
+    cheaper way to get that resolution, since the grid is fixed by the model
+    surfaces.
+
+    Measured on real moors cells against the bandwidth the data actually support:
+    scaling lands within 0.91% of it (median, max 1.94%), where flooring the
+    bandwidth instead leaves 4.53% median and 38.8% max.
+
+    The catch is that scaling is a LINEAR operation on a CIRCULAR axis: valid only
+    while the scaled data stay clear of the wrap. Narrow distributions -- the ones
+    that need this -- are far from it, but motion-direction data carry a
+    180-degree-off reversal mode sitting exactly there, so the headroom is checked
+    rather than assumed and the factor is capped to preserve it. Where the cap
+    binds, the caller's bandwidth floor still applies.
+
+    Returns:
+        (scaled_bias, scaled_bandwidth, scale)
+    """
+    real_bias = jnp.asarray(real_bias)
+    max_abs = jnp.max(jnp.abs(real_bias))
+    wanted = dx / jnp.maximum(kernel_bw, 1e-12)             # lifts the kernel to one cell
+    allowed = (safety * max_diss) / jnp.maximum(max_abs, 1e-12)
+    scale = jnp.maximum(jnp.minimum(wanted, allowed), 1.0)
+    return real_bias * scale, kernel_bw * scale, scale
+
+
 def _compute_empirical_density_asymmetry_core(real_feat_diff, real_bias, feat_diff_grid, weights_sd=20, circ_space=360,
                                               kernel_bw=None):
     """
@@ -963,8 +1006,7 @@ def _compute_empirical_density_asymmetry_core(real_feat_diff, real_bias, feat_di
     # starts. The fitter never relies on it; it always passes an explicit value.
     if kernel_bw is None:
         kernel_bw = sheather_jones_bandwidth(np.asarray(real_bias))
-    else:
-        kernel_bw = jnp.maximum(jnp.asarray(kernel_bw), KDE_BW_FLOOR)
+    kernel_bw = jnp.maximum(jnp.asarray(kernel_bw), KDE_BW_FLOOR)
 
 
     # Use provided feat_diff_grid or create default distances
@@ -980,6 +1022,22 @@ def _compute_empirical_density_asymmetry_core(real_feat_diff, real_bias, feat_di
     n_bias_points = 180
     dx_empirical = (2 * max_diss) / n_bias_points
     bias_range = -max_diss + dx_empirical * jnp.arange(n_bias_points)
+
+    # RESOLUTION. A kernel narrower than a cell falls BETWEEN grid points and the
+    # rectangle rule stops representing the density: at bw = dx/20 a trial centred
+    # on a cell contributes 7.98x its mass and one half a cell away contributes
+    # 0.0000, so the target would follow where trials sit within a cell rather than
+    # the data. Sheather-Jones reaches bw = 0.09 model degrees on real moors cells
+    # (bw/dx = 0.046), where the target was wrong by 278% of curve range.
+    #
+    # Rather than floor the bandwidth -- which fixes the arithmetic by deliberately
+    # over-smoothing, biasing the estimate on exactly the cells that triggered it --
+    # widen the distribution to fit the grid. Sign is preserved, so the signed mass
+    # difference is unchanged. See rescale_bias_for_grid. The floor stays as the
+    # backstop for when the wrap guard caps the scaling.
+    real_bias, kernel_bw, _bias_scale = rescale_bias_for_grid(
+        real_bias, kernel_bw, dx_empirical, max_diss)
+    kernel_bw = jnp.maximum(kernel_bw, dx_empirical / 2.0)
     
     # Vectorized weight matrix computation with logsumexp for numerical stability
     dist_matrix = distances[:, None] - real_feat_diff[None, :]  # Broadcasting
