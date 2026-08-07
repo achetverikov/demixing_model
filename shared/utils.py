@@ -771,7 +771,14 @@ def silverman_bandwidth(real_bias, floor=KDE_BW_FLOOR):
     Exposed separately so a caller can compute ONE bandwidth over several
     conditions and pass it back in via `kernel_bw`, rather than letting each
     condition pick its own (see `_compute_empirical_density_asymmetry_core`).
-    Identical to R's `bw.nrd0`.
+
+    NOT identical to R's `bw.nrd0`: it uses the population SD (jnp.std, ddof=0)
+    where R uses the sample SD, so this runs narrower by exactly sqrt(n/(n-1)) --
+    2.5% at n=20, 0.02% at n=3000 (measured; a ddof=1 version reproduces bw.nrd0
+    to 2e-14). The 1.34 constant does match. The discrepancy is kept deliberately:
+    this path exists to reproduce fits made before 2026-08 bit-for-bit, and
+    "correcting" it would defeat that. Use `sheather_jones_bandwidth` for a rule
+    that is faithful to R.
     """
     real_bias = jnp.asarray(real_bias)
     bias_std = jnp.std(real_bias)
@@ -925,7 +932,7 @@ def _compute_empirical_density_asymmetry_core(real_feat_diff, real_bias, feat_di
         weights_sd: Standard deviation for Gaussian weights in feat_diff dimension
         circ_space: Circular space size (360 for full circle)
         kernel_bw: Bias-KDE bandwidth. None (default) estimates it from THIS call's
-            trials via Silverman's rule, so each condition gets its own smoothing --
+            trials via Sheather-Jones, so each condition gets its own smoothing --
             and conditions differ in error spread by construction, which is the axis
             the experiment manipulates. Pass an explicit value to share one bandwidth
             across conditions (`silverman_bandwidth` over the pooled trials, or the
@@ -950,9 +957,12 @@ def _compute_empirical_density_asymmetry_core(real_feat_diff, real_bias, feat_di
     """
     max_diss = circ_space / 2
 
-    # Bandwidth: Silverman over this call's trials unless the caller supplies one.
+    # Bandwidth: Sheather-Jones over this call's trials unless the caller supplies
+    # one. SJ rather than Silverman so this library default matches the BBZ twin
+    # (_empirical_density_asymmetry_np) -- two defaults is how the next divergence
+    # starts. The fitter never relies on it; it always passes an explicit value.
     if kernel_bw is None:
-        kernel_bw = silverman_bandwidth(real_bias)
+        kernel_bw = sheather_jones_bandwidth(np.asarray(real_bias))
     else:
         kernel_bw = jnp.maximum(jnp.asarray(kernel_bw), KDE_BW_FLOOR)
 

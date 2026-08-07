@@ -880,26 +880,25 @@ class GridBasedMultiConditionOptimizer:
                 f"unknown density_bandwidth_rule {self.density_bandwidth_rule!r}; "
                 "expected 'silverman' or 'sj'")
 
+        # The bandwidth is ALWAYS resolved here and passed explicitly, never left to
+        # the core's default. Relying on the default meant 'silverman' silently
+        # tracked whatever that default happened to be, so flipping it (as the SJ
+        # adoption did) would have changed the one mode whose entire purpose is to
+        # reproduce pre-2026-08 fits.
         bias_by_condition = [condition_dataframes[i][:, 1]
                              for i in range(len(self.condition_names))]
-        shared_bw = None
+        shared_bw, per_condition_bw = None, None
         if self.density_bandwidth_mode == 'pooled':
             shared_bw = estimate_bw(jnp.concatenate(bias_by_condition))
         elif self.density_bandwidth_mode == 'average':
             shared_bw = jnp.mean(jnp.stack(
                 [jnp.asarray(estimate_bw(b)) for b in bias_by_condition]))
         elif self.density_bandwidth_mode == 'per_condition':
-            # Only needs an explicit value when the rule is not the core's default.
-            if self.density_bandwidth_rule != 'silverman':
-                shared_bw = None  # filled per condition below
+            per_condition_bw = [estimate_bw(b) for b in bias_by_condition]
         else:
             raise ValueError(
                 f"unknown density_bandwidth_mode {self.density_bandwidth_mode!r}; "
                 "expected 'per_condition', 'pooled' or 'average'")
-
-        per_condition_bw = None
-        if shared_bw is None and self.density_bandwidth_rule != 'silverman':
-            per_condition_bw = [estimate_bw(b) for b in bias_by_condition]
 
         def density_curve_wrapper(feat_diff_vals, bias_vals, grid, kernel_bw):
             """Wrapper to extract only asymmetry values from density computation."""
@@ -913,7 +912,7 @@ class GridBasedMultiConditionOptimizer:
                                   condition_dataframes[i][:, 1],
                                   feat_diff_grid,
                                   shared_bw if shared_bw is not None
-                                  else (per_condition_bw[i] if per_condition_bw else None))
+                                  else per_condition_bw[i])
             for i in range(len(self.condition_names))
         ])
 

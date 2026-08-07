@@ -10,10 +10,21 @@ import numpy as np
 import jax.numpy as jnp
 import pytest
 
-from shared.utils import _compute_empirical_density_asymmetry_core, KDE_WRAPS
+from shared.utils import (_compute_empirical_density_asymmetry_core, KDE_WRAPS,
+                          sheather_jones_bandwidth)
 
 CIRC_SPACE = 360.0
 GRID = np.arange(2.0, 181.0, 2.0)
+
+
+def _bandwidth(bias):
+    """One bandwidth, handed to both sides.
+
+    These tests are about the WRAP, so the bandwidth rule is pinned rather than
+    left to the default -- otherwise changing that default (as the SJ adoption
+    did) breaks tests that have nothing to do with it.
+    """
+    return float(sheather_jones_bandwidth(np.asarray(bias)))
 
 
 def _asymmetry(fd, bias, n_images):
@@ -22,8 +33,7 @@ def _asymmetry(fd, bias, n_images):
     n = 180
     dx = 2 * max_diss / n
     br = -max_diss + dx * np.arange(n)
-    bw = 0.9 * min(np.std(bias),
-                   (np.percentile(bias, 75) - np.percentile(bias, 25)) / 1.34) * len(bias) ** -0.2
+    bw = _bandwidth(bias)
     w = np.exp(-0.5 * ((GRID[:, None] - fd[None, :]) / 20.0) ** 2)
     w /= w.sum(axis=1, keepdims=True)
     diff = br[:, None] - bias[None, :]
@@ -38,7 +48,7 @@ def _asymmetry(fd, bias, n_images):
 def _under_test(fd, bias):
     return np.asarray(_compute_empirical_density_asymmetry_core(
         jnp.asarray(fd), jnp.asarray(bias), jnp.asarray(GRID),
-        weights_sd=20.0, circ_space=CIRC_SPACE)[1])
+        weights_sd=20.0, circ_space=CIRC_SPACE, kernel_bw=_bandwidth(bias))[1])
 
 
 def _sample(rng, n=3000, p_reversal=0.0):
