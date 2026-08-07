@@ -50,7 +50,7 @@ $PYTHON_BIN surface_computation/simulated_samples_grid.py \
   --results-dir "$STD_RESULTS"
 
 $PYTHON_BIN neural_network_optimization/create_averaged_surfaces_from_samples.py \
-  --input-folder "$STD_RESULTS/sim_samples_100_50samples_circular_em_fullcov_free_weights" \
+  --input-folder "$STD_RESULTS/sim_samples_100_50samples_circular_em_diagcov_free_weights" \
   --output-folder "$STD_RESULTS/$STD_AVG" \
   --workers 1 \
   --include-all-params

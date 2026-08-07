@@ -41,7 +41,7 @@ $PYTHON_BIN surface_computation/simulated_samples_grid.py \
   --match-csv-params "$PARAM_DIR" \
   --lock-backend file
 
-SAMPLES_DIR="sim_samples_100_50samples_circular_em_fullcov_free_weights"
+SAMPLES_DIR="sim_samples_100_50samples_circular_em_diagcov_free_weights"
 AVG_DIR="averaged_surfaces_smoke_standard"
 rm -rf "results/$AVG_DIR" "results/checkpoints_smoke_standard" "results/model_fit_to_data_smoke_standard"
 

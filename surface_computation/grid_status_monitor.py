@@ -23,7 +23,7 @@ Usage (run from repo root with PYTHONPATH set):
 
     # Target a specific samples folder (overrides auto-detection)
     PYTHONPATH=. python surface_computation/grid_status_monitor.py \\
-        --samples-dir results/sim_samples_10k_100samples_circular_em_fullcov_free_weights
+        --samples-dir results/sim_samples_10k_100samples_circular_em_diagcov_free_weights
 
     # Export status to JSON
     PYTHONPATH=. python surface_computation/grid_status_monitor.py --export
