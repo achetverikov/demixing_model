@@ -27,6 +27,13 @@ import jax.numpy as jnp
 import jax
 
 
+# Periodic images summed on each side when a KDE over a circular error axis is
+# built. One is already far past double precision: these bandwidths are a few
+# degrees against a 360-degree period, so the nearest omitted image sits >100
+# sigma away. Raise it only if a bandwidth ever approaches the period.
+KDE_WRAPS = 1
+
+
 def get_git_commit() -> Optional[str]:
     """Return the current HEAD commit hash, or None if not in a git repo."""
     try:
@@ -760,8 +767,14 @@ def _compute_empirical_density_asymmetry_core(real_feat_diff, real_bias, feat_di
         asymmetry_values: Asymmetry values at each grid point
 
     Notes:
-        The bias KDE is a plain (non-circular) Gaussian: mass smoothed past
-        ±max_diss is not wrapped or renormalized before the signed integration.
+        The bias KDE is WRAPPED (see KDE_WRAPS): the axis is a circle, so a kernel
+        centred near +max_diss reappears just past -max_diss rather than being
+        truncated. On orientation/colour data this is a no-op to ~1e-13 because
+        errors sit near 0 and the bandwidth is a few degrees, but motion-direction
+        data routinely carry a second mode of 180-degree-off reversals sitting
+        exactly on the boundary, where truncation both loses mass and mis-signs it.
+        The mass is still NOT renormalized before the signed integration.
+
         The Silverman bandwidth below has no lower bound, so degenerate input
         (near-identical bias values) drives kernel_bw toward 0 and the kernel
         normalization divides by it (see MODEL_PIPELINE_FOR_AGENTS.md D.11).
@@ -793,9 +806,13 @@ def _compute_empirical_density_asymmetry_core(real_feat_diff, real_bias, feat_di
     log_weights_normalized = log_weights - jax.scipy.special.logsumexp(log_weights, axis=1, keepdims=True)
     weight_matrix = jnp.exp(log_weights_normalized)
     
-    # Vectorized kernel matrix computation: (n_bias_points, n_datapoints)
+    # Vectorized kernel matrix computation: (n_bias_points, n_datapoints), summed
+    # over KDE_WRAPS periodic images so the kernel closes around the circle.
     bias_matrix = bias_range[:, None] - real_bias[None, :]  # Broadcasting
-    kernel_matrix = jnp.exp(-0.5 * (bias_matrix / kernel_bw) ** 2)
+    offsets = circ_space * jnp.arange(-KDE_WRAPS, KDE_WRAPS + 1, dtype=bias_matrix.dtype)
+    kernel_matrix = jnp.sum(
+        jnp.exp(-0.5 * ((bias_matrix[None, :, :] + offsets[:, None, None]) / kernel_bw) ** 2),
+        axis=0)
     kernel_matrix = kernel_matrix / (kernel_bw * jnp.sqrt(2 * jnp.pi))  # Normalize kernel
     
     # Matrix multiplication: (n_distances, n_bias_points)

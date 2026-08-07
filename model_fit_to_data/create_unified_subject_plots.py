@@ -35,6 +35,7 @@ from shared.config import config
 from shared.mu1_axis import mu1_cell_width, periodic_integral, sign_masks
 from shared import seed_manager
 from shared.utils import (
+    KDE_WRAPS,
     compute_target_bias_rolling_curve_core,
     resolve_input_path,
     resolve_results_path,
@@ -1594,8 +1595,15 @@ def _model_slice(log_surf: np.ndarray, feat_grid: np.ndarray, mu1_grid: np.ndarr
 
 
 def _empirical_slice(fd_vals: np.ndarray, bias_vals: np.ndarray,
-                     target_fd: float, bias_grid: np.ndarray, weights_sd: float):
-    """Return Gaussian-weighted KDE of bias values around target_fd."""
+                     target_fd: float, bias_grid: np.ndarray, weights_sd: float,
+                     period: float = 360.0):
+    """Return Gaussian-weighted KDE of bias values around target_fd.
+
+    The bias kernel is wrapped over `period` (model space, so 360 by default),
+    matching the fit-side target in shared/utils.py. Note this twin still floors
+    the bandwidth at 1.0 while the fit side has no floor — the two empirical KDEs
+    remain inconsistent in that one respect (MODEL_PIPELINE_FOR_AGENTS.md D.11).
+    """
     w = np.exp(-0.5 * ((fd_vals - target_fd) / weights_sd) ** 2)
     if w.sum() < 1e-10:
         return np.zeros_like(bias_grid)
@@ -1604,7 +1612,9 @@ def _empirical_slice(fd_vals: np.ndarray, bias_vals: np.ndarray,
     iqr = np.percentile(bias_vals, 75) - np.percentile(bias_vals, 25)
     bw  = max(0.9 * min(bias_std, iqr / 1.34) * len(bias_vals) ** (-0.2), 1.0)
     diff    = bias_grid[:, None] - bias_vals[None, :]
-    kernels = np.exp(-0.5 * (diff / bw) ** 2) / (bw * np.sqrt(2 * np.pi))
+    offsets = period * np.arange(-KDE_WRAPS, KDE_WRAPS + 1)
+    kernels = sum(np.exp(-0.5 * ((diff + o) / bw) ** 2) for o in offsets)
+    kernels = kernels / (bw * np.sqrt(2 * np.pi))
     return (kernels * w[None, :]).sum(axis=1)
 
 
