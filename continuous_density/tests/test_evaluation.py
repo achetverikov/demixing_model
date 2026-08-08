@@ -138,6 +138,20 @@ def test_single_surface_interpolation_handles_many_trials():
     assert np.allclose(got, want)
 
 
+def test_production_prediction_is_batched():
+    calls = []
+
+    def apply_fn(params, x):
+        del params
+        calls.append(len(x))
+        return x[:, :, None]
+
+    design = np.arange(44, dtype=np.float32).reshape(11, 4)
+    got = cmp._predict_in_batches(apply_fn, None, design, batch_size=4)
+    assert calls == [4, 4, 3]
+    assert np.array_equal(got[:, :, 0], design[:, :3])
+
+
 def test_production_condition_predicts_one_surface():
     from continuous_density import fit_demo
     calls = []

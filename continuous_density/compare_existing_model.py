@@ -55,13 +55,23 @@ if str(_NN_DIR) not in sys.path:
     sys.path.insert(0, str(_NN_DIR))
 
 
-def production_predictor(checkpoint: Path):
-    """Return ``f(design) -> (M, n_mu1, n_feat)`` log densities from the pretrained NN."""
+def _predict_in_batches(apply_fn, params, design: np.ndarray,
+                        batch_size: int) -> np.ndarray:
+    """Bound production-network device memory independently of case count."""
+    parts = []
+    for start in range(0, len(design), batch_size):
+        part = apply_fn(params, jnp.asarray(design[start:start + batch_size, :3]))
+        parts.append(np.asarray(part))
+    return np.concatenate(parts, axis=0)
+
+
+def production_predictor(checkpoint: Path, batch_size: int = 16):
+    """Return a memory-bounded production surface predictor."""
     state, _ = load_checkpoint(str(checkpoint))
     apply_fn = jax.jit(state.apply_fn)
 
     def predict(design: np.ndarray) -> np.ndarray:
-        return np.asarray(apply_fn(state.params, jnp.asarray(design[:, :3])))
+        return _predict_in_batches(apply_fn, state.params, np.asarray(design), batch_size)
 
     return predict
 
