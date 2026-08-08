@@ -12,7 +12,7 @@ which carries no global guarantee (see the plan's Phase 4 resolution).
 
 Usage (from repo root)::
 
-    python cloud/validate_exhaustive_reference.py \\
+    python scripts/validate_exhaustive_reference.py \\
         --data-path ../example_data/csh2026_prepared.csv \\
         --checkpoint-path pretrained/model_epoch1425_10ktrain_20samples.pkl \\
         --curve-cache results/curve_caches \\

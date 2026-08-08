@@ -8,7 +8,7 @@ affordable -- the scan never touches a surface, only a curve.
 
 Usage (from repo root)::
 
-    python cloud/build_curve_cache.py \\
+    python model_fit_to_data/build_curve_cache.py \\
         --checkpoint-path pretrained/model_epoch1425_10ktrain_20samples.pkl \\
         --out-root results/curve_caches --step 1.0 --verify
 

@@ -49,7 +49,7 @@ def built_cache(tmp_path_factory):
     is what has to be right."""
     out_root = tmp_path_factory.mktemp("caches")
     subprocess.run(
-        [sys.executable, str(ROOT / "cloud" / "build_curve_cache.py"),
+        [sys.executable, str(ROOT / "model_fit_to_data" / "build_curve_cache.py"),
          "--checkpoint-path", str(CHECKPOINT), "--out-root", str(out_root),
          "--step", str(STEP), "--low", str(LOW), "--high", str(HIGH), "--verify"],
         cwd=ROOT, check=True, capture_output=True,

@@ -23,7 +23,7 @@ motivated this work in the first place.
 
 Usage (from repo root)::
 
-    python cloud/compare_search_backends.py \\
+    python scripts/compare_search_backends.py \\
         --data-path ../example_data/csh2026_prepared.csv \\
         --checkpoint-path pretrained/model_epoch1425_10ktrain_20samples.pkl \\
         --curve-cache results/curve_caches --out backend_comparison.csv

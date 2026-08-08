@@ -19,6 +19,10 @@ Three mechanisms, none of which replaces the others:
   **per-array checksums + a completion marker** -- written last and atomically,
   so a build killed partway through is not mistaken for a finished one.
 
+Built by ``build_curve_cache.py`` beside this file, or on demand through
+`open_or_build` when a fit is given ``--curve-cache``; both go through
+`build_curve_lattice`, so they cannot generate curves differently.
+
 Layout on disk (one directory per cache key)::
 
     manifest.json          identity, axes, checksums
