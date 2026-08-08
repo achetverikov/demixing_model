@@ -95,15 +95,16 @@ python model_fit_to_data/fit_model_to_data.py \
 
 For orientation experiments, add `--circ-space 180`: orientations repeat after 180°, stimulus differences span 0–90°, and response errors span ±90°. For color, direction, or another variable defined around a full circle, keep the 360° default. This choice is important because it changes how angles are represented inside the model.
 
-Useful options include `--min-trials`, `--include-outliers`, and `--no-resume`. The default `density` criterion matches how the asymmetry of the response distribution changes with stimulus dissimilarity. Use `expectation` when the scientific target is specifically the mean bias curve shown in the example figure. The [fitting documentation](model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md) explains all seven criteria and when they differ.
+Useful options include `--min-trials`, `--include-outliers`, and `--no-resume`. The default `density` criterion matches how the asymmetry of the response distribution changes with stimulus dissimilarity. Use `expectation` when the scientific target is specifically the mean bias curve shown in the example figure. The [fitting documentation](model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md) explains all eight criteria and when they differ, along with the two search backends and the fingerprint that stops results computed different ways from being mixed.
 
-The main result file contains the fitted parameters, losses, and predicted curves. A progress file allows an interrupted analysis to continue. After generating plots and exports, the folder will look like this:
+The main result file contains the fitted parameters, losses, and predicted curves. A progress file allows an interrupted analysis to continue, and a run-fingerprint file records how the results were produced so a later run cannot append fits computed under different settings. After generating plots and exports, the folder will look like this:
 
 ```text
 results/my_study/
-├── extended_fit_results.pkl   # complete reusable fit object
-├── extended_progress.json     # resume state
-├── csv_exports/               # created by post-fit plotting
+├── extended_fit_results.pkl        # complete reusable fit object
+├── extended_run_fingerprint.json   # how these results were produced
+├── extended_progress.json          # resume state
+├── csv_exports/                    # created by post-fit plotting
 ├── summary_plots/
 └── unified_subject_plots/
 ```

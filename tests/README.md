@@ -10,6 +10,19 @@ PYTHONPATH=. python -m pytest tests
 
 These tests cover configuration imports, CLI flag dispatch, lock and object-store backends, and fitted-result export behavior without regenerating the full model.
 
+A few are slower because they exercise the surrogate on a small lattice rather
+than mocking it, which is the only way they can check what they claim:
+
+- `test_curve_cache_matches_live_model.py` builds a cache through the production
+  builder and compares every curve against the model, because the cache is read
+  *instead of* calling it — a transposed parameter order or an off-by-one in the
+  slab index would leave every checksum valid.
+- `test_search_dispatch.py` runs the real fitter and records which backend ran
+  for which method. It does not infer the backend from fitted values: with a
+  coarse cache the two searches can land on the same parameters by coincidence.
+- `test_exhaustive_density.py` checks the factorisation the exhaustive scan rests
+  on against brute force over the full joint product space.
+
 ## Smoke pipelines
 
 Three shell workflows exercise the compute pipeline:
