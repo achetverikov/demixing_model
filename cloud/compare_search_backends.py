@@ -145,9 +145,8 @@ def main() -> None:
     print(f"  time per group: exhaustive {table['t_exhaustive'].median():.1f}s, "
           f"hierarchical {table['t_hierarchical'].median():.1f}s "
           f"({table['t_hierarchical'].median() / table['t_exhaustive'].median():.1f}x)")
-    print(f"  sd_spat differs by >1 deg in "
-          f"{int((table['exhaustive_sd_spat'] - table['hierarchical_sd_spat']).abs() > 1.0).sum()} "
-          f"of {len(table)} groups")
+    spat_gap = (table['exhaustive_sd_spat'] - table['hierarchical_sd_spat']).abs()
+    print(f"  sd_spat differs by >1 deg in {int((spat_gap > 1.0).sum())} of {len(table)} groups")
 
 
 if __name__ == '__main__':
