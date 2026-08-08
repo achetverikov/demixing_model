@@ -42,7 +42,7 @@ PREPARED_CSV = REPO_ROOT / "example_data" / "fischer_whitney_prepared.csv"
 RESULTS_BASE = "results/fischer_whitney"
 
 CHECKPOINTS = [
-    ("20samples_circular",  "pretrained/model_epoch1500_10ktrain_20samples.pkl"),
+    ("20samples_circular",  "pretrained/model_epoch1425_10ktrain_20samples.pkl"),
     ("100samples_circular", "pretrained/model_epoch1500_10ktrain_100samples.pkl"),
 ]
 

@@ -13,8 +13,17 @@ Grid dimensions are taken from config rather than hardcoded.
 import jax
 import jax.numpy as jnp
 from flax import linen as nn
-from typing import Tuple
+from typing import Optional, Tuple
 from shared.config import config
+
+
+def infer_native_mu1_rows(params) -> int:
+    """Infer the pre-resize mu1 resolution from a predictor parameter tree."""
+    dense_width = int(params['params']['Dense_3']['kernel'].shape[-1])
+    denominator = MirrorAwareMu1Predictor().latent_size * 16
+    if dense_width % denominator:
+        raise ValueError(f"Invalid decoder dense width: {dense_width}")
+    return 8 * dense_width // denominator
 
 
 def periodic_linear_resize_mu1(inputs, output_rows):
@@ -114,11 +123,14 @@ class MirrorAwareMu1Predictor(nn.Module):
     hidden_dims: list = (64, 128, 256)
     cnn_channels: list = (128, 64, 32, 1)
     latent_size: int = 16
+    native_mu1_rows: int = 64
+    output_feat_cols: Optional[int] = None
 
     @property
     def output_shape(self) -> Tuple[int, int]:
         """Get output shape from config."""
-        return config.mu1_surface_shape
+        rows, cols = config.mu1_surface_shape
+        return rows, self.output_feat_cols or cols
     
     @property 
     def mu1_bias_range(self) -> Tuple[float, float]:
@@ -140,9 +152,12 @@ class MirrorAwareMu1Predictor(nn.Module):
         for dim in self.hidden_dims:
             h = nn.relu(nn.Dense(dim)(h))
 
-        h = nn.Dense(self.latent_size * 8 * 16)(h)
+        if self.native_mu1_rows % 8:
+            raise ValueError("native_mu1_rows must be divisible by 8")
+        initial_mu1_rows = self.native_mu1_rows // 8
+        h = nn.Dense(self.latent_size * initial_mu1_rows * 16)(h)
         h = nn.relu(h)
-        h = h.reshape((-1, 8, 16, self.latent_size))
+        h = h.reshape((-1, initial_mu1_rows, 16, self.latent_size))
 
         # CNN decoder
         kernel_size = (4, 4)

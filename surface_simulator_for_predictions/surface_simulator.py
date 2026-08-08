@@ -34,7 +34,7 @@ RESULTS_DIR = "results"
 CHECKPOINT_PREFIX = "neural_net_checkpoints"
 CHECKPOINT_EPOCH = 1500
 PRETRAINED_CHECKPOINTS = {
-    20: "pretrained/model_epoch1500_10ktrain_20samples.pkl",
+    20: "pretrained/model_epoch1425_10ktrain_20samples.pkl",
     100: "pretrained/model_epoch1500_10ktrain_100samples.pkl",
 }
 

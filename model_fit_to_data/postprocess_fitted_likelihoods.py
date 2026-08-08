@@ -40,7 +40,7 @@ from shared.utils import filter_data_for_fitting
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_20 = REPO_ROOT / "pretrained/model_epoch1500_10ktrain_20samples.pkl"
+DEFAULT_20 = REPO_ROOT / "pretrained/model_epoch1425_10ktrain_20samples.pkl"
 DEFAULT_100 = REPO_ROOT / "pretrained/model_epoch1500_10ktrain_100samples.pkl"
 
 # Motor-noise density floor (B1 floor-aware reproduction gate).

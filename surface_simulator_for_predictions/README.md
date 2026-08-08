@@ -21,7 +21,7 @@ PYTHONPATH=. python surface_simulator_for_predictions/surface_simulator.py \
   --skip-motor-noise
 ```
 
-The `--n-samples 20` selects one of the two theoretical internal-sampling assumptions. It does not refer to the number of experimental trials. The matching trained model (`pretrained/model_epoch1500_10ktrain_20samples.pkl`) is loaded automatically; pass `--checkpoint-path` only to point at a different one.
+The `--n-samples 20` selects one of the two theoretical internal-sampling assumptions. It does not refer to the number of experimental trials. The matching trained model (`pretrained/model_epoch1425_10ktrain_20samples.pkl`) is loaded automatically; pass `--checkpoint-path` only to point at a different one.
 
 The three required inputs can also be given positionally — `surface_simulator.py INPUT N_SAMPLES OUTPUT` — which is what the smoke scripts use.
 
@@ -84,7 +84,7 @@ predictions <- simulate_surfaces(
   skip_motor_noise = TRUE,
   use_nn_surfaces = TRUE,
   checkpoint_path = normalizePath(
-    "pretrained/model_epoch1500_10ktrain_20samples.pkl"
+    "pretrained/model_epoch1425_10ktrain_20samples.pkl"
   )
 )
 ```

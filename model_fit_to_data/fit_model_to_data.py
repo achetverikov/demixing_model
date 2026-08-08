@@ -867,7 +867,7 @@ if __name__ == '__main__':
     )
     parser.add_argument('--data-path', required=True,
                         help='Path to input CSV.')
-    parser.add_argument('--checkpoint-path', default='pretrained/model_epoch1500_10ktrain_20samples.pkl',
+    parser.add_argument('--checkpoint-path', default='pretrained/model_epoch1425_10ktrain_20samples.pkl',
                         help='Path to trained NN checkpoint.')
     parser.add_argument('--output-dir', required=True,
                         help='Directory for results.')

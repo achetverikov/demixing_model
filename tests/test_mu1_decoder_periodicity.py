@@ -128,6 +128,23 @@ def test_model_keeps_legacy_parameter_layout_and_forward_path():
         assert model.apply(variables, x).shape == (1, 181, 90)
 
 
+def test_model_supports_128_native_mu1_rows():
+    model = MirrorAwareMu1Predictor(native_mu1_rows=128)
+    x = jnp.array([[20.0, 20.0, 40.0]])
+    variables = model.init(jax.random.PRNGKey(8), x)
+
+    assert variables['params']['Dense_3']['kernel'].shape[-1] == 4096
+    assert model.apply(variables, x).shape == (1, 180, 90)
+
+
+def test_model_can_train_at_native_feature_resolution():
+    model = MirrorAwareMu1Predictor(output_feat_cols=128)
+    x = jnp.array([[20.0, 20.0, 40.0]])
+    variables = model.init(jax.random.PRNGKey(9), x)
+
+    assert model.apply(variables, x).shape == (1, 180, 128)
+
+
 def test_the_tolerance_separates_rounding_from_seam_errors():
     """SEAM_TOLERANCE must sit far below the defect a real seam error causes.
 

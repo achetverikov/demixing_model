@@ -20,7 +20,7 @@ for path in (ROOT, ROOT / "model_fit_to_data"):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-CHECKPOINT = ROOT / "pretrained" / "model_epoch1500_10ktrain_20samples.pkl"
+CHECKPOINT = ROOT / "pretrained" / "model_epoch1425_10ktrain_20samples.pkl"
 pytestmark = pytest.mark.skipif(not CHECKPOINT.exists(), reason="no pretrained checkpoint")
 
 import jax.numpy as jnp

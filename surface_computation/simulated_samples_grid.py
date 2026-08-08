@@ -20,6 +20,7 @@ import os
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'true'
 
 import time
+import csv
 import pickle, gzip
 import numpy as np
 import jax
@@ -1802,6 +1803,28 @@ def extract_params_from_csv_dir(csv_dir: str = './csv_samples') -> List[Tuple[fl
     return param_combos
 
 
+def extract_params_from_csv_file(csv_file: str) -> List[Tuple[float, float, float]]:
+    """Read a scenario manifest with sd_feat1, sd_feat2, and sd_spat columns."""
+    path = Path(csv_file)
+    if not path.is_file():
+        raise FileNotFoundError(f"Parameter manifest not found: {path}")
+    with path.open(newline='') as handle:
+        reader = csv.DictReader(handle)
+        required = {'sd_feat1', 'sd_feat2', 'sd_spat'}
+        if not reader.fieldnames or not required.issubset(reader.fieldnames):
+            raise ValueError(
+                f"{path} must contain columns {sorted(required)}; "
+                f"found {reader.fieldnames}")
+        params = sorted({
+            (float(row['sd_feat1']), float(row['sd_feat2']), float(row['sd_spat']))
+            for row in reader
+        })
+    if not params:
+        raise ValueError(f"No parameter rows found in {path}")
+    print(f"Read {len(params)} parameter combinations from {path}")
+    return params
+
+
 def format_count_suffix(value: int) -> str:
     """Format counts like 1000 -> 1k for compact folder names."""
     if value >= 1000 and value % 1000 == 0:
@@ -1907,6 +1930,9 @@ def parse_arguments():
                         help='Only show status without running computation')
     parser.add_argument('--match-csv-params', type=str,
                         help='Run only for parameter combinations found in CSV files in this directory (e.g., ./csv_samples)')
+    parser.add_argument('--param-file', type=str,
+                        help='Run only parameter rows in a CSV manifest with '
+                             'sd_feat1, sd_feat2, and sd_spat columns')
     parser.add_argument('--save-full-results', action='store_true',
                         help='Save full simulation results in addition to biases')
     parser.add_argument('--save-csv', action='store_true',
@@ -1987,8 +2013,13 @@ def parse_arguments():
         print(f"Starting enhanced chunked computation on {args.machine_id}")
 
         # Check if we should match CSV parameters
+        if args.match_csv_params and args.param_file:
+            parser.error('--match-csv-params and --param-file are mutually exclusive')
         custom_params = None
-        if args.match_csv_params:
+        if args.param_file:
+            param_file = resolve_input_path(args.param_file, args.results_dir)
+            custom_params = extract_params_from_csv_file(str(param_file))
+        elif args.match_csv_params:
             csv_param_dir = resolve_input_path(args.match_csv_params, args.results_dir)
             custom_params = extract_params_from_csv_dir(str(csv_param_dir))
             if not custom_params:

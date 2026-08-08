@@ -14,7 +14,7 @@ Usage (from repo root)::
 
     python cloud/validate_exhaustive_reference.py \\
         --data-path ../example_data/csh2026_prepared.csv \\
-        --checkpoint-path pretrained/model_epoch1500_10ktrain_20samples.pkl \\
+        --checkpoint-path pretrained/model_epoch1425_10ktrain_20samples.pkl \\
         --curve-cache results/curve_caches \\
         --reference reference_optima_temp.csv
 

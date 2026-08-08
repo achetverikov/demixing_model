@@ -14,13 +14,14 @@ import numpy as np
 from pathlib import Path
 import pickle
 import re
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 import time
 from datetime import datetime
 from flax.training import train_state
 
-from mirror_aware_model import MirrorAwareMu1Predictor, normalize_to_density_flexible
-from loss_functions import combined_probabilistic_loss, kl_divergence_loss, expectation_loss, smoothness_regularization
+from mirror_aware_model import (MirrorAwareMu1Predictor, infer_native_mu1_rows,
+                                normalize_to_density_flexible)
+from loss_functions import LOSS_PROFILES, combined_probabilistic_loss, loss_profile
 from shared.config import config, averaged_surfaces_dir
 from shared.mu1_axis import guard_surface_mu1_axis
 from shared.utils import save_checkpoint, cleanup_old_checkpoints, save_training_log_smart, resolve_input_path, resolve_results_path
@@ -205,11 +206,14 @@ def create_mirror_aware_train_state(key: jax.random.PRNGKey,
                                    learning_rate: float = 1e-3,
                                    warmup_steps: int = 1000,
                                    total_steps: int = 10000,
-                                   weight_decay: float = 1e-4) -> train_state.TrainState:
+                                   weight_decay: float = 1e-4,
+                                   native_mu1_rows: int = 64,
+                                   output_feat_cols: Optional[int] = None) -> train_state.TrainState:
     """Create training state for mirror-aware model."""
 
     # Initialize model
-    model = MirrorAwareMu1Predictor()
+    model = MirrorAwareMu1Predictor(
+        native_mu1_rows=native_mu1_rows, output_feat_cols=output_feat_cols)
     
     # Initialize parameters with dummy input
     dummy_input = jnp.ones((1, 3))
@@ -239,25 +243,46 @@ def create_mirror_aware_train_state(key: jax.random.PRNGKey,
     return train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
 
 
-@jax.jit
-def mirror_aware_train_step(state: train_state.TrainState,
-                           batch_inputs: jnp.ndarray,
-                           batch_targets: jnp.ndarray) -> Tuple[train_state.TrainState, float, Dict]:
-    """Training step for mirror-aware model."""
+def _resample_target_feature_probabilities(targets, output_cols):
+    """Endpoint-aligned interpolation of conditional probabilities."""
+    input_cols = targets.shape[2]
+    if input_cols == output_cols:
+        return targets
+    probabilities = jax.nn.softmax(targets, axis=1)
+    positions = jnp.arange(output_cols) * (input_cols - 1) / (output_cols - 1)
+    lower = jnp.floor(positions).astype(jnp.int32)
+    upper = jnp.minimum(lower + 1, input_cols - 1)
+    fraction = (positions - lower).reshape((1, 1, output_cols))
+    resized = (jnp.take(probabilities, lower, axis=2) * (1 - fraction) +
+               jnp.take(probabilities, upper, axis=2) * fraction)
+    return jnp.log(jnp.maximum(resized, jnp.finfo(resized.dtype).tiny))
 
-    def loss_fn(params):
-        """Compute total loss and loss components for one batch."""
-        # Get predictions from mirror-aware model
-        preds = state.apply_fn(params, batch_inputs)
 
-        # The model already handles normalization, so preds are normalized log densities
-        loss, loss_components = combined_probabilistic_loss(preds, batch_targets)
-        return loss, (preds, loss_components)
+def make_mirror_aware_train_step(loss_kwargs=None, target_feat_cols=None):
+    """Compile a training step for one fixed objective-ablation profile."""
+    loss_kwargs = {} if loss_kwargs is None else dict(loss_kwargs)
 
-    (loss, (preds, loss_components)), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
-    state = state.apply_gradients(grads=grads)
+    @jax.jit
+    def train_step(state: train_state.TrainState,
+                   batch_inputs: jnp.ndarray,
+                   batch_targets: jnp.ndarray):
+        def loss_fn(params):
+            preds = state.apply_fn(params, batch_inputs)
+            targets = _resample_target_feature_probabilities(
+                batch_targets, target_feat_cols or batch_targets.shape[2])
+            loss, components = combined_probabilistic_loss(
+                preds, targets, **loss_kwargs)
+            return loss, components
 
-    return state, loss, loss_components
+        (loss, loss_components), grads = jax.value_and_grad(
+            loss_fn, has_aux=True)(state.params)
+        state = state.apply_gradients(grads=grads)
+        return state, loss, loss_components
+
+    return train_step
+
+
+mirror_aware_train_step = make_mirror_aware_train_step()
 
 
 def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_10k",
@@ -267,18 +292,23 @@ def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_
                             weight_decay: float = 1e-4,
                             save_dir: str = "neural_net_checkpoints",
                             save_every: int = 25,
+                            keep_checkpoints: int = 3,
                             results_dir: str = "results",
-                            seed: int = 42) -> train_state.TrainState:
+                            seed: int = 42,
+                            loss_profile_name: str = "circular",
+                            native_mu1_rows: int = 64,
+                            training_feat_cols: int = 90,
+                            init_checkpoint: Optional[str] = None,
+                            epoch_offset: int = 0) -> train_state.TrainState:
     """
     Train mirror-aware model on averaged surfaces.
 
     These function defaults (2500 epochs, batch 64) are NOT what the CLI runs:
     the argument parser below defaults to 1500 epochs / batch 32 and passes
-    them explicitly. Both shipped pretrained checkpoints match the CLI values
-    (their stored step counts are 3,000,000 = 1500 × 64,000/32; see
-    pretrained/README.md and MODEL_PIPELINE_FOR_AGENTS.md D.5). Programmatic
-    callers omitting these arguments get a different training run than the
-    documented one.
+    them explicitly. Production training uses the CLI's 1500-epoch, batch-32
+    schedule (with a validation-selected checkpoint potentially preceding the
+    final epoch; see pretrained/README.md). Programmatic callers omitting these
+    arguments get a different training run than the documented one.
 
     Args:
         surfaces_folder: Folder containing averaged surface files
@@ -288,14 +318,43 @@ def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_
         weight_decay: Weight decay coefficient
         save_dir: Directory to save checkpoints
         save_every: Save checkpoint every N epochs
+        keep_checkpoints: Number of recent checkpoints to retain; zero keeps all
+        init_checkpoint: Optional checkpoint whose parameters initialize a new
+            optimizer schedule. This is a warm restart, not an optimizer-state
+            resume.
+        epoch_offset: Epoch number assigned to the state before this run. Saved
+            checkpoint numbers continue from this value.
         
     Returns:
         Final training state
     """
     
     print("=== Mirror-Aware Surface Prediction Training ===")
+    if save_every < 1 or keep_checkpoints < 0 or epoch_offset < 0:
+        raise ValueError(
+            "save_every must be positive; keep_checkpoints and epoch_offset "
+            "must be nonnegative")
     print(f"Using config: mu1_surface_shape={config.mu1_surface_shape}, mu1_bias_range={config.mu1_bias_range}")
-    print(f"Optimization settings: batch_size={batch_size}, pre-compilation enabled")
+    print(f"Optimization settings: batch_size={batch_size}, "
+          f"native_mu1_rows={native_mu1_rows}, "
+          f"training_feat_cols={training_feat_cols}, pre-compilation enabled")
+    objective = loss_profile(loss_profile_name)
+    train_step = make_mirror_aware_train_step(objective, training_feat_cols)
+    component_names = [
+        name for name, weight_name in (
+            ('kl', 'kl_weight'),
+            ('energy', 'energy_weight'),
+            ('expectation', 'expectation_weight'),
+            ('asymmetry', 'asymmetry_weight'),
+            ('hellinger', 'hellinger_weight'),
+            ('log_smoothness', 'log_smoothness_weight'),
+            ('curvature', 'curvature_weight'),
+            ('trajectory', 'trajectory_weight'),
+            ('feature_gradient', 'feature_gradient_weight'))
+        if objective.get(weight_name, 0.0)
+    ]
+    component_names.append('total')
+    print(f"Loss profile: {loss_profile_name} {objective}")
     
     # Load averaged surfaces
     resolved_surfaces_folder = resolve_input_path(surfaces_folder, results_dir)
@@ -337,8 +396,30 @@ def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_
         learning_rate=learning_rate,
         warmup_steps=warmup_steps,
         total_steps=total_steps,
-        weight_decay=weight_decay
+        weight_decay=weight_decay,
+        native_mu1_rows=native_mu1_rows,
+        output_feat_cols=training_feat_cols,
     )
+    if init_checkpoint:
+        resolved_checkpoint = resolve_input_path(init_checkpoint, results_dir)
+        with open(resolved_checkpoint, 'rb') as handle:
+            checkpoint_data = pickle.load(handle)
+        checkpoint_epoch = int(checkpoint_data['epoch'])
+        if checkpoint_epoch != epoch_offset:
+            raise ValueError(
+                f"Initial checkpoint is epoch {checkpoint_epoch}, but "
+                f"epoch_offset={epoch_offset}")
+        loaded_rows = infer_native_mu1_rows(checkpoint_data['params'])
+        if loaded_rows != native_mu1_rows:
+            raise ValueError(
+                f"Initial checkpoint uses native_mu1_rows={loaded_rows}, but "
+                f"the requested model uses {native_mu1_rows}")
+        if jax.tree_util.tree_structure(checkpoint_data['params']) != \
+                jax.tree_util.tree_structure(state.params):
+            raise ValueError("Initial checkpoint parameter tree is incompatible")
+        state = state.replace(params=checkpoint_data['params'])
+        print(f"Warm-started parameters from {resolved_checkpoint} "
+              f"(epoch {checkpoint_epoch}); optimizer schedule restarted")
 
     # Pre-compile the training step to avoid slow first iteration
     # print("Pre-compiling training step...")
@@ -360,15 +441,24 @@ def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_
         data_range=f"{config.param_grid_low}-{config.param_range_high}",
         surfaces_folder=str(resolved_surfaces_folder),
         model_type="MirrorAwareMu1Predictor",
-        loss_type="combined_probabilistic",
+        architecture=(f"native_mu1_rows={native_mu1_rows},"
+                      f"training_feat_cols={training_feat_cols}"),
+        training_feat_cols=training_feat_cols,
+        loss_type=loss_profile_name,
+        **objective,
         weight_decay=weight_decay,
         warmup_steps=warmup_steps,
         total_steps=total_steps,
+        init_checkpoint=str(resolved_checkpoint) if init_checkpoint else None,
+        epoch_offset=epoch_offset,
         mirror_aware=True,
         seed=seed,
     )
 
     rng = np.random.default_rng(seed)
+    # Continue the deterministic epoch-shuffle stream when warm-starting.
+    for _ in range(epoch_offset):
+        rng.permutation(n_samples)
     
     # Training loop
     print("Starting training...")
@@ -381,14 +471,15 @@ def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_
         
         # Training metrics — accumulated as JAX arrays to avoid per-step GPU→CPU sync
         acc_loss = jnp.zeros(())
-        acc_components = {'mse': jnp.zeros(()), 'kl': jnp.zeros(()), 'expectation': jnp.zeros(()), 'smoothness': jnp.zeros(()), 'total': jnp.zeros(())}
+        acc_components = {name: jnp.zeros(()) for name in component_names}
 
         # Training loop
         for batch_idx in range(n_batches):
             batch_inputs = inputs[batched_indices[batch_idx]]
             batch_targets = targets[batched_indices[batch_idx]]
 
-            state, loss, loss_components = mirror_aware_train_step(state, batch_inputs, batch_targets)
+            state, loss, loss_components = train_step(
+                state, batch_inputs, batch_targets)
 
             acc_loss += loss
             for key in acc_components:
@@ -402,26 +493,46 @@ def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_
         
         # Logging
         if epoch % 10 == 0 or epoch < 10:
-            print(f"Epoch {epoch+1}/{n_epochs}: loss = {epoch_loss:.4f} [{epoch_time:.1f}s]")
-            print(f"  Components: MSE={total_loss_components['mse']:.4f}, "
-                  f"KL={total_loss_components['kl']:.4f}, "
-                  f"Exp={total_loss_components['expectation']:.4f}, "
-                  f"Smooth={total_loss_components['smoothness']:.4f}")
+            absolute_epoch = epoch_offset + epoch + 1
+            print(f"Epoch {absolute_epoch}/{epoch_offset + n_epochs}: "
+                  f"loss = {epoch_loss:.4f} [{epoch_time:.1f}s]")
+            component_text = ", ".join(
+                f"{name}={value:.4f}" for name, value in total_loss_components.items()
+                if name != 'total')
+            print(f"  Components: {component_text}")
         
         # Save checkpoint
-        if (epoch + 1) % save_every == 0 or epoch == n_epochs - 1:
-            save_checkpoint(state, epoch + 1, epoch_loss, save_dir=str(resolved_save_dir))
-            cleanup_old_checkpoints(save_dir=str(resolved_save_dir), keep_last_n=3)
+        absolute_epoch = epoch_offset + epoch + 1
+        if absolute_epoch % save_every == 0 or epoch == n_epochs - 1:
+            checkpoint_state = state
+            if training_feat_cols != config.feat_diff_grid_size:
+                inference_model = MirrorAwareMu1Predictor(
+                    native_mu1_rows=native_mu1_rows,
+                    output_feat_cols=config.feat_diff_grid_size)
+                checkpoint_state = state.replace(apply_fn=inference_model.apply)
+            save_checkpoint(
+                checkpoint_state, absolute_epoch, epoch_loss,
+                save_dir=str(resolved_save_dir))
+            if keep_checkpoints:
+                cleanup_old_checkpoints(
+                    save_dir=str(resolved_save_dir), keep_last_n=keep_checkpoints)
         
         # Log to file
+        metric_log_names = {
+            'kl': 'kl_loss',
+            'energy': 'circular_energy_loss',
+            'expectation': 'circular_moment_loss',
+            'asymmetry': 'density_asymmetry_loss',
+        }
+        metric_values = {
+            metric_log_names.get(name, f'ablation_{name}'): value
+            for name, value in total_loss_components.items() if name != 'total'
+        }
         save_training_log_smart(
             save_dir=str(resolved_save_dir),
-            epoch=epoch + 1,
+            epoch=absolute_epoch,
             loss=epoch_loss,
-            mse_loss=total_loss_components['mse'],
-            kl_loss=total_loss_components['kl'],
-            expectation_loss=total_loss_components['expectation'],
-            smoothness_loss=total_loss_components['smoothness'],
+            **metric_values,
             epoch_time_seconds=epoch_time
         )
     
@@ -446,8 +557,9 @@ def check_trained_model_outputs(checkpoint_path: str) -> bool:
         checkpoint_data = pickle.load(f)
     
     # Create model and restore parameters
-    model = MirrorAwareMu1Predictor()
     params = checkpoint_data['params']
+    model = MirrorAwareMu1Predictor(
+        native_mu1_rows=infer_native_mu1_rows(params))
     
     # Test inputs
     test_input_1 = jnp.array([[30.0, 50.0, 100.0]])  # sf1=30, sf2=50
@@ -490,12 +602,28 @@ if __name__ == "__main__":
                         help='Weight decay coefficient')
     parser.add_argument('--save-dir', type=str, default="neural_net_checkpoints_20samples",
                         help='Directory to save checkpoints')
+    parser.add_argument('--save-every', type=int, default=25,
+                        help='Save a checkpoint every N epochs (default: 25)')
+    parser.add_argument('--keep-checkpoints', type=int, default=3,
+                        help='Recent checkpoints to retain; zero keeps all (default: 3)')
     parser.add_argument('--test-checkpoint', type=str, default=None,
                         help='Check ordered component predictions from a checkpoint')
     parser.add_argument('--seed', type=int, default=42,
                         help='Seed for model initialization and epoch shuffling (default: 42)')
     parser.add_argument('--results-dir', type=str, default='results',
                         help='Base directory for outputs (relative paths are placed here)')
+    parser.add_argument('--loss-profile', choices=sorted(LOSS_PROFILES), default='circular',
+                        help='Fixed objective profile for a controlled loss ablation')
+    parser.add_argument('--native-mu1-rows', type=int, choices=(64, 128), default=64,
+                        help='Decoder rows before the final periodic resize (default: 64)')
+    parser.add_argument('--training-feat-cols', type=int, choices=(90, 128), default=90,
+                        help='Feature columns used by the training loss (default: 90)')
+    parser.add_argument('--init-checkpoint', type=str,
+                        help='Warm-start parameters from this checkpoint using '
+                             'a fresh optimizer schedule')
+    parser.add_argument('--epoch-offset', type=int, default=0,
+                        help='Epoch of --init-checkpoint; checkpoint numbering '
+                             'continues from here (default: 0)')
     
     args = parser.parse_args()
     
@@ -512,6 +640,13 @@ if __name__ == "__main__":
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
             save_dir=args.save_dir,
+            save_every=args.save_every,
+            keep_checkpoints=args.keep_checkpoints,
             results_dir=args.results_dir,
             seed=args.seed,
+            loss_profile_name=args.loss_profile,
+            native_mu1_rows=args.native_mu1_rows,
+            training_feat_cols=args.training_feat_cols,
+            init_checkpoint=args.init_checkpoint,
+            epoch_offset=args.epoch_offset,
         )
