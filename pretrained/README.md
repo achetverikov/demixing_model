@@ -23,6 +23,13 @@ checkpoint and is no longer selected automatically.
 
 **Circular geometry**: the first feature dimension is wrapped (360° model space), matching how the surfaces are computed in `surface_computation/jax_fit_functions.py` (`wrap_1st = True`).
 
-**Training surfaces**: drawn from `results/averaged_surfaces_10k_{20,100}samples_circular/` ("10k" = 10,000 simulations per surface, not grid points). The parameter grid is the combined Level-1+2 grid: sd_feat1, sd_feat2, sd_spat each on a **5° step over [5, 200]** (40 values per axis). The folder stores the canonical half (sd_feat1 ≤ sd_feat2); mirror augmentation produces 64,005 stored training rows because five diagonal cases are duplicated in the source bundles. This negligible duplication does not change batch geometry or training speed.
+**Training surfaces**: "10k" means 10,000 simulations per surface, not grid points. The parameter grid is the combined Level-1+2 grid: sd_feat1, sd_feat2, sd_spat each on a **5° step over [5, 200]** (40 values per axis). The folder stores the canonical half (sd_feat1 ≤ sd_feat2); mirror augmentation produces 64,005 stored training rows because five diagonal cases are duplicated in the source bundles. This negligible duplication does not change batch geometry or training speed.
 
 **Parameter range**: sd_feat1, sd_feat2, sd_spat all swept over [5, 200] degrees (model space). Fitting-time queries down to sd_spat = 5 are therefore inside training coverage.
+
+## Notes for developers
+
+The source surfaces are untracked generated artifacts, not files shipped with
+the repository. Their conventional names under `$DEMIXING_ARTIFACT_ROOT` are
+`averaged_surfaces_10k_{20,100}samples_circular/`. These names document
+checkpoint provenance; a normal checkout is not expected to contain them.

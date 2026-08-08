@@ -27,8 +27,8 @@ This document describes the current pipeline for `simulated_samples_grid.py`, wh
 │    Grid configuration:                                           │
 │    - Level 1 (coarse): step = config.param_step                 │
 │    - Level 2 (fine): step = config.param_step / 2               │
-│    - Range: config.param_range_low to param_range_high          │
-│    - Total combinations: n_param_values³                        │
+│    - Range: L1 [10, 200]; L2 combined coverage [5, 200]         │
+│    - Stored runs: n³ + n² (second independent diagonal run)     │
 └───────────────┬──────────────────────────────────────────────────┘
                 │
                 ▼
@@ -142,13 +142,47 @@ This document describes the current pipeline for `simulated_samples_grid.py`, wh
 - **Step size**: 10° (config.param_step)
 - **Purpose**: Initial broad coverage of parameter space
 - **Example range**: [10, 20, 30, ..., 200]
-- **Total combinations**: (n_values)³
+- **Stored runs**: `n_values³ + n_values²`, including the second independent
+  run for each diagonal parameter triple
 
 ### Level 2: Fine Grid
 - **Step size**: 5° (config.param_step / 2)
 - **Purpose**: Fill in gaps from Level 1
+- **Combined range**: [5, 10, 15, ..., 200]; Level 2 extends one fine step
+  below the Level-1 lower bound
 - **Important**: Only computes combinations not already in Level 1
 - **Auto-advance**: Can automatically start after Level 1 completes
+
+Off-diagonal parameter combinations are processed with their swapped mirror in
+the same group. Diagonal combinations receive two independent runs with
+different seeds so their averaged surface has the same simulation count as an
+off-diagonal canonical/mirror pair. Consequently the run count is `n³ + n²`,
+although the canonical averaged-surface set contains `n²(n+1)/2` parameter
+triples.
+
+## Direct averaged-surface and manifest modes
+
+`--pipeline` averages each simulated chunk in memory and writes averaged
+surfaces directly, avoiding intermediate sample files unless `--save-samples`
+is also supplied. `--averaged-surfaces-dir` selects the output, and
+`--bundle-output` writes one compressed bundle per chunk.
+
+For targeted reference simulations, `--param-file MANIFEST.csv` restricts the
+run to unique rows containing `sd_feat1`, `sd_feat2`, and `sd_spat`. It is
+mutually exclusive with `--match-csv-params`. This is the route used for the
+independent 100k objective-ablation references; those surfaces are validation
+targets, not replacements for the 10k training grid.
+
+Example:
+
+```bash
+python surface_computation/simulated_samples_grid.py \
+  --machine-id reference --grid-level 1 --no-auto-advance \
+  --pipeline --param-file scenarios.csv \
+  --n-simulations 100000 --n-samples 20 \
+  --bias-bandwidth 0.075 --feat-bandwidth 3 \
+  --averaged-surfaces-dir results/reference_100k
+```
 
 ---
 
@@ -223,6 +257,7 @@ config.n_samples = 100
 config.param_step = 10
 config.param_range_low = 10
 config.param_range_high = 200
+config.param_grid_low          # derived Level-2 lower bound = 5
 ```
 Note: `config.samples_folder` is overridden during runtime; sample generation uses the folder set by `configure_samples_folder()`.
 
@@ -259,9 +294,14 @@ Where:
 feat_diff_step = 2
 mu1_bias_step = 2
 mu2_bias_step = 6
-n_simulations = 1000
+n_simulations = 10000  # CLI default; 100k was used for selected references
 n_samples = 100
 ```
+
+The mu1 bias grid is periodic and half-open: `[-180, 180)` at 2° spacing,
+giving 180 distinct cells. Feature difference and mu2 bias are bounded,
+inclusive grids. `n_samples` is a runtime observer assumption; production
+artifacts exist for 20 and 100, and it is not the Monte Carlo iteration count.
 
 ---
 
@@ -279,3 +319,9 @@ n_samples = 100
 ### Memory Usage
 - `mu1_samples` and `mu2_samples` are stored as float16 to reduce disk usage
 - Optional `full_results` uses float32 and increases file size
+
+## Notes for developers
+
+The targeted-reference example creates `results/reference_100k`; it does not
+refer to a directory shipped with the repository. Use an artifact-root location
+appropriate for the machine.
