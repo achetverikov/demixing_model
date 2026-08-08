@@ -109,6 +109,8 @@ def main():
                    help='reuse verified completed shards from an interrupted run')
     p.add_argument('--compress', action='store_true',
                    help='compress NPZ output (slower; raw storage is the default)')
+    p.add_argument('--progress-every', type=int, default=100,
+                   help='report every N completed chunks (0 disables progress)')
     p.add_argument('--seed', type=int, default=0)
     p.add_argument('--design-seed', type=int, default=None,
                    help='design seed; set identically across independent simulation repeats')
@@ -119,6 +121,8 @@ def main():
         p.error('--n-simulations and --simulation-chunk must be positive')
     if args.shard_rows < 1 or args.block_rows < 1:
         p.error('--shard-rows and --block-rows must be positive')
+    if args.progress_every < 0:
+        p.error('--progress-every cannot be negative')
     if args.block_rows > args.shard_rows:
         p.error('--block-rows cannot exceed --shard-rows')
 
@@ -157,6 +161,9 @@ def main():
         manifest.write_text(json.dumps(signature, indent=2) + '\n')
 
     records = []
+    total_chunks = (len(_chunk_ranges(len(design), args.shard_rows))
+                    * len(_chunk_ranges(args.n_simulations, args.simulation_chunk)))
+    completed_chunks = 0
     for row_start, row_stop in _chunk_ranges(len(design), args.shard_rows):
         expected = design[row_start:row_stop]
         for sim_start, sim_stop in _chunk_ranges(
@@ -167,7 +174,7 @@ def main():
             coordinates = np.asarray([row_start, row_stop, sim_start, sim_stop])
             if args.resume and path.exists() and _valid_shard(
                     path, expected, n_chunk, coordinates):
-                print(f'  reusing {path.name}', flush=True)
+                action = 'reused'
             else:
                 chunk_bias = np.asarray(sim_interface.simulate(
                     base_key, expected, n_simulations=n_chunk,
@@ -177,8 +184,14 @@ def main():
                     row_offset=row_start, simulation_offset=sim_start), dtype=np.float32)
                 _save_npz(path, args.compress, design=expected, bias=chunk_bias,
                           coordinates=coordinates)
-                print(f'  saved {path.name}', flush=True)
+                action = 'saved'
             records.append((path, row_start, row_stop, sim_start, sim_stop))
+            completed_chunks += 1
+            if (args.progress_every and
+                    (completed_chunks % args.progress_every == 0
+                     or completed_chunks == total_chunks)):
+                print(f'  chunks {completed_chunks}/{total_chunks}; '
+                      f'{action} {path.name}', flush=True)
     simulation_elapsed = time.time() - t0
     bias = _assemble_chunks(records, len(design), args.n_simulations)
     n_bad = int(np.sum(~np.isfinite(bias)))

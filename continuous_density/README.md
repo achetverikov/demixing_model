@@ -157,7 +157,8 @@ tradeoff is worthwhile. Every `(row shard, simulation chunk)` is atomically
 written, and `--resume` verifies its design and shape before reuse. Chunk keys
 are derived deterministically from their absolute row and simulation offsets.
 The final NPZ is assembled only after all chunks exist; keep the shard directory
-until the run is accepted.
+until the run is accepted. Progress is reported every 100 chunks by default;
+change this with `--progress-every` without affecting the resumable manifest.
 
 ## Evaluation outputs
 
