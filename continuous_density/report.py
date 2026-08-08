@@ -32,22 +32,39 @@ def _save(fig, path):
 
 
 def figure5_k_comparison(eval_paths, out):
-    """Plan Figure 5: held-out NLL as a function of mixture components K."""
-    rows = []
+    """Plan Figure 5: paired held-out NLL change with mixture components K."""
+    frames = []
     for path in eval_paths:
         df = pd.read_csv(path)
         label = df['model'].iloc[0] if 'model' in df and len(df) else path.stem
         k = _k_from_name(label) or _k_from_name(path.stem)
         if k is not None and 'nll' in df:
-            rows.append((k, df.nll.median(), df.nll.quantile(.25), df.nll.quantile(.75)))
-    if not rows:
+            frames.append((k, df.reset_index(drop=True)))
+    if not frames:
         return None
-    rows.sort()
-    k, med, q1, q3 = map(np.asarray, zip(*rows))
+    frames.sort(key=lambda item: item[0])
+    lengths = {len(df) for _, df in frames}
+    if len(lengths) != 1:
+        raise ValueError('component comparisons require matching evaluation designs')
+    n_rows = lengths.pop()
+    if n_rows % 2:
+        raise ValueError('component comparisons require paired component rows')
+    baseline_k, baseline = frames[-1]
+    rows = []
+    for k, df in frames:
+        # Evaluations contain component 1 followed by the mirrored component 2.
+        # Average those before estimating uncertainty so each simulation design
+        # row, rather than each correlated component, is the sampling unit.
+        delta = df.nll.to_numpy() - baseline.nll.to_numpy()
+        paired = .5 * (delta[:n_rows // 2] + delta[n_rows // 2:])
+        se = paired.std(ddof=1) / np.sqrt(len(paired)) if len(paired) > 1 else 0.
+        rows.append((k, paired.mean(), 1.96 * se))
+    k, mean, ci = map(np.asarray, zip(*rows))
     fig, ax = plt.subplots(figsize=(5, 4))
-    ax.plot(k, med, 'o-', color='#3b6ea5')
-    ax.fill_between(k, q1, q3, color='#3b6ea5', alpha=.2)
-    ax.set(xlabel='mixture components K', ylabel='held-out NLL (median, IQR)',
+    ax.errorbar(k, mean, yerr=ci, fmt='o-', color='#3b6ea5', capsize=3)
+    ax.axhline(0, color='#888888', ls='--', lw=1)
+    ax.set(xlabel='mixture components K',
+           ylabel=f'mean paired NLL − K={baseline_k} (95% CI)',
            title='Accuracy versus mixture size')
     ax.set_xticks(k)
     return _save(fig, out)
@@ -64,6 +81,11 @@ def figure3_calibration(eval_path, out):
     fig, axes = plt.subplots(1, 3, figsize=(13, 4))
     for ax, (ref, pred, title) in zip(axes, pairs):
         good = np.isfinite(df[ref]) & np.isfinite(df[pred])
+        if ref == 'ref_mean_bias' and 'ref_resultant' in df:
+            # Mean direction is unstable and scientifically uninformative when
+            # the reference circular resultant is close to zero.
+            good &= df.ref_resultant >= .25
+            title += ' (reference R ≥ 0.25)'
         x, y = df.loc[good, ref], df.loc[good, pred]
         ax.scatter(x, y, s=10, alpha=.6, color='#3b6ea5')
         lo, hi = min(x.min(), y.min()), max(x.max(), y.max())

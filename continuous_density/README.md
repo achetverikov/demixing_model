@@ -131,9 +131,10 @@ $PY continuous_density/report.py \
 
 # Independently optimise each likelihood on one empirical condition.
 $PY continuous_density/fit_demo.py \
-  --model "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k8.pkl" \
+  --model "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_16k500.pkl" \
   --data example_data/fischer_whitney_prepared.csv \
-  --condition-col condition --condition combined \
+  --condition-col condition --condition orientation \
+  --exclude-outside-domain \
   --checkpoint pretrained/model_epoch1500_10ktrain_100samples.pkl
 
 # Standardised warmed-up inference timing and checkpoint size.
@@ -184,10 +185,14 @@ independently on the same trials. `benchmark.py` reports warmed-up prediction an
 
 ## Status
 
-The code paths and reporting machinery are present, but no validated checkpoint,
-100k off-grid reference corpus, quantitative comparison, or scientific conclusion
-is shipped in the repository. The question of equal-or-better accuracy remains
-open until the commands above are run and the artifacts are reviewed.
+The prototype has been trained and evaluated on two independent fresh 100k
+off-grid raw-reference corpora. The K=12 conditional density improves raw
+held-out NLL over the production surrogate on 97.7% of scattered cases and
+89.7% of difficult trajectory cases; a trial-level empirical fit was within
+0.00133 NLL per trial of the independently optimized production model. See
+[`RESULTS.md`](RESULTS.md) for the quantitative results, limitations, and
+conclusion. Generated checkpoints, references, and CSVs remain in the external
+artifact directory.
 
 ## Notes for developers
 

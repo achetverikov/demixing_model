@@ -168,6 +168,8 @@ def main():
                    help="bias column (example data: 'bias_to_distr_corr')")
     p.add_argument('--condition-col', default=None)
     p.add_argument('--condition', default=None)
+    p.add_argument('--exclude-outside-domain', action='store_true',
+                   help='explicitly omit trials with feat_diff outside the trained domain')
     p.add_argument('--fit-motor-noise', action='store_true')
     p.add_argument('--n-restarts', type=int, default=8)
     p.add_argument('--checkpoint', type=Path, default=None,
@@ -190,10 +192,17 @@ def main():
     if df.empty:
         raise ValueError('no finite trials remain after filtering')
     feat_diff = df[args.feat_diff_col].to_numpy(np.float32)
-    if np.any((feat_diff < design_mod.FEAT_DIFF_BOUNDS[0])
-              | (feat_diff > design_mod.FEAT_DIFF_BOUNDS[1])):
+    outside = ((feat_diff < design_mod.FEAT_DIFF_BOUNDS[0])
+               | (feat_diff > design_mod.FEAT_DIFF_BOUNDS[1]))
+    if np.any(outside) and not args.exclude_outside_domain:
         raise ValueError(f'feat_diff must lie within trained domain '
-                         f'{design_mod.FEAT_DIFF_BOUNDS}')
+                         f'{design_mod.FEAT_DIFF_BOUNDS}; {outside.sum()} trials are outside '
+                         '(pass --exclude-outside-domain to omit them explicitly)')
+    if np.any(outside):
+        print(f'excluding {outside.sum()} trials outside trained feat_diff domain '
+              f'{design_mod.FEAT_DIFF_BOUNDS}')
+        df = df.loc[~outside].copy()
+        feat_diff = df[args.feat_diff_col].to_numpy(np.float32)
     bias = df[args.bias_col].to_numpy(np.float32)
     print(f"{len(df)} trials; feat_diff in [{feat_diff.min():.1f}, "
           f"{feat_diff.max():.1f}] (continuous, not binned; trained domain "
