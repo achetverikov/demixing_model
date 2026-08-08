@@ -35,6 +35,8 @@ from grid_based_multi_condition_optimizer_jax_loops import (
     create_motor_noise_kernel_fft,
 )
 try:
+    import curve_cache
+    from exhaustive_density import fit_exhaustive_density
     from run_fingerprint import (
         StaleResultsError,
         compute_run_fingerprint,
@@ -42,6 +44,8 @@ try:
         write_fingerprint_sidecar,
     )
 except ModuleNotFoundError:  # imported as `model_fit_to_data.fit_model_to_data`
+    from model_fit_to_data import curve_cache
+    from model_fit_to_data.exhaustive_density import fit_exhaustive_density
     from model_fit_to_data.run_fingerprint import (
         StaleResultsError,
         compute_run_fingerprint,
@@ -55,6 +59,12 @@ LOSS_EVALUATION_METHODS = [
     'density', 'density_legacy', 'expectation', 'smoothed_exp', 'likelihood',
     'crps', 'balanced_crps', 'bias_weighted_crps',
 ]
+
+#: The only objective the exhaustive backend can search. Dispatch is per METHOD,
+#: not per run: a global --search flag would either go unused or be misapplied,
+#: since production fits six methods in one call and only this one has a curve
+#: cache behind it.
+EXHAUSTIVE_METHODS = ('density',)
 
 #: Hierarchical search settings this script fits with. Named rather than inlined
 #: at the call site so the run fingerprint describes the search that actually
@@ -410,6 +420,7 @@ def process_subject(
     angle_scale_to_model: float = 1.0,
     circ_space: int = 360,
     progress: Optional[Progress] = None,
+    curve_source=None,
 ) -> Dict:
     methods_to_run = missing_methods if missing_methods is not None else methods
     log(f"\nProcessing {subject_id}: {len(subject_conditions)} condition(s)" +
@@ -500,9 +511,17 @@ def process_subject(
             status = console.status(f"[bold magenta]Fitting {subject_id} / {method}[/]", spinner="dots")
             status.start()
         try:
-            result = optimizer.fit_hierarchical_grid(fitting_method=method, verbosity=1,
-                                                     sd_motor_max=emp_motor_cap,
-                                                     **HIERARCHICAL_GRID_SPEC)
+            if curve_source is not None and method in EXHAUSTIVE_METHODS:
+                # Exhaustive on the cache lattice. The two backends return the
+                # same object shape, so everything below this call is identical.
+                result = fit_exhaustive_density(
+                    curve_source, optimizer.unified_target_density,
+                    optimizer.condition_names, objective=method, verbosity=1,
+                )
+            else:
+                result = optimizer.fit_hierarchical_grid(fitting_method=method, verbosity=1,
+                                                         sd_motor_max=emp_motor_cap,
+                                                         **HIERARCHICAL_GRID_SPEC)
         finally:
             if status is not None:
                 status.stop()
@@ -601,6 +620,9 @@ def run_fitting(
     skip_motor_noise: bool = True,
     results_dir: str = 'results',
     circ_space: int = 360,
+    search: str = 'hierarchical',
+    curve_cache_root: Optional[str] = None,
+    curve_cache_step: float = 1.0,
 ):
     methods = methods or ['density']
 
@@ -648,6 +670,24 @@ def run_fitting(
     if missing_cols:
         raise ValueError(f"Columns not found in CSV: {missing_cols}")
 
+    curve_source = None
+    curve_cache_key = None
+    if search == 'exhaustive':
+        if not skip_motor_noise:
+            raise ValueError(
+                "--search exhaustive cannot be combined with --no-skip-motor-noise: sd_motor is "
+                "a fourth axis the curve cache does not span, so the scan would silently fit "
+                "every group at sd_motor=0. Fit the motor-noise stage hierarchically."
+            )
+        if curve_cache_root is None:
+            raise ValueError("--search exhaustive requires --curve-cache PATH.")
+        curve_cache_key = curve_cache.default_cache_key(
+            checkpoint_path=resolved_checkpoint,
+            low=_cfg.param_grid_low, high=_cfg.param_range_high, step=curve_cache_step,
+            emp_density_weights_sd=DENSITY_CURVE_SPEC['emp_density_weights_sd'],
+            density_smoothing_sigma=DENSITY_CURVE_SPEC['density_smoothing_sigma'],
+        )
+
     fingerprint = compute_run_fingerprint(
         data_path=data_path,
         checkpoint_path=resolved_checkpoint,
@@ -656,8 +696,8 @@ def run_fitting(
         # `evaluate_parameter_losses` scores all of them at each fitted method's
         # parameters, so a change to any one invalidates the stored evaluations.
         evaluation_methods=LOSS_EVALUATION_METHODS,
-        search_backend='hierarchical',
-        curve_cache_key=None,
+        search_backend=('exhaustive_1deg' if search == 'exhaustive' else 'hierarchical'),
+        curve_cache_key=curve_cache_key,
         skip_motor_noise=skip_motor_noise,
         exp_col=exp_col,
         subject_col=subject_col,
@@ -702,6 +742,24 @@ def run_fitting(
         if status is not None:
             status.stop()
     log("Optimizer ready.\n", "green")
+
+    if search == 'exhaustive':
+        # Opened once per run, not per subject: the cache is the same for every
+        # group, and building it is the expensive part.
+        def _build(cache_dir):
+            log(f"Building curve cache at {cache_dir} (this happens once)...", "bold cyan")
+            sd_spat_values = curve_cache.lattice(
+                _cfg.param_grid_low, _cfg.param_range_high, curve_cache_step)
+            feat_pairs = curve_cache.feat_pair_lattice(sd_spat_values)
+            curves = curve_cache.build_curve_lattice(optimizer, sd_spat_values, feat_pairs)
+            curve_cache.write_cache(cache_dir, cache_key=curve_cache_key,
+                                    sd_spat_values=sd_spat_values, feat_pairs=feat_pairs,
+                                    curves=curves)
+
+        curve_source = curve_cache.open_or_build(curve_cache_root, curve_cache_key, _build)
+        log(f"Exhaustive search over {len(curve_source.sd_spat_values)} x "
+            f"{len(curve_source.feat_pairs)} lattice points "
+            f"(cache {curve_cache_key}).", "green")
 
     subject_groups = group_conditions(df, exp_col, subject_col, condition_col, min_trials)
     n_total = min(len(subject_groups), max_subjects) if max_subjects else len(subject_groups)
@@ -780,6 +838,7 @@ def run_fitting(
                     angle_scale_to_model=angle_scale_to_model,
                     circ_space=circ_space,
                     progress=active_progress,
+                    curve_source=curve_source,
                 )
                 existing_results.update(results)
                 n_done += 1
@@ -848,6 +907,17 @@ if __name__ == '__main__':
                         help='Include motor noise parameter (slower, rarely needed).')
     parser.add_argument('--results-dir', default='results',
                         help='Base directory for relative output paths.')
+    parser.add_argument('--search', choices=['hierarchical', 'exhaustive'], default='hierarchical',
+                        help='Search backend. Applies per METHOD: exhaustive is used only for '
+                             "'density'; every other method stays hierarchical regardless. "
+                             'The default is unchanged so every existing invocation keeps its '
+                             'current behaviour and the switch is visible in the command line '
+                             'that produced a result.')
+    parser.add_argument('--curve-cache', default=None,
+                        help='Root directory for curve caches, required by --search exhaustive. '
+                             'Built on demand if absent (single-writer locked).')
+    parser.add_argument('--curve-cache-step', type=float, default=1.0,
+                        help='Lattice step of the curve cache, in degrees.')
     parser.add_argument('--circ-space', type=int, default=360, choices=[180, 360],
                         help='Circular space of the input data. Use 180 for axial orientation '
                              'data in which feature differences span 0–90° and errors span '
@@ -877,6 +947,9 @@ if __name__ == '__main__':
             skip_motor_noise=args.skip_motor_noise,
             results_dir=args.results_dir,
             circ_space=args.circ_space,
+            search=args.search,
+            curve_cache_root=args.curve_cache,
+            curve_cache_step=args.curve_cache_step,
         )
     except StaleResultsError as exc:
         # A wall of traceback would bury the field diff, which is the whole

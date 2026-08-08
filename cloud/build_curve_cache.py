@@ -36,53 +36,12 @@ for path in (REPO_ROOT, REPO_ROOT / "model_fit_to_data"):
 import jax.numpy as jnp  # noqa: E402
 
 import curve_cache as cc  # noqa: E402
+from fit_model_to_data import DENSITY_CURVE_SPEC  # noqa: E402
 from grid_based_multi_condition_optimizer_jax_loops import (  # noqa: E402
     GridBasedMultiConditionOptimizer,
-    generate_nn_density_asymmetry_batch,
-    predict_nn,
 )
-from run_fingerprint import file_sha256  # noqa: E402
 from shared.config import config  # noqa: E402
 from shared.utils import resolve_input_path  # noqa: E402
-
-
-def build_curves(optimizer, sd_spat_values, feat_pairs, *, chunk_size=4096, verbosity=1):
-    """Generate the curve lattice, one ``sd_spat`` slab at a time.
-
-    Slab-at-a-time so peak memory is one slab of surfaces rather than the whole
-    lattice: a slab of 196^2 surfaces at 180x90 float32 is already ~2.4 GB, and
-    the full lattice of surfaces would be 470 GB. The curves that survive are
-    three orders of magnitude smaller, which is the entire point of the cache.
-
-    NN parameter order is ``[sd_feat1, sd_feat2, sd_spat]`` -- the order
-    ``fit_hierarchical_grid`` feeds the surrogate. Getting it wrong here would
-    misattribute every curve while leaving every checksum valid.
-    """
-    n_points = len(config.create_grid('feat_diff'))
-    curves = np.empty((len(sd_spat_values), len(feat_pairs), n_points), dtype=np.float32)
-
-    for spat_index, sd_spat in enumerate(sd_spat_values):
-        started = time.time()
-        for start in range(0, len(feat_pairs), chunk_size):
-            chunk = feat_pairs[start:start + chunk_size]
-            nn_params = jnp.column_stack([
-                jnp.asarray(chunk[:, 0]),                       # sd_feat1
-                jnp.asarray(chunk[:, 1]),                       # sd_feat2
-                jnp.full(len(chunk), float(sd_spat)),           # sd_spat
-            ])
-            surfaces = predict_nn(optimizer, nn_params)
-            asymmetry = generate_nn_density_asymmetry_batch(
-                surfaces,
-                weights_sd=optimizer.emp_density_weights_sd,
-                smoothing_sigma=optimizer.density_smoothing_sigma,
-            )
-            curves[spat_index, start:start + len(chunk)] = np.asarray(asymmetry, dtype=np.float32)
-        if verbosity > 0:
-            elapsed = time.time() - started
-            remaining = elapsed * (len(sd_spat_values) - spat_index - 1)
-            print(f"  sd_spat {sd_spat:6.1f}  ({spat_index + 1}/{len(sd_spat_values)})  "
-                  f"{elapsed:5.1f}s  ETA {remaining / 60:.1f}m", flush=True)
-    return curves
 
 
 def main() -> None:
@@ -115,17 +74,12 @@ def main() -> None:
     feat_values = cc.lattice(low, high, args.step)
     feat_pairs = cc.feat_pair_lattice(feat_values)
 
-    cache_key = cc.compute_cache_key(
-        checkpoint_sha256=file_sha256(checkpoint),
-        sd_spat_grid=(low, high, args.step),
-        feat_grid=(low, high, args.step),
-        feat_diff_range=config.feat_diff_range,
-        feat_diff_step=config.feat_diff_step,
-        mu1_bias_range=config.mu1_bias_range,
-        mu1_bias_step=config.mu1_bias_step,
-        emp_density_weights_sd=20.0,
-        density_smoothing_sigma=None,
-        encoding={"kind": "exact", "dtype": "float32"},
+    # Same helper the fitter calls, so --curve-cache can never look for a key
+    # this builder does not write.
+    cache_key = cc.default_cache_key(
+        checkpoint_path=checkpoint, low=low, high=high, step=args.step,
+        emp_density_weights_sd=DENSITY_CURVE_SPEC['emp_density_weights_sd'],
+        density_smoothing_sigma=DENSITY_CURVE_SPEC['density_smoothing_sigma'],
     )
     cache_dir = cc.cache_dir_for(args.out_root, cache_key)
 
@@ -143,10 +97,12 @@ def main() -> None:
         print("Already built; nothing to do. (Delete the directory to force a rebuild.)")
         return
 
-    optimizer = GridBasedMultiConditionOptimizer(str(checkpoint), None, skip_motor_noise=True)
+    optimizer = GridBasedMultiConditionOptimizer(str(checkpoint), None, skip_motor_noise=True,
+                                                 **DENSITY_CURVE_SPEC)
 
     started = time.time()
-    curves = build_curves(optimizer, sd_spat_values, feat_pairs, chunk_size=args.chunk_size)
+    curves = cc.build_curve_lattice(optimizer, sd_spat_values, feat_pairs,
+                                    chunk_size=args.chunk_size)
     print(f"Generated in {(time.time() - started) / 60:.1f}m; writing...")
 
     cc.write_cache(
@@ -156,8 +112,8 @@ def main() -> None:
             "checkpoint": str(checkpoint),
             "sd_spat_grid": [low, high, args.step],
             "feat_grid": [low, high, args.step],
-            "emp_density_weights_sd": 20.0,
-            "density_smoothing_sigma": None,
+            "emp_density_weights_sd": DENSITY_CURVE_SPEC['emp_density_weights_sd'],
+            "density_smoothing_sigma": DENSITY_CURVE_SPEC['density_smoothing_sigma'],
             "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         },
     )

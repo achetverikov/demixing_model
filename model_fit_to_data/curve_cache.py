@@ -118,6 +118,91 @@ def compute_cache_key(
     return hashlib.sha256(encoded).hexdigest()[:16]
 
 
+def default_cache_key(*, checkpoint_path: os.PathLike | str, low: float, high: float,
+                      step: float, emp_density_weights_sd: float,
+                      density_smoothing_sigma: Optional[float]) -> str:
+    """The cache key for a standard exact build.
+
+    One definition, called by both the builder and the fitter: if they computed
+    it separately the fitter could look, forever, for a key the builder never
+    writes -- and "cache absent" is indistinguishable from "cache built with
+    different settings" at the directory level.
+    """
+    try:
+        from run_fingerprint import file_sha256
+    except ModuleNotFoundError:
+        from model_fit_to_data.run_fingerprint import file_sha256
+    from shared.config import config
+
+    return compute_cache_key(
+        checkpoint_sha256=file_sha256(checkpoint_path),
+        sd_spat_grid=(low, high, step),
+        feat_grid=(low, high, step),
+        feat_diff_range=config.feat_diff_range,
+        feat_diff_step=config.feat_diff_step,
+        mu1_bias_range=config.mu1_bias_range,
+        mu1_bias_step=config.mu1_bias_step,
+        emp_density_weights_sd=emp_density_weights_sd,
+        density_smoothing_sigma=density_smoothing_sigma,
+        encoding={"kind": "exact", "dtype": "float32"},
+    )
+
+
+def build_curve_lattice(optimizer, sd_spat_values, feat_pairs, *,
+                        chunk_size: int = 4096, verbosity: int = 1) -> np.ndarray:
+    """Generate the curve lattice from the surrogate, one ``sd_spat`` slab at a time.
+
+    Slab-at-a-time so peak memory is one slab of surfaces rather than the whole
+    lattice: at production size a slab is ~2.4 GB of surfaces, and the full
+    lattice of surfaces would be ~470 GB. The curves that survive are three
+    orders of magnitude smaller, which is the entire point of the cache.
+
+    NN parameter order is ``[sd_feat1, sd_feat2, sd_spat]`` -- the order
+    ``fit_hierarchical_grid`` feeds the surrogate. Getting it wrong here would
+    misattribute every curve while leaving every checksum valid, which is why
+    ``tests/test_curve_cache_matches_live_model.py`` checks an asymmetric pair.
+    """
+    import jax.numpy as _jnp
+    try:
+        from grid_based_multi_condition_optimizer_jax_loops import (
+            generate_nn_density_asymmetry_batch, predict_nn,
+        )
+    except ModuleNotFoundError:
+        from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
+            generate_nn_density_asymmetry_batch, predict_nn,
+        )
+    from shared.config import config
+
+    import time as _time
+    feat_pairs = np.asarray(feat_pairs, dtype=float)
+    sd_spat_values = np.asarray(sd_spat_values, dtype=float)
+    n_points = len(config.create_grid('feat_diff'))
+    curves = np.empty((len(sd_spat_values), len(feat_pairs), n_points), dtype=np.float32)
+
+    for spat_index, sd_spat in enumerate(sd_spat_values):
+        started = _time.time()
+        for start in range(0, len(feat_pairs), chunk_size):
+            chunk = feat_pairs[start:start + chunk_size]
+            nn_params = _jnp.column_stack([
+                _jnp.asarray(chunk[:, 0]),                     # sd_feat1
+                _jnp.asarray(chunk[:, 1]),                     # sd_feat2
+                _jnp.full(len(chunk), float(sd_spat)),         # sd_spat
+            ])
+            surfaces = predict_nn(optimizer, nn_params)
+            asymmetry = generate_nn_density_asymmetry_batch(
+                surfaces,
+                weights_sd=optimizer.emp_density_weights_sd,
+                smoothing_sigma=optimizer.density_smoothing_sigma,
+            )
+            curves[spat_index, start:start + len(chunk)] = np.asarray(asymmetry, dtype=np.float32)
+        if verbosity > 0:
+            elapsed = _time.time() - started
+            remaining = elapsed * (len(sd_spat_values) - spat_index - 1)
+            print(f"  sd_spat {sd_spat:6.1f}  ({spat_index + 1}/{len(sd_spat_values)})  "
+                  f"{elapsed:5.1f}s  ETA {remaining / 60:.1f}m", flush=True)
+    return curves
+
+
 def lattice(low: float, high: float, step: float) -> np.ndarray:
     """Inclusive parameter lattice. One definition, so the builder and the key agree."""
     n = int(round((high - low) / step)) + 1
