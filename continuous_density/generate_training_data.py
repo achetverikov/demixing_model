@@ -10,7 +10,8 @@ Usage (from the repo root)::
         --n-points 4000 --n-simulations 200 --out $DEMIXING_ARTIFACT_ROOT/continuous_density/train.npz
 
     PYTHONPATH=. python continuous_density/generate_training_data.py \
-        --validation --n-simulations 100000 --shard-rows 1 --resume \
+        --validation --n-simulations 100000 --simulation-chunk 250 \
+        --shard-rows 1 --resume \
         --out .../validation.npz
 """
 
@@ -44,27 +45,37 @@ def _design_digest(design: np.ndarray) -> str:
     return hashlib.sha256(np.ascontiguousarray(design).view(np.uint8)).hexdigest()
 
 
+def _chunk_ranges(size: int, chunk_size: int):
+    return [(start, min(start + chunk_size, size))
+            for start in range(0, size, chunk_size)]
+
+
 def _shard_ranges(n_rows: int, shard_rows: int):
-    return [(start, min(start + shard_rows, n_rows))
-            for start in range(0, n_rows, shard_rows)]
+    """Backward-compatible name for row chunk ranges."""
+    return _chunk_ranges(n_rows, shard_rows)
 
 
-def _valid_shard(path: Path, expected_design: np.ndarray, n_simulations: int) -> bool:
+def _valid_shard(path: Path, expected_design: np.ndarray, n_simulations: int,
+                 expected_coordinates=None) -> bool:
     try:
         with np.load(path) as blob:
-            return (np.array_equal(blob['design'], expected_design)
-                    and blob['bias'].shape == (len(expected_design), n_simulations, 2))
+            valid = (np.array_equal(blob['design'], expected_design)
+                     and blob['bias'].shape == (len(expected_design), n_simulations, 2))
+            if expected_coordinates is not None:
+                valid = (valid and 'coordinates' in blob
+                         and np.array_equal(blob['coordinates'], expected_coordinates))
+            return valid
     except (OSError, ValueError, KeyError):
         return False
 
 
-def _assemble_shards(paths):
-    """Load completed shards in row order into the final bias array."""
-    biases = []
-    for path in paths:
+def _assemble_chunks(records, n_rows: int, n_simulations: int):
+    """Assemble verified two-axis chunks with only the final array in memory."""
+    bias = np.empty((n_rows, n_simulations, 2), dtype=np.float32)
+    for path, row_start, row_stop, sim_start, sim_stop in records:
         with np.load(path) as blob:
-            biases.append(np.asarray(blob['bias'], dtype=np.float32))
-    return np.concatenate(biases, axis=0)
+            bias[row_start:row_stop, sim_start:sim_stop] = blob['bias']
+    return bias
 
 
 def main():
@@ -88,9 +99,12 @@ def main():
     p.add_argument('--fix-weights', action='store_true')
     p.add_argument('--crn', action='store_true',
                    help='common random numbers across design rows')
-    p.add_argument('--block-rows', type=int, default=64)
-    p.add_argument('--shard-rows', type=int, default=0,
-                   help='rows per resumable output shard; 0 writes one final file')
+    p.add_argument('--block-rows', type=int, default=1,
+                   help='design rows simultaneously processed on device')
+    p.add_argument('--simulation-chunk', type=int, default=250,
+                   help='maximum EM runs per device call; bounds GPU memory')
+    p.add_argument('--shard-rows', type=int, default=16,
+                   help='design rows per resumable disk shard')
     p.add_argument('--resume', action='store_true',
                    help='reuse verified completed shards from an interrupted run')
     p.add_argument('--compress', action='store_true',
@@ -100,6 +114,13 @@ def main():
                    help='design seed; set identically across independent simulation repeats')
     args = p.parse_args()
     design_seed = args.seed if args.design_seed is None else args.design_seed
+
+    if args.n_simulations < 1 or args.simulation_chunk < 1:
+        p.error('--n-simulations and --simulation-chunk must be positive')
+    if args.shard_rows < 1 or args.block_rows < 1:
+        p.error('--shard-rows and --block-rows must be positive')
+    if args.block_rows > args.shard_rows:
+        p.error('--block-rows cannot exceed --shard-rows')
 
     if args.validation:
         if args.validation_design == 'points':
@@ -111,59 +132,55 @@ def main():
         design, strata = design_mod.sobol_design(args.n_points, seed=design_seed,
                                                  sd_scale=args.sd_scale), None
 
-    if args.resume and args.shard_rows <= 0:
-        p.error('--resume requires --shard-rows')
-
     print(f"Design: {design.shape[0]} points x {args.n_simulations} simulations "
-          f"(n_samples={args.n_samples}, crn={args.crn})")
+          f"(n_samples={args.n_samples}, crn={args.crn}, "
+          f"device chunk <= {args.block_rows} rows x {args.simulation_chunk} simulations)")
     t0 = time.time()
     base_key = jax.random.PRNGKey(args.seed + 1)
-    shard_paths = []
-    if args.shard_rows > 0:
-        shard_dir = args.out.with_suffix(args.out.suffix + '.shards')
-        shard_dir.mkdir(parents=True, exist_ok=True)
-        signature = {
-            'design_sha256': _design_digest(design),
-            'n_rows': len(design), 'n_simulations': args.n_simulations,
-            'n_samples': args.n_samples, 'fix_weights': args.fix_weights,
-            'crn': args.crn, 'seed': args.seed, 'design_seed': design_seed,
-            'shard_rows': args.shard_rows,
-        }
-        manifest = shard_dir / 'manifest.json'
-        if manifest.exists():
-            previous = json.loads(manifest.read_text())
-            if previous != signature:
-                raise ValueError(f'existing shard manifest does not match this run: {manifest}')
-        else:
-            manifest.write_text(json.dumps(signature, indent=2) + '\n')
+    shard_dir = args.out.with_suffix(args.out.suffix + '.shards')
+    shard_dir.mkdir(parents=True, exist_ok=True)
+    signature = {
+        'format_version': 2,
+        'design_sha256': _design_digest(design),
+        'n_rows': len(design), 'n_simulations': args.n_simulations,
+        'n_samples': args.n_samples, 'fix_weights': args.fix_weights,
+        'crn': args.crn, 'seed': args.seed, 'design_seed': design_seed,
+        'shard_rows': args.shard_rows,
+        'simulation_chunk': args.simulation_chunk,
+    }
+    manifest = shard_dir / 'manifest.json'
+    if manifest.exists():
+        previous = json.loads(manifest.read_text())
+        if previous != signature:
+            raise ValueError(f'existing shard manifest does not match this run: {manifest}')
+    else:
+        manifest.write_text(json.dumps(signature, indent=2) + '\n')
 
-        for start, stop in _shard_ranges(len(design), args.shard_rows):
-            path = shard_dir / f'rows_{start:05d}_{stop:05d}.npz'
-            expected = design[start:stop]
+    records = []
+    for row_start, row_stop in _chunk_ranges(len(design), args.shard_rows):
+        expected = design[row_start:row_stop]
+        for sim_start, sim_stop in _chunk_ranges(
+                args.n_simulations, args.simulation_chunk):
+            path = shard_dir / (f'rows_{row_start:05d}_{row_stop:05d}_'
+                                f'sims_{sim_start:06d}_{sim_stop:06d}.npz')
+            n_chunk = sim_stop - sim_start
+            coordinates = np.asarray([row_start, row_stop, sim_start, sim_stop])
             if args.resume and path.exists() and _valid_shard(
-                    path, expected, args.n_simulations):
+                    path, expected, n_chunk, coordinates):
                 print(f'  reusing {path.name}', flush=True)
             else:
-                key = base_key if args.crn else jax.random.fold_in(base_key, start)
-                shard_bias = np.asarray(sim_interface.simulate(
-                    key, expected, n_simulations=args.n_simulations,
+                chunk_bias = np.asarray(sim_interface.simulate(
+                    base_key, expected, n_simulations=n_chunk,
                     n_samples=args.n_samples, fix_weights=args.fix_weights,
                     common_random_numbers=args.crn,
-                    block_rows=min(args.block_rows, len(expected)), progress=True),
-                    dtype=np.float32)
-                _save_npz(path, args.compress, design=expected, bias=shard_bias)
+                    block_rows=min(args.block_rows, len(expected)), progress=False,
+                    row_offset=row_start, simulation_offset=sim_start), dtype=np.float32)
+                _save_npz(path, args.compress, design=expected, bias=chunk_bias,
+                          coordinates=coordinates)
                 print(f'  saved {path.name}', flush=True)
-            shard_paths.append(path)
-        bias = None
-    else:
-        bias = sim_interface.simulate(
-            base_key, design, n_simulations=args.n_simulations,
-            n_samples=args.n_samples, fix_weights=args.fix_weights,
-            common_random_numbers=args.crn, block_rows=args.block_rows, progress=True)
-        bias = np.asarray(bias, dtype=np.float32)
+            records.append((path, row_start, row_stop, sim_start, sim_stop))
     simulation_elapsed = time.time() - t0
-    if shard_paths:
-        bias = _assemble_shards(shard_paths)
+    bias = _assemble_chunks(records, len(design), args.n_simulations)
     n_bad = int(np.sum(~np.isfinite(bias)))
     elapsed = time.time() - t0
     meta = dict(vars(args) | {'out': str(args.out), 'elapsed_s': elapsed,

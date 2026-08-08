@@ -26,6 +26,23 @@ import jax_fit_main as jfm  # noqa: E402
 SPAT_DIFF = 42.0
 
 
+def simulation_keys(key, n_rows: int, common_random_numbers: bool = False,
+                    row_offset: int = 0, simulation_offset: int = 0):
+    """Deterministic row keys for one simulation chunk.
+
+    Keys depend on absolute row/chunk coordinates, not on how either axis is
+    partitioned for execution.  The chunk size is recorded in the generation
+    manifest because the production simulator splits each chunk key internally.
+    """
+    if common_random_numbers:
+        shared = jax.random.fold_in(key, simulation_offset)
+        return jnp.broadcast_to(shared, (n_rows,) + shared.shape)
+    return jnp.stack([
+        jax.random.fold_in(jax.random.fold_in(key, row), simulation_offset)
+        for row in range(row_offset, row_offset + n_rows)
+    ])
+
+
 @partial(jax.jit, static_argnames=['n_simulations', 'n_samples', 'fix_weights'])
 def _simulate_block(keys, design, n_simulations: int, n_samples: int,
                     fix_weights: bool):
@@ -56,7 +73,8 @@ def _simulate_block(keys, design, n_simulations: int, n_samples: int,
 
 def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
              fix_weights: bool = False, common_random_numbers: bool = False,
-             block_rows: int = 64, progress: bool = False):
+             block_rows: int = 1, progress: bool = False,
+             row_offset: int = 0, simulation_offset: int = 0):
     """Simulate raw EM bias outcomes for a continuous parameter design.
 
     Args:
@@ -69,6 +87,10 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
             simulation index, which removes most of the Monte-Carlo roughness of
             the parameter-to-density map at the cost of correlating rows.
         block_rows: rows per compiled block; bounds device memory.
+        row_offset: absolute first-row index, used to make keys invariant to
+            output sharding.
+        simulation_offset: absolute first-simulation index of this chunk, used
+            to give independently generated, reproducible simulation chunks.
 
     Returns:
         ``(M, n_simulations, 2)`` float32 array of mu1_bias in degrees.
@@ -78,12 +100,8 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
     out = []
     for start in range(0, n_rows, block_rows):
         block = design[start:start + block_rows]
-        if common_random_numbers:
-            shared = jax.random.fold_in(key, 0)
-            keys = jnp.broadcast_to(shared, (block.shape[0],) + shared.shape)
-        else:
-            key, sub = jax.random.split(key)
-            keys = jax.random.split(sub, block.shape[0])
+        keys = simulation_keys(key, block.shape[0], common_random_numbers,
+                               row_offset + start, simulation_offset)
         out.append(_simulate_block(keys, block, n_simulations, n_samples,
                                    fix_weights))
         if progress:

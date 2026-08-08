@@ -73,7 +73,8 @@ mkdir -p "$DEMIXING_ARTIFACT_ROOT/continuous_density"
 
 # Moderate continuous training set (raise sizes after the smoke run succeeds).
 $PY continuous_density/generate_training_data.py \
-  --n-points 4096 --n-simulations 200 --n-samples 100 --block-rows 32 \
+  --n-points 4096 --n-simulations 200 --n-samples 100 --block-rows 1 \
+  --simulation-chunk 200 \
   --shard-rows 128 --resume \
   --out "$DEMIXING_ARTIFACT_ROOT/continuous_density/train.npz"
 
@@ -89,7 +90,8 @@ done
 for SEED in 314159 271828; do
   $PY continuous_density/generate_training_data.py --validation \
     --validation-design points --per-stratum 12 --n-simulations 100000 \
-    --n-samples 100 --block-rows 1 --shard-rows 1 --resume \
+    --n-samples 100 --block-rows 1 --simulation-chunk 250 \
+    --shard-rows 1 --resume \
     --design-seed 424242 --seed "$SEED" \
     --out "$DEMIXING_ARTIFACT_ROOT/continuous_density/validation_points_${SEED}.npz"
 done
@@ -99,7 +101,7 @@ for SEED in 314159 271828; do
   $PY continuous_density/generate_training_data.py --validation \
     --validation-design trajectories --trajectory-curves 15 --trajectory-points 24 \
     --n-simulations 100000 --n-samples 100 --block-rows 1 \
-    --shard-rows 1 --resume \
+    --simulation-chunk 250 --shard-rows 1 --resume \
     --design-seed 424242 --seed "$SEED" \
     --out "$DEMIXING_ARTIFACT_ROOT/continuous_density/validation_trajectories_${SEED}.npz"
 done
@@ -144,13 +146,18 @@ $PY continuous_density/benchmark.py \
 JAX_PLATFORMS=cpu $PY -m pytest continuous_density/tests -q
 ```
 
-Generating all 100k references is deliberately expensive. Run a small
-`--n-simulations` smoke test first, and do not launch multiple GPU simulator jobs
-at once. Raw, uncompressed NPZ is the default because compression can dominate
-runtime; pass `--compress` only when that tradeoff is worthwhile. With
-`--shard-rows`, every completed shard is atomically written and `--resume`
-verifies its design and shape before reusing it. The final NPZ is assembled only
-after all shards exist; keep the shard directory until the run is accepted.
+Generating all 100k references is deliberately expensive. The production
+simulator vmaps over `n_simulations`, so passing 100k to one device call can
+exhaust GPU memory even with one design row. `--simulation-chunk` bounds that
+axis; `--block-rows 1` is the conservative default for the other axis. Run a
+small smoke test before increasing the simulation chunk, and never launch
+multiple GPU simulator jobs at once. Raw, uncompressed NPZ is the default
+because compression can dominate runtime; pass `--compress` only when that
+tradeoff is worthwhile. Every `(row shard, simulation chunk)` is atomically
+written, and `--resume` verifies its design and shape before reuse. Chunk keys
+are derived deterministically from their absolute row and simulation offsets.
+The final NPZ is assembled only after all chunks exist; keep the shard directory
+until the run is accepted.
 
 ## Evaluation outputs
 

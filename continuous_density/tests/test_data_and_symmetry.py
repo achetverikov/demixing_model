@@ -63,17 +63,49 @@ def test_resumable_shard_helpers_verify_and_assemble(tmp_path):
     from continuous_density import generate_training_data as gen
     assert gen._shard_ranges(7, 3) == [(0, 3), (3, 6), (6, 7)]
     design = np.arange(20, dtype=np.float32).reshape(5, 4)
-    paths = []
-    for i, (start, stop) in enumerate(gen._shard_ranges(5, 2)):
-        path = tmp_path / f'shard_{i}.npz'
-        bias = np.full((stop - start, 3, 2), i, dtype=np.float32)
-        gen._save_npz(path, False, design=design[start:stop], bias=bias)
-        assert gen._valid_shard(path, design[start:stop], 3)
-        paths.append(path)
-    assembled = gen._assemble_shards(paths)
-    assert assembled.shape == (5, 3, 2)
-    assert np.all(assembled[:2] == 0) and np.all(assembled[-1] == 2)
-    assert not (tmp_path / '.shard_0.npz.tmp').exists()
+    records = []
+    for row_start, row_stop in gen._chunk_ranges(5, 2):
+        for sim_start, sim_stop in gen._chunk_ranges(5, 3):
+            path = tmp_path / f'{row_start}_{sim_start}.npz'
+            value = row_start * 10 + sim_start
+            bias = np.full((row_stop - row_start, sim_stop - sim_start, 2),
+                           value, dtype=np.float32)
+            coordinates = np.asarray([row_start, row_stop, sim_start, sim_stop])
+            gen._save_npz(path, False, design=design[row_start:row_stop], bias=bias,
+                          coordinates=coordinates)
+            assert gen._valid_shard(path, design[row_start:row_stop],
+                                    sim_stop - sim_start, coordinates)
+            assert not gen._valid_shard(path, design[row_start:row_stop],
+                                        sim_stop - sim_start, coordinates + 1)
+            records.append((path, row_start, row_stop, sim_start, sim_stop))
+    assembled = gen._assemble_chunks(records, 5, 5)
+    assert assembled.shape == (5, 5, 2)
+    assert np.all(assembled[:2, :3] == 0)
+    assert np.all(assembled[:2, 3:] == 3)
+    assert np.all(assembled[-1, :3] == 40)
+    assert not list(tmp_path.glob('.*.tmp'))
+
+
+def test_simulation_keys_are_shard_invariant_and_crn_aware():
+    import jax
+    from continuous_density import sim_interface
+    key = jax.random.PRNGKey(12)
+    whole = np.asarray(sim_interface.simulation_keys(key, 5, row_offset=7,
+                                                     simulation_offset=250))
+    split = np.concatenate([
+        np.asarray(sim_interface.simulation_keys(key, 2, row_offset=7,
+                                                 simulation_offset=250)),
+        np.asarray(sim_interface.simulation_keys(key, 3, row_offset=9,
+                                                 simulation_offset=250)),
+    ])
+    assert np.array_equal(whole, split)
+    assert len(np.unique(whole, axis=0)) == 5
+    crn = np.asarray(sim_interface.simulation_keys(
+        key, 5, common_random_numbers=True, row_offset=7, simulation_offset=250))
+    assert np.all(crn == crn[0])
+    later = np.asarray(sim_interface.simulation_keys(
+        key, 1, common_random_numbers=True, simulation_offset=500))
+    assert not np.array_equal(crn[0], later[0])
 
 
 def test_label_cases_finds_two_modes():
