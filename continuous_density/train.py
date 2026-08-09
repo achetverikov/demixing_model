@@ -53,11 +53,38 @@ def evaluate_store(loss_fn, variables, store, rng, n_batches: int, batch_size: i
     return total / n_batches
 
 
+def mixed_batch(primary, augmentation, augmentation_fraction, rng, batch_size):
+    """Sample a fixed augmentation fraction while retaining global replay."""
+    if augmentation is None:
+        return primary.batch(rng, batch_size)
+    n_aug = int(round(batch_size * augmentation_fraction))
+    parts = [primary.batch(rng, batch_size - n_aug),
+             augmentation.batch(rng, n_aug)]
+    order = rng.permutation(batch_size)
+    return tuple(np.concatenate([a, b], axis=0)[order]
+                 for a, b in zip(*parts))
+
+
+def evaluate_mixed(loss_fn, variables, primary, augmentation,
+                   augmentation_fraction, rng, n_batches, batch_size):
+    total = 0.
+    for _ in range(n_batches):
+        x, b, w = mixed_batch(primary, augmentation, augmentation_fraction,
+                              rng, batch_size)
+        total += float(loss_fn(variables, x, b, w))
+    return total / n_batches
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--source', required=True,
                    help='corpus directory name/path, or an .npz training file')
+    p.add_argument('--augmentation', default=None,
+                   help='optional raw NPZ sampled alongside --source')
+    p.add_argument('--augmentation-fraction', type=float, default=.5)
+    p.add_argument('--init-model', type=Path, default=None,
+                   help='fine-tune an existing compatible density checkpoint')
     p.add_argument('--out', required=True, type=Path)
     p.add_argument('--components', type=int, default=8, help='mixture components K')
     p.add_argument('--hidden', type=int, nargs='+', default=[64, 128, 128])
@@ -74,6 +101,8 @@ def main():
     p.add_argument('--corpus-sims', type=int, default=400)
     p.add_argument('--seed', type=int, default=0)
     args = p.parse_args()
+    if not 0. <= args.augmentation_fraction <= 1.:
+        p.error('--augmentation-fraction must lie in [0,1]')
 
     print(f"Loading {args.source} ...", flush=True)
     store, source_meta = data_mod.load_source(
@@ -84,12 +113,33 @@ def main():
     print(f"{store.n_rows} parameter rows, {store.n_observations:,} finite outcomes; "
           f"held out {val_store.n_rows} rows by parameter triple")
 
-    model = wm.ConditionalWrappedMixture(
-        n_components=args.components, hidden_dims=tuple(args.hidden),
-        min_scale=args.min_scale)
+    augmentation_train = augmentation_val = None
+    augmentation_meta = None
+    if args.augmentation:
+        augmentation, augmentation_meta = data_mod.load_source(args.augmentation)
+        augmentation_train, augmentation_val = data_mod.split_by_params(
+            augmentation, args.val_fraction, seed=args.seed)
+        data_mod.require_matching_n_samples(
+            {'source_meta': source_meta}, augmentation_meta)
+        print(f"augmentation: {augmentation.n_rows} parameter rows, "
+              f"{augmentation.n_observations:,} finite outcomes; sampling "
+              f"{args.augmentation_fraction:.0%} per batch")
+
+    if args.init_model:
+        model, variables, init_meta = wm.load_model(args.init_model)
+        if model.n_components != args.components:
+            raise ValueError(f'--components={args.components} does not match initialized '
+                             f'model K={model.n_components}')
+        data_mod.require_matching_n_samples(init_meta, source_meta)
+        print(f'Fine-tuning {args.init_model}')
+    else:
+        model = wm.ConditionalWrappedMixture(
+            n_components=args.components, hidden_dims=tuple(args.hidden),
+            min_scale=args.min_scale)
     rng = np.random.default_rng(args.seed)
-    x0, b0, w0 = train_store.batch(rng, 8)
-    variables = model.init(jax.random.PRNGKey(args.seed), x0)
+    if not args.init_model:
+        x0, _, _ = train_store.batch(rng, 8)
+        variables = model.init(jax.random.PRNGKey(args.seed), x0)
     n_params = sum(x.size for x in jax.tree.leaves(variables))
     print(f"K={args.components}, {n_params:,} network parameters")
 
@@ -111,12 +161,15 @@ def main():
     best = (np.inf, variables)
     t0 = time.time()
     for step in range(1, args.steps + 1):
-        x, b, w = train_store.batch(rng, args.batch_size)
+        x, b, w = mixed_batch(train_store, augmentation_train,
+                              args.augmentation_fraction, rng, args.batch_size)
         variables, opt_state, loss = update(variables, opt_state, x, b, w)
         if step % args.eval_every == 0 or step == args.steps:
             val_rng = np.random.default_rng(args.seed + 1)
-            val_nll = evaluate_store(loss_fn, variables, val_store, val_rng,
-                                     args.eval_batches, args.batch_size)
+            val_nll = evaluate_mixed(
+                loss_fn, variables, val_store, augmentation_val,
+                args.augmentation_fraction, val_rng,
+                args.eval_batches, args.batch_size)
             history.append({'step': step, 'train_nll': float(loss),
                             'val_nll': val_nll})
             if val_nll < best[0]:
@@ -125,6 +178,7 @@ def main():
                   f"({time.time() - t0:.0f}s)", flush=True)
 
     meta = dict(vars(args) | {'out': str(args.out), 'source_meta': source_meta,
+                              'augmentation_meta': augmentation_meta,
                               'best_val_nll': best[0], 'history': history,
                               'n_network_params': n_params,
                               'train_seconds': time.time() - t0})

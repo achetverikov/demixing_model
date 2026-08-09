@@ -48,6 +48,36 @@ def sobol_design(n_points: int, seed: int = 0, sd_scale: str = 'log',
     return np.column_stack([sd, feat_diff]).astype(np.float32)
 
 
+def low_dprime_augmentation_design(n_points: int, seed: int = 0):
+    """Off-grid training design emphasizing poorly separated items.
+
+    With the experiment's 40-degree spatial separation, ``sd_ident=50..140``
+    corresponds to spatial d-prime about ``0.8..0.29``. Half the rows target
+    unequal feature noise (ratio ``1.5..8``), one quarter target similar noise
+    over the full SD domain, and one quarter use independent full-domain SDs.
+    The ordinary component mirror augmentation supplies both input orderings.
+    """
+    u = qmc.Sobol(d=5, scramble=True, seed=seed).random(n_points)
+    log_sd = lambda z, lo, hi: np.exp(np.log(lo) + z * (np.log(hi) - np.log(lo)))
+    a = log_sd(u[:, 1], *SD_BOUNDS)
+    b = log_sd(u[:, 2], *SD_BOUNDS)
+
+    unequal = u[:, 0] < .5
+    similar = (u[:, 0] >= .5) & (u[:, 0] < .75)
+    low = log_sd(u[:, 1], 5., 40.)
+    ratio = log_sd(u[:, 2], 1.5, 8.)
+    a[unequal], b[unequal] = low[unequal], np.minimum(
+        low[unequal] * ratio[unequal], SD_BOUNDS[1])
+    base = log_sd(u[:, 1], *SD_BOUNDS)
+    similar_ratio = log_sd(u[:, 2], .8, 1.25)
+    a[similar], b[similar] = base[similar], np.clip(
+        base[similar] * similar_ratio[similar], *SD_BOUNDS)
+    sd_low, sd_high = np.minimum(a, b), np.maximum(a, b)
+    sd_ident = log_sd(u[:, 3], 50., 140.)
+    feat_diff = FEAT_DIFF_BOUNDS[0] + u[:, 4] * np.diff(FEAT_DIFF_BOUNDS)[0]
+    return np.column_stack([sd_low, sd_high, sd_ident, feat_diff]).astype(np.float32)
+
+
 # ---------------------------------------------------------------------------
 # Stratified off-grid validation design
 # ---------------------------------------------------------------------------

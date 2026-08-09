@@ -111,6 +111,29 @@ K=12 family-capacity limit. Independent per-dissimilarity mixtures also
 improved held-out NLL, but their moment curves were noisy because they lack the
 smooth parameter map and were fit from only 50k outcomes each.
 
+### Balanced low-d′ augmentation
+
+The selected follow-up adds 8,192 fresh off-grid parameter rows × 500 outcomes
+at spatial d′ approximately 0.29–0.8. Half target unequal feature noise up to an
+8:1 ratio, one quarter target similar noise over the full SD domain, and one
+quarter use general full-domain feature-SD pairs. The baseline checkpoint was
+fine-tuned for 5,000 steps with 50% augmentation and 50% original-corpus replay;
+the UEV 100k corpus remained validation-only.
+
+On the structured UEV reference, maximum mean-bias error fell from 2.317° to
+1.385° and maximum response-SD error from 1.916° to 1.790°. Corresponding
+MAEs fell from 0.110° to 0.088° and from 0.223° to 0.165°. The original
+repulsive trough remains the largest mean-bias error, but is substantially less
+smoothed.
+
+The augmentation did not trade away broad likelihood accuracy. On the common
+100k raw references, scattered-point NLL improved from 3.530510 to 3.530404
+(paired difference -0.000106, 95% CI ±0.000054; 62.0% case wins), while
+difficult-trajectory NLL improved from 3.866589 to 3.866315 (-0.000273,
+95% CI ±0.000068; 70.8% case wins). The selected artifact is
+`wnmix_k12_lowdprime_balanced_aug.pkl`; narrower unequal-only augmentations were
+rejected because they moved the worst response-SD error to uncovered regimes.
+
 ## Remaining approximation error
 
 - **Simulator Monte Carlo:** independently measured by two 100k references;

@@ -84,6 +84,8 @@ def main():
     p.add_argument('--out', required=True, type=Path)
     p.add_argument('--n-points', type=int, default=4000,
                    help='design points (training mode)')
+    p.add_argument('--training-design', choices=['sobol', 'low-dprime'],
+                   default='sobol', help='training design when --validation is absent')
     p.add_argument('--n-simulations', type=int, default=200,
                    help='EM runs per design point')
     p.add_argument('--n-samples', type=int, default=100,
@@ -137,8 +139,13 @@ def main():
         else:
             design, strata = design_mod.uev_design(args.uev_feature_step)
     else:
-        design, strata = design_mod.sobol_design(args.n_points, seed=design_seed,
-                                                 sd_scale=args.sd_scale), None
+        if args.training_design == 'sobol':
+            design = design_mod.sobol_design(args.n_points, seed=design_seed,
+                                             sd_scale=args.sd_scale)
+        else:
+            design = design_mod.low_dprime_augmentation_design(
+                args.n_points, seed=design_seed)
+        strata = None
 
     print(f"Design: {design.shape[0]} points x {args.n_simulations} simulations "
           f"(n_samples={args.n_samples}, crn={args.crn}, "

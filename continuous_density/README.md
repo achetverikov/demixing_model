@@ -86,6 +86,23 @@ for K in 2 4 8 12; do
     --out "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k${K}.pkl"
 done
 
+# Optional selected low-spatial-d' augmentation. It mixes unequal, similar, and
+# general feature-SD pairs so improving one UEV trough does not move the failure.
+$PY continuous_density/generate_training_data.py \
+  --training-design low-dprime --n-points 8192 --n-simulations 500 \
+  --n-samples 100 --block-rows 8 --simulation-chunk 500 \
+  --shard-rows 32 --resume --seed 27182 --design-seed 27182 \
+  --out "$DEMIXING_ARTIFACT_ROOT/continuous_density/train_low_dprime_balanced_8k_500.npz"
+
+$PY continuous_density/train.py \
+  --source "$DEMIXING_ARTIFACT_ROOT/continuous_density/train_16k_500.npz" \
+  --augmentation "$DEMIXING_ARTIFACT_ROOT/continuous_density/train_low_dprime_balanced_8k_500.npz" \
+  --augmentation-fraction .5 \
+  --init-model "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_16k500.pkl" \
+  --components 12 --steps 5000 --batch-size 8192 --lr .0003 --warmup 100 \
+  --seed 29 \
+  --out "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_lowdprime_balanced_aug.pkl"
+
 # Primary and independent-repeat scattered off-grid raw references.
 for SEED in 314159 271828; do
   $PY continuous_density/generate_training_data.py --validation \

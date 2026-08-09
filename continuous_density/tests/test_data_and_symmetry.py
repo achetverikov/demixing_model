@@ -39,6 +39,29 @@ def test_sobol_design_covers_the_domain():
     assert on_grid < 0.01
 
 
+def test_low_dprime_augmentation_design_targets_off_grid_unequal_noise():
+    d = design_mod.low_dprime_augmentation_design(512, seed=4)
+    assert d.shape == (512, 4)
+    assert np.all(d[:, 0] < d[:, 1])
+    assert np.all((d[:, 2] >= 50.) & (d[:, 2] <= 140.))
+    assert np.all((40. / d[:, 2] >= 40. / 140.) & (40. / d[:, 2] <= .8))
+    assert np.max(d[:, 1] / d[:, 0]) > 7.
+    assert np.any((d[:, 0] > 50.) & (d[:, 1] / d[:, 0] < 1.25))
+    assert np.mean(np.isclose(d[:, :3] % 5., 0., atol=1e-3)) < .01
+
+
+def test_mixed_batch_uses_requested_augmentation_fraction():
+    from continuous_density import train
+    primary = _fake_store(n_rows=4, n_sims=3)
+    augmentation = _fake_store(n_rows=4, n_sims=3, seed=1)
+    primary.bias[:] = 1.
+    augmentation.bias[:] = 2.
+    _, bias, _ = train.mixed_batch(primary, augmentation, .25,
+                                   np.random.default_rng(0), 100)
+    assert np.sum(bias == 2.) == 25
+    assert np.sum(bias == 1.) == 75
+
+
 def test_validation_design_is_stratified_and_off_grid():
     d, strata = design_mod.validation_design(per_stratum=8)
     assert d.shape[0] == len(strata) == 8 * len(design_mod._STRATA)
