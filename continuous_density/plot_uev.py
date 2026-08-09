@@ -220,6 +220,64 @@ def plot_averaged_uev(df: pd.DataFrame, dprime: float, out: Path,
     plt.close(fig)
 
 
+def plot_averaged_bias_residual(df: pd.DataFrame, dprime: float, out: Path):
+    """Plot signed model-minus-raw bias error, averaged over higher-noise levels."""
+    sub = df[(df.sd_feat2 > df.sd_feat1) & np.isclose(df.spat_dprime, dprime)]
+    keys = ['sd_feat1', 'sd_feat2', 'dist_feat', 'which_comp']
+    raw = sub[sub.method == 'raw 100k'][keys + ['mean_bias']].rename(
+        columns={'mean_bias': 'raw_bias'})
+    residual = sub[sub.method != 'raw 100k'].merge(raw, on=keys)
+    residual['error'] = residual.mean_bias - residual.raw_bias
+    agg = residual.groupby(
+        ['sd_feat1', 'dist_feat', 'which_comp', 'method'], as_index=False
+    ).agg(error=('error', 'mean'))
+
+    sd1_vals = sorted(agg.sd_feat1.unique())
+    colors = plt.cm.viridis(np.linspace(.15, .9, len(sd1_vals)))
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4.8))
+    fig.subplots_adjust(left=.055, right=.82, bottom=.14, top=.82, wspace=.28)
+    for ax, comp, title in zip(
+            axes, (1, 2), ('Lower-noise item', 'Higher-noise item')):
+        ax.axhline(0, color='#6b7280', linewidth=.8)
+        for i, sd1 in enumerate(sd1_vals):
+            for method in residual.method.unique():
+                cur = agg[(agg.sd_feat1 == sd1) & (agg.which_comp == comp)
+                          & (agg.method == method)].sort_values('dist_feat')
+                ax.plot(cur.dist_feat, cur.error, color=colors[i],
+                        linestyle=METHOD_LS[method], linewidth=1.5)
+        ax.set(xlabel='Feature dissimilarity, °', title=title)
+        ax.grid(True, color='#e5e7eb', linewidth=.6)
+    axes[0].set_ylabel('Approximated bias − raw 100k bias, °')
+    high_noise = agg[agg.which_comp == 2]
+    worst = high_noise.groupby(['sd_feat1', 'method'], as_index=False).agg(
+        error=('error', 'min'))
+    axes[2].axhline(0, color='#6b7280', linewidth=.8)
+    for method in residual.method.unique():
+        cur = worst[worst.method == method].sort_values('sd_feat1')
+        axes[2].plot(cur.sd_feat1, cur.error, color='#374151',
+                     linestyle=METHOD_LS[method], marker='o', linewidth=1.5,
+                     markersize=3.5)
+    axes[2].set(xlabel='Lower feature-noise SD, °',
+                ylabel='Largest signed error, °',
+                title='Higher-noise item\npeak undershoot')
+    axes[2].grid(True, color='#e5e7eb', linewidth=.6)
+    fig.suptitle(f'Signed mean-bias error: spatial d′={dprime:g} '
+                 f'(sd_ident={design_mod.UEV_SPAT_DIFF / dprime:g}°)\n'
+                 'negative values indicate approximation undershoot')
+    noise_handles = [mlines.Line2D([], [], color=colors[i], lw=2,
+                                   label=f'σ_low={v:g}°')
+                     for i, v in enumerate(sd1_vals)]
+    method_handles = [mlines.Line2D([], [], color='#555555', ls=METHOD_LS[m], lw=2,
+                                   label=m) for m in residual.method.unique()]
+    leg = axes[2].legend(handles=noise_handles, loc='upper left',
+                         bbox_to_anchor=(1.03, 1.0), fontsize=8)
+    axes[2].add_artist(leg)
+    axes[2].legend(handles=method_handles, loc='lower left',
+                   bbox_to_anchor=(1.03, 0.0), fontsize=8)
+    fig.savefig(out, dpi=180)
+    plt.close(fig)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model', required=True, type=Path)
@@ -258,6 +316,9 @@ def main():
             summary, dprime,
             args.out_dir / f'uev_response_sd_averaged_dprime_{suffix}.png',
             metric='response_sd')
+        plot_averaged_bias_residual(
+            summary, dprime,
+            args.out_dir / f'uev_bias_residual_averaged_dprime_{suffix}.png')
         print(f'wrote UEV figures for spatial d′={dprime:g}')
 
 

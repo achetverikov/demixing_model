@@ -193,7 +193,8 @@ $PY continuous_density/generate_training_data.py \
   --out "$DEMIXING_ARTIFACT_ROOT/continuous_density/validation_uev_highfeat_dprime2_100k_seed271828.npz"
 
 # Compare objective ablations on the development UEV curves. Each spatial d'
-# receives separate mean-bias and response-variability grid/averaged figures.
+# receives separate mean-bias, response-variability, and signed bias-residual
+# figures. Negative residuals mean that the approximation undershoots raw 100k.
 $PY continuous_density/plot_uev.py \
   --model "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_trajectory_design_large.pkl" \
   --model-label "trajectory NLL" \
