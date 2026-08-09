@@ -29,7 +29,7 @@ from shared.mu1_axis import mu1_grid_np
 COMP_COLORS = {1: '#1d4ed8', 2: '#c2410c'}
 METHOD_LS = {'raw 100k': '-', 'conditional density': '--',
              'trajectory NLL': '--', 'moment w=2': '-.', 'moment w=10': ':'}
-METHOD_LS['production NN'] = ':'
+METHOD_LS['production NN'] = (0, (5, 1, 1, 1, 1, 1))
 
 
 def _dprime(sd_ident):
@@ -85,9 +85,7 @@ def build_summary(model_path: Path, reference_path: Path,
             moments = evaluate.empirical_moments(bias)
             raw_mean_parts.append(moments['mean_bias'])
             raw_sd_parts.append(moments['circ_sd'])
-            ref_density = evaluate.reference_density(bias, asym_grid)
-            raw_asym_parts.append(evaluate.density_asymmetry(
-                evaluate.safe_log(ref_density).T))
+            raw_asym_parts.append(evaluate.empirical_density_asymmetry(bias))
         raw_mean = np.concatenate(raw_mean_parts)
         raw_sd = np.concatenate(raw_sd_parts)
         raw_asym = np.concatenate(raw_asym_parts)

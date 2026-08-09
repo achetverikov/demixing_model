@@ -201,6 +201,7 @@ $PY continuous_density/plot_uev.py \
   --model-label "trajectory NLL" \
   --additional-model "moment w=2" "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_grouped_moment2.pkl" \
   --additional-model "moment w=10" "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_grouped_moment10.pkl" \
+  --checkpoint pretrained/model_epoch1500_10ktrain_100samples.pkl \
   --reference "$DEMIXING_ARTIFACT_ROOT/continuous_density/validation_uev_100k_seed161803.npz" \
   --reference-extension "$DEMIXING_ARTIFACT_ROOT/continuous_density/validation_uev_highfeat_dprime2_100k_seed271828.npz" \
   --out-dir "$DEMIXING_ARTIFACT_ROOT/continuous_density/uev_objective_ablation"
@@ -208,10 +209,11 @@ $PY continuous_density/plot_uev.py \
 # Diagnose whether the worst UEV trough is limited by K=12 or global training.
 # Fits on half the raw outcomes and reports only held-out-half likelihoods.
 $PY continuous_density/diagnose_local_capacity.py \
-  --model "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_16k500.pkl" \
+  --model "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_trajectory_design_large.pkl" \
   --checkpoint pretrained/model_epoch1500_10ktrain_100samples.pkl \
   --reference "$DEMIXING_ARTIFACT_ROOT/continuous_density/validation_uev_100k_seed161803.npz" \
-  --summary "$DEMIXING_ARTIFACT_ROOT/continuous_density/uev_raw100k_vs_models/uev_raw100k_vs_models.csv" \
+  --sd-feat1 10 --sd-feat2 60 --spat-dprime 2 --component 1 \
+  --steps 3000 --batch-size 2048 \
   --out-dir "$DEMIXING_ARTIFACT_ROOT/continuous_density/uev_local_capacity"
 
 # Raw-reference metrics and repeat uncertainty; repeat for K=2,4,8,12 and both designs.

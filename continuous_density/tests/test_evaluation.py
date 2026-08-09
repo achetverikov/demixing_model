@@ -67,6 +67,12 @@ def test_empirical_moments_exclude_nonfinite():
     assert out['moment_imag'][0] == pytest.approx(clean['moment_imag'][0])
 
 
+def test_empirical_density_asymmetry_uses_raw_sign_mass():
+    bias = np.array([[10., 20., -30., np.nan],
+                     [0., -180., 45., -45.]])
+    assert ev.empirical_density_asymmetry(bias) == pytest.approx([1 / 3, 0.])
+
+
 def test_reference_density_ignores_nonfinite_and_integrates_to_one():
     rng = np.random.default_rng(2)
     bias = rng.normal(0.0, 20.0, (2, 3000)).astype(np.float32)

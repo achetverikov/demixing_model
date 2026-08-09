@@ -63,6 +63,18 @@ def empirical_moments(bias: np.ndarray) -> dict:
             'circ_sd': np.degrees(np.sqrt(-2.0 * np.log(r)))}
 
 
+def empirical_density_asymmetry(bias: np.ndarray) -> np.ndarray:
+    """Raw-sample ``P(bias > 0) - P(bias < 0)`` without KDE broadening."""
+    b = np.asarray(bias, dtype=np.float64)
+    finite = np.isfinite(b)
+    ambiguous = np.isclose(np.abs(b), 180., atol=1e-6)
+    positive = finite & (b > 0.) & ~ambiguous
+    negative = finite & (b < 0.) & ~ambiguous
+    count = finite.sum(axis=-1)
+    out = (positive.sum(axis=-1) - negative.sum(axis=-1)) / np.maximum(count, 1)
+    return np.where(count > 0, out, np.nan)
+
+
 def model_logdensity_grid(model, variables, params, grid, n_wraps: int = 4,
                           case_block: int = CASE_BLOCK) -> np.ndarray:
     """Model log density (per degree) on ``grid``: ``(M, 4)`` -> ``(M, G)``.
@@ -257,17 +269,16 @@ def density_asymmetry(log_density_mu1_grid: np.ndarray) -> np.ndarray:
 def add_density_asymmetry(df: pd.DataFrame, model, variables,
                           store: data_mod.SampleStore, n_wraps: int = 4
                           ) -> pd.DataFrame:
-    """Attach predicted and reference density asymmetry on the production grid."""
+    """Attach model-integrated and raw-sample density asymmetry."""
     grid = mu1_grid_np().astype(np.float32)
     parts = []
     for c in (0, 1):
         params = store.design if c == 0 else np.asarray(wm.mirror_params(store.design))
         log_q = model_logdensity_grid(model, variables, params, grid, n_wraps).T
-        ref = reference_density(store.bias[:, :, c], grid).T
         parts.append(pd.DataFrame({
             'component': c + 1,
             'pred_density_asym': density_asymmetry(log_q),
-            'ref_density_asym': density_asymmetry(safe_log(ref)),
+            'ref_density_asym': empirical_density_asymmetry(store.bias[:, :, c]),
         }))
     asym = pd.concat(parts, ignore_index=True)
     asym['density_asym_error'] = asym['pred_density_asym'] - asym['ref_density_asym']

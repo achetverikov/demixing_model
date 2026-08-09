@@ -24,6 +24,7 @@ import pandas as pd
 
 from continuous_density import compare_existing_model as comparison
 from continuous_density import data as data_mod
+from continuous_density import design as design_mod
 from continuous_density import evaluate
 from continuous_density import wrapped_mixture_model as wm
 
@@ -131,32 +132,41 @@ def _metric_error(pred, raw, circular=False):
     return evaluate.wrap_error(pred - raw) if circular else pred - raw
 
 
-def plot_diagnostic(frame, out):
-    methods = [('raw 100k', '#111111', '-'),
+def _dist_asymmetry(dist, n_wraps=4):
+    grid = comparison.mu1_grid_np()
+    log_density = np.asarray(wm.mixture_logpdf_grid(
+        jnp.asarray(grid), dist, n_wraps)).T
+    return evaluate.density_asymmetry(log_density)
+
+
+def plot_diagnostic(frame, out, title):
+    methods = [('raw held-out 50k', '#111111', '-'),
                ('conditional density', '#2563eb', '--'),
                ('production NN', '#ea580c', ':'),
                ('local fine-tune', '#a21caf', (0, (5, 1))),
                ('free K=12', '#15803d', '-.')]
-    fig, axes = plt.subplots(2, 2, figsize=(11, 7), sharex='col',
+    fig, axes = plt.subplots(2, 3, figsize=(14, 7), sharex='col',
                              gridspec_kw={'height_ratios': [2, 1]})
     for col, (metric, label, circular) in enumerate([
             ('mean_bias', 'Mean bias, °', True),
+            ('density_asymmetry', 'P(bias > 0) − P(bias < 0)', False),
             ('response_sd', 'Circular response SD, °', False)]):
         for method, color, ls in methods:
             axes[0, col].plot(frame.dist_feat, frame[f'{metric}_{method}'],
                               color=color, ls=ls, lw=1.8, label=method)
             if method != 'raw 100k':
                 err = _metric_error(frame[f'{metric}_{method}'],
-                                    frame[f'{metric}_raw 100k'], circular)
+                                    frame[f'{metric}_raw held-out 50k'], circular)
                 axes[1, col].plot(frame.dist_feat, err, color=color, ls=ls, lw=1.5)
         axes[0, col].set_ylabel(label)
+        unit = ', °' if metric != 'density_asymmetry' else ''
         axes[1, col].set(xlabel='Feature dissimilarity, °',
-                         ylabel='prediction − raw, °')
+                         ylabel=f'prediction − raw{unit}')
         axes[1, col].axhline(0, color='#888888', lw=.8)
         for ax in axes[:, col]:
             ax.grid(True, color='#e5e7eb', lw=.6)
     axes[0, 0].legend(fontsize=8)
-    fig.suptitle('Local capacity diagnostic: σ=(30°,60°), spatial d′=0.5, component 2')
+    fig.suptitle(title)
     fig.tight_layout()
     fig.savefig(out, dpi=180, bbox_inches='tight')
     plt.close(fig)
@@ -167,7 +177,10 @@ def main():
     p.add_argument('--model', required=True, type=Path)
     p.add_argument('--checkpoint', required=True, type=Path)
     p.add_argument('--reference', required=True, type=Path)
-    p.add_argument('--summary', required=True, type=Path)
+    p.add_argument('--sd-feat1', type=float, default=30.)
+    p.add_argument('--sd-feat2', type=float, default=60.)
+    p.add_argument('--spat-dprime', type=float, default=.5)
+    p.add_argument('--component', type=int, choices=(1, 2), default=2)
     p.add_argument('--out-dir', required=True, type=Path)
     p.add_argument('--steps', type=int, default=1500)
     p.add_argument('--batch-size', type=int, default=128)
@@ -180,14 +193,17 @@ def main():
     model, variables, meta = wm.load_model(args.model)
     store, ref_meta = data_mod.load_npz(args.reference)
     data_mod.require_matching_n_samples(meta, ref_meta)
-    mask = (np.isclose(store.design[:, 0], 30.)
-            & np.isclose(store.design[:, 1], 60.)
-            & np.isclose(store.design[:, 2], 80.))
+    sd_ident = design_mod.UEV_SPAT_DIFF / args.spat_dprime
+    mask = (np.isclose(store.design[:, 0], args.sd_feat1)
+            & np.isclose(store.design[:, 1], args.sd_feat2)
+            & np.isclose(store.design[:, 2], sd_ident))
     order = np.flatnonzero(mask)[np.argsort(store.design[mask, 3])]
     if len(order) != 90:
         raise ValueError(f'expected 90 rows on the target trajectory, found {len(order)}')
-    params = np.asarray(wm.mirror_params(store.design[order]))
-    samples = store.bias[order, :, 1]
+    params = store.design[order]
+    if args.component == 2:
+        params = np.asarray(wm.mirror_params(params))
+    samples = store.bias[order, :, args.component - 1]
     split = samples.shape[1] // 2
     train_samples, test_samples = samples[:, :split], samples[:, split:]
 
@@ -213,21 +229,23 @@ def main():
     prod_moment = ((prod_density * np.exp(1j * np.radians(grid))[None, :]).sum(axis=1)
                    * comparison.mu1_cell_width())
 
-    source = pd.read_csv(args.summary)
-    source = source[(source.sd_feat1 == 30.) & (source.sd_feat2 == 60.)
-                    & np.isclose(source.spat_dprime, .5)
-                    & (source.which_comp == 2)]
-    wide = source.pivot(index='dist_feat', columns='method',
-                        values=['mean_bias', 'response_sd'])
-    wide.columns = [f'{metric}_{method}' for metric, method in wide.columns]
-    frame = wide.reset_index().sort_values('dist_feat')
-    frame['mean_bias_free K=12'] = np.asarray(wm.mean_and_resultant(free)[0])
-    frame['response_sd_free K=12'] = np.asarray(wm.circular_sd(free))
-    frame['mean_bias_local fine-tune'] = np.asarray(wm.mean_and_resultant(local)[0])
-    frame['response_sd_local fine-tune'] = np.asarray(wm.circular_sd(local))
+    raw = evaluate.empirical_moments(test_samples)
+    frame = pd.DataFrame({'dist_feat': store.design[order, 3],
+                          'mean_bias_raw held-out 50k': raw['mean_bias'],
+                          'response_sd_raw held-out 50k': raw['circ_sd']})
+    frame['density_asymmetry_raw held-out 50k'] = (
+        evaluate.empirical_density_asymmetry(test_samples))
+    for name, dist in [('conditional density', conditional),
+                       ('local fine-tune', local), ('free K=12', free)]:
+        frame[f'mean_bias_{name}'] = np.asarray(wm.mean_and_resultant(dist)[0])
+        frame[f'response_sd_{name}'] = np.asarray(wm.circular_sd(dist))
+        frame[f'density_asymmetry_{name}'] = _dist_asymmetry(
+            dist, meta.get('n_wraps', 4))
     frame['mean_bias_production NN'] = np.degrees(np.angle(prod_moment))
     frame['response_sd_production NN'] = np.degrees(np.sqrt(
         -2. * np.log(np.clip(np.abs(prod_moment), 1e-12, 1.))))
+    frame['density_asymmetry_production NN'] = evaluate.density_asymmetry(
+        production_profiles.T)
     frame['nll_conditional_density'] = _dist_nll(conditional, test_samples,
                                                   meta.get('n_wraps', 4))
     frame['nll_free_K12'] = _dist_nll(free, test_samples, meta.get('n_wraps', 4))
@@ -243,14 +261,18 @@ def main():
                           'local_steps': args.local_steps,
                           'local_batch_size': args.local_batch_size,
                           'local_lr': args.local_lr})
-    plot_diagnostic(frame, args.out_dir / 'local_capacity_diagnostic.png')
-    for metric, circular in [('mean_bias', True), ('response_sd', False)]:
+    title = (f'Local capacity: σ=({args.sd_feat1:g}°, {args.sd_feat2:g}°), '
+             f'spatial d′={args.spat_dprime:g}, component {args.component}')
+    plot_diagnostic(frame, args.out_dir / 'local_capacity_diagnostic.png', title)
+    for metric, circular in [('mean_bias', True), ('density_asymmetry', False),
+                             ('response_sd', False)]:
         print(f'\n{metric} maximum absolute error:')
         for method in ['conditional density', 'production NN',
                        'local fine-tune', 'free K=12']:
             err = _metric_error(frame[f'{metric}_{method}'],
-                                frame[f'{metric}_raw 100k'], circular)
-            print(f'  {method:20s} {np.max(np.abs(err)):.4f}°')
+                                frame[f'{metric}_raw held-out 50k'], circular)
+            unit = '°' if metric != 'density_asymmetry' else ''
+            print(f'  {method:20s} {np.max(np.abs(err)):.4f}{unit}')
     print('\nheld-out raw NLL averaged across trajectory:')
     for column in ['nll_conditional_density', 'nll_production_NN',
                    'nll_local_fine_tune', 'nll_free_K12']:
