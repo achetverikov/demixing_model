@@ -62,6 +62,21 @@ the 200° bound, indicating a weak or boundary parameter direction. This single
 demonstration establishes that continuous trial-level fitting works; it is not
 a parameter-recovery or model-selection study.
 
+## Unequal-variability mean-bias curves
+
+A structured raw reference crossed the canonical feature-SD pairs from
+`{10,20,30,60}°`, 90 dissimilarities, and spatial d′ `{0.5,1,2}` at 100k EM
+outcomes per parameter row (270 million simulations total). Spatial d′ follows
+`40 / sd_ident`, hence these levels correspond to `sd_ident={80,40,20}°`.
+
+Across both components and all 5,400 curves, the K=12 conditional density had
+0.110° mean absolute and 0.204° RMS circular-mean error. Mean absolute error
+was 0.156°, 0.111°, and 0.063° at d′ 0.5, 1, and 2. The largest localized
+miss was 2.32° for the higher-noise component at `(sd_feat1,sd_feat2,d′) =
+(30°,60°,0.5)`, where the model underestimates the raw repulsive trough.
+Separate raw-versus-density grid and averaged figures for every d′ level are
+under `results/continuous_density/uev_raw100k_vs_density/`.
+
 ## Remaining approximation error
 
 - **Simulator Monte Carlo:** independently measured by two 100k references;

@@ -17,6 +17,13 @@ FEAT_DIFF_BOUNDS = (2.0, 180.0)
 
 PARAM_NAMES = ('sd_feat1', 'sd_feat2', 'sd_ident', 'feat_diff')
 
+# Grid used by the unequal-encoding-variability figures.  Only canonical
+# ``sd_feat1 <= sd_feat2`` pairs are simulated because each run already returns
+# both component biases.
+UEV_SD_FEAT = (10.0, 20.0, 30.0, 60.0)
+UEV_SPAT_DPRIME = (0.5, 1.0, 2.0)
+UEV_SPAT_DIFF = 40.0
+
 
 def sobol_design(n_points: int, seed: int = 0, sd_scale: str = 'log',
                  sd_bounds: Tuple[float, float] = SD_BOUNDS,
@@ -174,6 +181,33 @@ def stress_trajectory_design(n_curves: int = 15, points_per_curve: int = 24,
         sd = np.clip(triple + delta, *SD_BOUNDS)
         rows.append(np.column_stack([np.repeat(sd[None, :], len(feat), axis=0), feat]))
         labels.extend([f'trajectory_{scenario}_{index + 1:02d}'] * len(feat))
+    return np.concatenate(rows).astype(np.float32), labels
+
+
+def uev_design(feature_step: float = 2.0) -> Tuple[np.ndarray, List[str]]:
+    """Canonical grid for raw-vs-density unequal-variability bias curves.
+
+    Spatial discriminability follows the experimental definition
+    ``dprime = spatial separation / sd_ident`` with a 40-degree separation, so
+    the three d-prime levels map to ``sd_ident = 80, 40, 20`` degrees.  The
+    feature grid includes both trained-domain endpoints.
+    """
+    if feature_step <= 0:
+        raise ValueError('feature_step must be positive')
+    lo, hi = FEAT_DIFF_BOUNDS
+    n_steps = (hi - lo) / feature_step
+    if not np.isclose(n_steps, round(n_steps)):
+        raise ValueError('feature_step must divide the 2-to-180 degree interval')
+    feat = np.linspace(lo, hi, int(round(n_steps)) + 1)
+    rows, labels = [], []
+    for i, sd1 in enumerate(UEV_SD_FEAT):
+        for sd2 in UEV_SD_FEAT[i:]:
+            for dprime in UEV_SPAT_DPRIME:
+                sd_ident = UEV_SPAT_DIFF / dprime
+                rows.append(np.column_stack([
+                    np.full(len(feat), sd1), np.full(len(feat), sd2),
+                    np.full(len(feat), sd_ident), feat]))
+                labels.extend([f'uev_dprime_{dprime:g}'] * len(feat))
     return np.concatenate(rows).astype(np.float32), labels
 
 

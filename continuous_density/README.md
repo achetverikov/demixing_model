@@ -106,6 +106,20 @@ for SEED in 314159 271828; do
     --out "$DEMIXING_ARTIFACT_ROOT/continuous_density/validation_trajectories_${SEED}.npz"
 done
 
+# Structured unequal-encoding-variability curves. Spatial d' = 40 / sd_ident;
+# canonical feature-SD pairs retain both component curves without duplication.
+$PY continuous_density/generate_training_data.py --validation \
+  --validation-design uev --uev-feature-step 2 \
+  --n-simulations 100000 --n-samples 100 --block-rows 4 \
+  --simulation-chunk 5000 --shard-rows 32 --resume \
+  --seed 161803 \
+  --out "$DEMIXING_ARTIFACT_ROOT/continuous_density/validation_uev_100k_seed161803.npz"
+
+$PY continuous_density/plot_uev.py \
+  --model "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_16k500.pkl" \
+  --reference "$DEMIXING_ARTIFACT_ROOT/continuous_density/validation_uev_100k_seed161803.npz" \
+  --out-dir "$DEMIXING_ARTIFACT_ROOT/continuous_density/uev_raw100k_vs_density"
+
 # Raw-reference metrics and repeat uncertainty; repeat for K=2,4,8,12 and both designs.
 $PY continuous_density/evaluate.py \
   --model "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k8.pkl" \

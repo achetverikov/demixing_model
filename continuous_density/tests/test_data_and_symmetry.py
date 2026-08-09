@@ -59,6 +59,20 @@ def test_stress_trajectory_design_is_off_grid_and_grouped():
         assert block[-1, 3] == pytest.approx(180.0)
 
 
+def test_uev_design_is_canonical_and_uses_spatial_dprime_definition():
+    d, labels = design_mod.uev_design(feature_step=2.0)
+    n_pairs = len(design_mod.UEV_SD_FEAT) * (len(design_mod.UEV_SD_FEAT) + 1) // 2
+    assert d.shape == (n_pairs * len(design_mod.UEV_SPAT_DPRIME) * 90, 4)
+    assert len(labels) == len(d)
+    assert np.all(d[:, 0] <= d[:, 1])
+    assert set(d[:, 2]) == {20.0, 40.0, 80.0}
+    assert set(design_mod.UEV_SPAT_DIFF / d[:, 2]) == set(design_mod.UEV_SPAT_DPRIME)
+    assert set(d[:, 3]) == set(np.arange(2.0, 181.0, 2.0))
+
+    with pytest.raises(ValueError, match='divide'):
+        design_mod.uev_design(feature_step=3.0)
+
+
 def test_resumable_shard_helpers_verify_and_assemble(tmp_path):
     from continuous_density import generate_training_data as gen
     assert gen._shard_ranges(7, 3) == [(0, 3), (3, 6), (6, 7)]
