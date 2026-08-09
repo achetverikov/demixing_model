@@ -26,7 +26,8 @@ from continuous_density import evaluate
 from continuous_density import wrapped_mixture_model as wm
 
 COMP_COLORS = {1: '#1d4ed8', 2: '#c2410c'}
-METHOD_LS = {'raw 100k': '-', 'conditional density': '--'}
+METHOD_LS = {'raw 100k': '-', 'conditional density': '--',
+             'trajectory NLL': '--', 'moment w=2': '-.', 'moment w=10': ':'}
 METHOD_LS['production NN'] = ':'
 
 
@@ -35,11 +36,20 @@ def _dprime(sd_ident):
 
 
 def build_summary(model_path: Path, reference_path: Path,
-                  checkpoint: Path | None = None) -> pd.DataFrame:
+                  checkpoint: Path | None = None, model_label='conditional density',
+                  additional_models=()) -> pd.DataFrame:
     """Return raw/model circular means and SDs for every component curve."""
     model, variables, meta = wm.load_model(model_path)
     store, ref_meta = data_mod.load_npz(reference_path)
     data_mod.require_matching_n_samples(meta, ref_meta)
+    density_models = [(model_label, model, variables)]
+    for label, path in additional_models:
+        extra_model, extra_variables, extra_meta = wm.load_model(path)
+        data_mod.require_matching_n_samples(extra_meta, ref_meta)
+        density_models.append((label, extra_model, extra_variables))
+    fallback_styles = ['--', '-.', ':', (0, (3, 1, 1, 1))]
+    for i, (label, _, _) in enumerate(density_models):
+        METHOD_LS.setdefault(label, fallback_styles[i % len(fallback_styles)])
     if checkpoint is not None:
         from continuous_density import compare_existing_model as comparison
         checkpoint_n = comparison.checkpoint_n_samples(checkpoint)
@@ -63,11 +73,12 @@ def build_summary(model_path: Path, reference_path: Path,
             raw_sd_parts.append(moments['circ_sd'])
         raw_mean = np.concatenate(raw_mean_parts)
         raw_sd = np.concatenate(raw_sd_parts)
-        dist = model.apply(variables, jnp.asarray(params))
-        pred_mean = np.asarray(wm.mean_and_resultant(dist)[0])
-        pred_sd = np.asarray(wm.circular_sd(dist))
-        values = [('raw 100k', raw_mean, raw_sd),
-                  ('conditional density', pred_mean, pred_sd)]
+        values = [('raw 100k', raw_mean, raw_sd)]
+        for label, density_model, density_variables in density_models:
+            dist = density_model.apply(density_variables, jnp.asarray(params))
+            pred_mean = np.asarray(wm.mean_and_resultant(dist)[0])
+            pred_sd = np.asarray(wm.circular_sd(dist))
+            values.append((label, pred_mean, pred_sd))
         if checkpoint is not None:
             triples, inverse = np.unique(params[:, :3], axis=0, return_inverse=True)
             surfaces = production_predict(np.column_stack([triples, np.zeros(len(triples))]))
@@ -97,8 +108,12 @@ def _slug(value):
 
 
 def _comparison_title(df):
-    return ('Raw 100k vs conditional density and production NN'
-            if 'production NN' in set(df.method) else 'Raw 100k vs conditional density')
+    methods = set(df.method)
+    if 'production NN' in methods:
+        return 'Raw 100k vs conditional density and production NN'
+    if len(methods) > 2:
+        return 'Raw 100k vs conditional-density objectives'
+    return 'Raw 100k vs conditional density'
 
 
 def plot_matrix(df: pd.DataFrame, dprime: float, out: Path,
@@ -194,13 +209,19 @@ def plot_averaged_uev(df: pd.DataFrame, dprime: float, out: Path,
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model', required=True, type=Path)
+    parser.add_argument('--model-label', default='conditional density')
+    parser.add_argument('--additional-model', nargs=2, action='append', default=[],
+                        metavar=('LABEL', 'PATH'),
+                        help='additional density checkpoint and legend label')
     parser.add_argument('--reference', required=True, type=Path)
     parser.add_argument('--checkpoint', type=Path,
                         help='optional production surface NN for the same raw comparison')
     parser.add_argument('--out-dir', required=True, type=Path)
     args = parser.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    summary = build_summary(args.model, args.reference, args.checkpoint)
+    additional = [(label, Path(path)) for label, path in args.additional_model]
+    summary = build_summary(args.model, args.reference, args.checkpoint,
+                            args.model_label, additional)
     name = ('uev_raw100k_vs_models.csv' if args.checkpoint
             else 'uev_raw100k_vs_density.csv')
     summary.to_csv(args.out_dir / name, index=False)

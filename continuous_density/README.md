@@ -183,6 +183,16 @@ $PY continuous_density/plot_uev.py \
   --reference "$DEMIXING_ARTIFACT_ROOT/continuous_density/validation_uev_100k_seed161803.npz" \
   --out-dir "$DEMIXING_ARTIFACT_ROOT/continuous_density/uev_raw100k_vs_models"
 
+# Compare objective ablations on the development UEV curves. Each spatial d'
+# receives separate mean-bias and response-variability grid/averaged figures.
+$PY continuous_density/plot_uev.py \
+  --model "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_trajectory_design_large.pkl" \
+  --model-label "trajectory NLL" \
+  --additional-model "moment w=2" "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_grouped_moment2.pkl" \
+  --additional-model "moment w=10" "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_grouped_moment10.pkl" \
+  --reference "$DEMIXING_ARTIFACT_ROOT/continuous_density/validation_uev_100k_seed161803.npz" \
+  --out-dir "$DEMIXING_ARTIFACT_ROOT/continuous_density/uev_objective_ablation"
+
 # Diagnose whether the worst UEV trough is limited by K=12 or global training.
 # Fits on half the raw outcomes and reports only held-out-half likelihoods.
 $PY continuous_density/diagnose_local_capacity.py \
