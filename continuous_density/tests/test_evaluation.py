@@ -262,3 +262,33 @@ def test_training_trajectory_metrics_report_maxima_and_group_names():
     assert got['max_sd_error_identified'] >= 0
     assert got['moment_min_resultant'] == .2
     assert ':component' in got['max_mean_error_group']
+
+
+def test_grouped_objective_reduces_to_raw_nll_without_auxiliary_terms():
+    from continuous_density import train
+
+    model, variables = _model(k=4)
+    rng = np.random.default_rng(8)
+    params = np.array([[20., 40., 60., 30.], [30., 70., 90., 80.]], np.float32)
+    bias = rng.normal(0, 15, (2, 7)).astype(np.float32)
+    weights = np.ones_like(bias)
+    grouped = train.make_loss(model, 4)(variables, params, bias, weights)
+    dist = model.apply(variables, jnp.asarray(params))
+    expected = -jnp.mean(wm.mixture_logpdf_samples(jnp.asarray(bias), dist))
+    assert float(grouped) == pytest.approx(float(expected), abs=1e-5)
+
+
+def test_grouped_moment_and_cvar_terms_are_finite_and_change_objective():
+    from continuous_density import train
+
+    model, variables = _model(k=4)
+    rng = np.random.default_rng(9)
+    params = np.array([[20., 40., 60., 30.], [30., 70., 90., 80.]], np.float32)
+    bias = rng.normal(np.array([[25.], [-20.]]), 8, (2, 16)).astype(np.float32)
+    weights = np.ones_like(bias)
+    raw = train.make_loss(model, 4)(variables, params, bias, weights)
+    augmented = train.make_loss(
+        model, 4, moment_weight=10., cvar_weight=.1)(
+            variables, params, bias, weights)
+    assert np.isfinite(float(augmented))
+    assert float(augmented) != pytest.approx(float(raw))

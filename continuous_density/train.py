@@ -33,13 +33,36 @@ from continuous_density import data as data_mod
 from continuous_density import wrapped_mixture_model as wm
 
 
-def make_loss(model, n_wraps: int):
-    """Masked mean NLL; weight 0 drops the rare non-finite EM outcome."""
+def make_loss(model, n_wraps: int, moment_weight=0., moment_huber_delta=.1,
+              cvar_weight=0., cvar_fraction=.1):
+    """Raw NLL with optional grouped moment calibration and tail emphasis."""
     @jax.jit
     def loss_fn(variables, x, b, w):
         dist = model.apply(variables, x)
-        logp = wm.mixture_logpdf(b, dist, n_wraps)
-        return -jnp.sum(w * logp) / jnp.maximum(jnp.sum(w), 1.0)
+        if b.ndim == 1:
+            logp = wm.mixture_logpdf(b, dist, n_wraps)
+            return -jnp.sum(w * logp) / jnp.maximum(jnp.sum(w), 1.0)
+
+        logp = wm.mixture_logpdf_samples(b, dist, n_wraps)
+        count = jnp.maximum(jnp.sum(w, axis=1), 1.)
+        group_nll = -jnp.sum(w * logp, axis=1) / count
+        mean_nll = jnp.mean(group_nll)
+
+        samples = jnp.exp(1j * jnp.radians(b))
+        empirical = jnp.sum(w * samples, axis=1) / count
+        predicted = wm.circular_moment(dist)
+        error = jnp.stack([jnp.real(predicted - empirical),
+                           jnp.imag(predicted - empirical)], axis=-1)
+        absolute = jnp.abs(error)
+        huber = jnp.where(absolute <= moment_huber_delta,
+                          .5 * error ** 2,
+                          moment_huber_delta * (absolute - .5 * moment_huber_delta))
+        moment_loss = jnp.mean(jnp.sum(huber, axis=-1))
+
+        n_tail = max(1, int(group_nll.shape[0] * cvar_fraction))
+        tail_nll = jnp.mean(jax.lax.top_k(group_nll, n_tail)[0])
+        return (mean_nll + moment_weight * moment_loss
+                + cvar_weight * (tail_nll - mean_nll))
 
     return loss_fn
 
@@ -61,6 +84,19 @@ def mixed_batch(primary, augmentation, augmentation_fraction, rng, batch_size):
     parts = [primary.batch(rng, batch_size - n_aug),
              augmentation.batch(rng, n_aug)]
     order = rng.permutation(batch_size)
+    return tuple(np.concatenate([a, b], axis=0)[order]
+                 for a, b in zip(*parts))
+
+
+def mixed_grouped_batch(primary, augmentation, augmentation_fraction, rng,
+                        n_groups, outcomes_per_group):
+    """Grouped equivalent of :func:`mixed_batch`."""
+    if augmentation is None:
+        return primary.grouped_batch(rng, n_groups, outcomes_per_group)
+    n_aug = int(round(n_groups * augmentation_fraction))
+    parts = [primary.grouped_batch(rng, n_groups - n_aug, outcomes_per_group),
+             augmentation.grouped_batch(rng, n_aug, outcomes_per_group)]
+    order = rng.permutation(n_groups)
     return tuple(np.concatenate([a, b], axis=0)[order]
                  for a, b in zip(*parts))
 
@@ -147,6 +183,12 @@ def main():
     p.add_argument('--hidden', type=int, nargs='+', default=[64, 128, 128])
     p.add_argument('--min-scale', type=float, default=0.25)
     p.add_argument('--n-wraps', type=int, default=4)
+    p.add_argument('--grouped-outcomes', type=int, default=1,
+                   help='raw outcomes sharing each sampled parameter/component')
+    p.add_argument('--moment-weight', type=float, default=0.)
+    p.add_argument('--moment-huber-delta', type=float, default=.1)
+    p.add_argument('--cvar-weight', type=float, default=0.)
+    p.add_argument('--cvar-fraction', type=float, default=.1)
     p.add_argument('--steps', type=int, default=20000)
     p.add_argument('--batch-size', type=int, default=8192)
     p.add_argument('--lr', type=float, default=3e-3)
@@ -175,6 +217,14 @@ def main():
         p.error('--selection-every must be a positive multiple of --eval-every')
     if not 0 <= args.moment_min_resultant <= 1:
         p.error('--moment-min-resultant must lie in [0,1]')
+    if args.grouped_outcomes < 1 or args.batch_size % args.grouped_outcomes:
+        p.error('--grouped-outcomes must be positive and divide --batch-size')
+    if args.moment_weight < 0 or args.cvar_weight < 0:
+        p.error('--moment-weight and --cvar-weight cannot be negative')
+    if args.moment_huber_delta <= 0 or not 0 < args.cvar_fraction <= 1:
+        p.error('--moment-huber-delta must be positive and --cvar-fraction in (0,1]')
+    if ((args.moment_weight or args.cvar_weight) and args.grouped_outcomes == 1):
+        p.error('moment/CVaR losses require --grouped-outcomes greater than 1')
 
     print(f"Loading {args.source} ...", flush=True)
     store, source_meta = data_mod.load_source(
@@ -238,7 +288,9 @@ def main():
     tx = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(schedule))
     opt_state = tx.init(variables)
 
-    loss_fn = make_loss(model, args.n_wraps)
+    loss_fn = make_loss(model, args.n_wraps, args.moment_weight,
+                        args.moment_huber_delta, args.cvar_weight,
+                        args.cvar_fraction)
 
     @jax.jit
     def update(variables, opt_state, x, b, w):
@@ -250,8 +302,13 @@ def main():
     best = (np.inf, variables)
     t0 = time.time()
     for step in range(1, args.steps + 1):
-        x, b, w = mixed_batch(train_store, augmentation_train,
-                              args.augmentation_fraction, rng, args.batch_size)
+        if args.grouped_outcomes == 1:
+            x, b, w = mixed_batch(train_store, augmentation_train,
+                                  args.augmentation_fraction, rng, args.batch_size)
+        else:
+            x, b, w = mixed_grouped_batch(
+                train_store, augmentation_train, args.augmentation_fraction, rng,
+                args.batch_size // args.grouped_outcomes, args.grouped_outcomes)
         variables, opt_state, loss = update(variables, opt_state, x, b, w)
         if step % args.eval_every == 0 or step == args.steps:
             val_rng = np.random.default_rng(args.seed + 1)

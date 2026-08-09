@@ -209,6 +209,27 @@ def test_non_finite_outcomes_get_zero_weight():
     assert store.n_observations == 0
 
 
+def test_grouped_batch_keeps_parameter_and_component_fixed_within_group():
+    store = _fake_store(n_rows=5, n_sims=11)
+    x, b, w = store.grouped_batch(np.random.default_rng(3), 7, 6)
+    assert x.shape == (7, 4) and b.shape == w.shape == (7, 6)
+    assert np.all(w == 1)
+    possible = {tuple(row) for row in np.concatenate([store.design, store.mirrored])}
+    assert all(tuple(row) in possible for row in x)
+
+
+def test_mixed_grouped_batch_uses_requested_augmentation_fraction():
+    from continuous_density import train
+    primary = _fake_store(n_rows=4, n_sims=3)
+    augmentation = _fake_store(n_rows=4, n_sims=3, seed=1)
+    primary.bias[:] = 1.
+    augmentation.bias[:] = 2.
+    _, bias, _ = train.mixed_grouped_batch(
+        primary, augmentation, .25, np.random.default_rng(0), 20, 5)
+    assert np.sum(np.all(bias == 2., axis=1)) == 5
+    assert np.sum(np.all(bias == 1., axis=1)) == 15
+
+
 def test_split_is_by_parameter_triple_not_by_simulation():
     design = np.repeat(np.array([[10., 20., 30., 4.], [50., 60., 70., 8.]],
                                 dtype=np.float32), 5, axis=0)

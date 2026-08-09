@@ -70,6 +70,18 @@ class SampleStore:
         w = self.finite[m, j, c].astype(np.float32)
         return x, np.nan_to_num(b).astype(np.float32), w
 
+    def grouped_batch(self, rng: np.random.Generator, n_groups: int,
+                      outcomes_per_group: int
+                      ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Draw parameter/component groups with several raw outcomes per group."""
+        m = rng.integers(0, self.bias.shape[0], n_groups)
+        c = rng.integers(0, 2, n_groups)
+        j = rng.integers(0, self.bias.shape[1], (n_groups, outcomes_per_group))
+        x = np.where(c[:, None] == 0, self.design[m], self.mirrored[m])
+        b = self.bias[m[:, None], j, c[:, None]]
+        w = self.finite[m[:, None], j, c[:, None]].astype(np.float32)
+        return x, np.nan_to_num(b).astype(np.float32), w
+
     def all_rows(self) -> Tuple[np.ndarray, np.ndarray]:
         """Every finite observation as flat ``(x, b)`` arrays. Use on small stores."""
         x = np.concatenate([
