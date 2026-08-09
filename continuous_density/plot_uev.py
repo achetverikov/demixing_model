@@ -24,6 +24,7 @@ from continuous_density import data as data_mod
 from continuous_density import design as design_mod
 from continuous_density import evaluate
 from continuous_density import wrapped_mixture_model as wm
+from shared.mu1_axis import mu1_grid_np
 
 COMP_COLORS = {1: '#1d4ed8', 2: '#c2410c'}
 METHOD_LS = {'raw 100k': '-', 'conditional density': '--',
@@ -75,22 +76,30 @@ def build_summary(model_path: Path, reference_path: Path,
             np.concatenate([store.bias, extension.bias]))
 
     frames = []
+    asym_grid = mu1_grid_np().astype(np.float32)
     for component in (0, 1):
         params = store.design if component == 0 else np.asarray(wm.mirror_params(store.design))
-        raw_mean_parts, raw_sd_parts = [], []
+        raw_mean_parts, raw_sd_parts, raw_asym_parts = [], [], []
         for start in range(0, store.n_rows, 32):
-            moments = evaluate.empirical_moments(
-                store.bias[start:start + 32, :, component])
+            bias = store.bias[start:start + 32, :, component]
+            moments = evaluate.empirical_moments(bias)
             raw_mean_parts.append(moments['mean_bias'])
             raw_sd_parts.append(moments['circ_sd'])
+            ref_density = evaluate.reference_density(bias, asym_grid)
+            raw_asym_parts.append(evaluate.density_asymmetry(
+                evaluate.safe_log(ref_density).T))
         raw_mean = np.concatenate(raw_mean_parts)
         raw_sd = np.concatenate(raw_sd_parts)
-        values = [('raw 100k', raw_mean, raw_sd)]
+        raw_asym = np.concatenate(raw_asym_parts)
+        values = [('raw 100k', raw_mean, raw_sd, raw_asym)]
         for label, density_model, density_variables in density_models:
             dist = density_model.apply(density_variables, jnp.asarray(params))
             pred_mean = np.asarray(wm.mean_and_resultant(dist)[0])
             pred_sd = np.asarray(wm.circular_sd(dist))
-            values.append((label, pred_mean, pred_sd))
+            log_density = evaluate.model_logdensity_grid(
+                density_model, density_variables, params, asym_grid)
+            pred_asym = evaluate.density_asymmetry(log_density.T)
+            values.append((label, pred_mean, pred_sd, pred_asym))
         if checkpoint is not None:
             triples, inverse = np.unique(params[:, :3], axis=0, return_inverse=True)
             surfaces = production_predict(np.column_stack([triples, np.zeros(len(triples))]))
@@ -101,16 +110,18 @@ def build_summary(model_path: Path, reference_path: Path,
                       * comparison.mu1_cell_width())
             prod_r = np.clip(np.abs(moment), 1e-12, 1.0)
             values.append(('production NN', np.degrees(np.angle(moment)),
-                           np.degrees(np.sqrt(-2.0 * np.log(prod_r)))))
+                           np.degrees(np.sqrt(-2.0 * np.log(prod_r))),
+                           evaluate.density_asymmetry(profiles.T)))
         common = pd.DataFrame({
             'sd_feat1': store.design[:, 0], 'sd_feat2': store.design[:, 1],
             'sd_ident': store.design[:, 2], 'spat_dprime': _dprime(store.design[:, 2]),
             'dist_feat': store.design[:, 3], 'which_comp': component + 1})
-        for method, mean_bias, response_sd in values:
+        for method, mean_bias, response_sd, density_asymmetry in values:
             frame = common.copy()
             frame['method'] = method
             frame['mean_bias'] = mean_bias
             frame['response_sd'] = response_sd
+            frame['density_asymmetry'] = density_asymmetry
             frames.append(frame)
     return pd.concat(frames, ignore_index=True)
 
@@ -179,7 +190,9 @@ def plot_averaged_uev(df: pd.DataFrame, dprime: float, out: Path,
                       metric: str = 'mean_bias'):
     """UEV curves averaged over available higher-noise levels."""
     labels = {'mean_bias': ('Mean bias, °', 'Mean bias'),
-              'response_sd': ('Circular response SD, °', 'Response variability')}
+              'response_sd': ('Circular response SD, °', 'Response variability'),
+              'density_asymmetry': ('P(bias > 0) − P(bias < 0)',
+                                    'Density asymmetry')}
     ylabel, metric_title = labels[metric]
     sub = df[(df.sd_feat2 > df.sd_feat1) & np.isclose(df.spat_dprime, dprime)]
     agg = sub.groupby(['sd_feat1', 'dist_feat', 'which_comp', 'method'], as_index=False).agg(
@@ -220,14 +233,21 @@ def plot_averaged_uev(df: pd.DataFrame, dprime: float, out: Path,
     plt.close(fig)
 
 
-def plot_averaged_bias_residual(df: pd.DataFrame, dprime: float, out: Path):
-    """Plot signed model-minus-raw bias error, averaged over higher-noise levels."""
+def plot_averaged_residual(df: pd.DataFrame, dprime: float, out: Path,
+                           metric: str = 'mean_bias'):
+    """Plot signed model-minus-raw error, averaged over higher-noise levels."""
+    labels = {
+        'mean_bias': ('bias', '°'),
+        'density_asymmetry': ('density asymmetry', ''),
+    }
+    metric_label, unit = labels[metric]
+    unit_suffix = f', {unit}' if unit else ''
     sub = df[(df.sd_feat2 > df.sd_feat1) & np.isclose(df.spat_dprime, dprime)]
     keys = ['sd_feat1', 'sd_feat2', 'dist_feat', 'which_comp']
-    raw = sub[sub.method == 'raw 100k'][keys + ['mean_bias']].rename(
-        columns={'mean_bias': 'raw_bias'})
+    raw = sub[sub.method == 'raw 100k'][keys + [metric]].rename(
+        columns={metric: 'raw_value'})
     residual = sub[sub.method != 'raw 100k'].merge(raw, on=keys)
-    residual['error'] = residual.mean_bias - residual.raw_bias
+    residual['error'] = residual[metric] - residual.raw_value
     agg = residual.groupby(
         ['sd_feat1', 'dist_feat', 'which_comp', 'method'], as_index=False
     ).agg(error=('error', 'mean'))
@@ -247,7 +267,7 @@ def plot_averaged_bias_residual(df: pd.DataFrame, dprime: float, out: Path):
                         linestyle=METHOD_LS[method], linewidth=1.5)
         ax.set(xlabel='Feature dissimilarity, °', title=title)
         ax.grid(True, color='#e5e7eb', linewidth=.6)
-    axes[0].set_ylabel('Approximated bias − raw 100k bias, °')
+    axes[0].set_ylabel(f'Approximated {metric_label} − raw 100k{unit_suffix}')
     high_noise = agg[agg.which_comp == 2]
     worst = high_noise.groupby(['sd_feat1', 'method'], as_index=False).agg(
         error=('error', 'min'))
@@ -258,10 +278,10 @@ def plot_averaged_bias_residual(df: pd.DataFrame, dprime: float, out: Path):
                      linestyle=METHOD_LS[method], marker='o', linewidth=1.5,
                      markersize=3.5)
     axes[2].set(xlabel='Lower feature-noise SD, °',
-                ylabel='Largest signed error, °',
+                ylabel=f'Largest signed error{unit_suffix}',
                 title='Higher-noise item\npeak undershoot')
     axes[2].grid(True, color='#e5e7eb', linewidth=.6)
-    fig.suptitle(f'Signed mean-bias error: spatial d′={dprime:g} '
+    fig.suptitle(f'Signed {metric_label} error: spatial d′={dprime:g} '
                  f'(sd_ident={design_mod.UEV_SPAT_DIFF / dprime:g}°)\n'
                  'negative values indicate approximation undershoot')
     noise_handles = [mlines.Line2D([], [], color=colors[i], lw=2,
@@ -316,9 +336,17 @@ def main():
             summary, dprime,
             args.out_dir / f'uev_response_sd_averaged_dprime_{suffix}.png',
             metric='response_sd')
-        plot_averaged_bias_residual(
+        plot_averaged_uev(
+            summary, dprime,
+            args.out_dir / f'uev_density_asymmetry_averaged_dprime_{suffix}.png',
+            metric='density_asymmetry')
+        plot_averaged_residual(
             summary, dprime,
             args.out_dir / f'uev_bias_residual_averaged_dprime_{suffix}.png')
+        plot_averaged_residual(
+            summary, dprime,
+            args.out_dir / f'uev_density_asymmetry_residual_averaged_dprime_{suffix}.png',
+            metric='density_asymmetry')
         print(f'wrote UEV figures for spatial d′={dprime:g}')
 
 
