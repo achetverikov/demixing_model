@@ -17,6 +17,10 @@ FEAT_DIFF_BOUNDS = (2.0, 180.0)
 
 PARAM_NAMES = ('sd_feat1', 'sd_feat2', 'sd_ident', 'feat_diff')
 
+#: Fixed separation passed to the production simulator.  Keep this distinct
+#: from the historical 40-degree convention used to label the UEV figures.
+SIM_SPAT_DIFF = 42.0
+
 # Grid used by the unequal-encoding-variability figures.  Only canonical
 # ``sd_feat1 <= sd_feat2`` pairs are simulated because each run already returns
 # both component biases.
@@ -46,6 +50,61 @@ def sobol_design(n_points: int, seed: int = 0, sd_scale: str = 'log',
     d_lo, d_hi = feat_diff_bounds
     feat_diff = d_lo + u[:, 3] * (d_hi - d_lo)
     return np.column_stack([sd, feat_diff]).astype(np.float32)
+
+
+def trajectory_training_design(n_trajectories: int, points_per_trajectory: int,
+                               seed: int = 0, sd_scale: str = 'log'
+                               ) -> Tuple[np.ndarray, List[str]]:
+    """Space-filling SD triples crossed with coherent ``feat_diff`` curves.
+
+    This retains continuous/off-grid SD coverage while giving the network
+    repeated local information along the feature-difference direction.  Labels
+    identify CRN and validation groups; they are not training targets.
+    """
+    if n_trajectories < 1 or points_per_trajectory < 2:
+        raise ValueError('need at least one trajectory and two points per trajectory')
+    # Reuse the established scaling logic; a Sobol projection remains
+    # space-filling after its unused fourth coordinate is discarded.
+    triples = sobol_design(n_trajectories, seed=seed, sd_scale=sd_scale)[:, :3]
+    feat = np.linspace(*FEAT_DIFF_BOUNDS, points_per_trajectory, dtype=np.float64)
+    design = np.column_stack([
+        np.repeat(triples, points_per_trajectory, axis=0),
+        np.tile(feat, n_trajectories),
+    ]).astype(np.float32)
+    labels = [f'train_trajectory_{i:05d}'
+              for i in range(n_trajectories)
+              for _ in range(points_per_trajectory)]
+    return design, labels
+
+
+def low_dprime_trajectory_design(n_curves: int = 24, points_per_curve: int = 45,
+                                 seed: int = 0) -> Tuple[np.ndarray, List[str]]:
+    """Fresh off-grid low-d-prime trajectories for selection or final testing.
+
+    The design uses the simulator's actual 42-degree separation.  Feature-noise
+    ratios span similar through strongly unequal conditions without reproducing
+    the canonical UEV grid used during development.
+    """
+    if n_curves < 1 or points_per_curve < 2:
+        raise ValueError('need at least one curve and two points per curve')
+    u = qmc.Sobol(d=4, scramble=True, seed=seed).random(n_curves)
+    log_u = lambda z, lo, hi: np.exp(np.log(lo) + z * (np.log(hi) - np.log(lo)))
+    low = log_u(u[:, 0], 7., 70.)
+    ratio = log_u(u[:, 1], 1.15, 5.)
+    # Stay off the old 5-degree grid even when the unequal-noise arm reaches
+    # the upper domain boundary.
+    sd1, sd2 = low, np.minimum(low * ratio, SD_BOUNDS[1] - .37)
+    dprime = .3 + u[:, 2] * .55
+    sd_ident = SIM_SPAT_DIFF / dprime
+    triples = np.column_stack([sd1, sd2, sd_ident])
+    feat = np.linspace(*FEAT_DIFF_BOUNDS, points_per_curve, dtype=np.float64)
+    design = np.column_stack([
+        np.repeat(triples, points_per_curve, axis=0),
+        np.tile(feat, n_curves),
+    ]).astype(np.float32)
+    labels = [f'low_dprime_trajectory_{i:03d}'
+              for i in range(n_curves) for _ in range(points_per_curve)]
+    return design, labels
 
 
 def low_dprime_augmentation_design(n_points: int, seed: int = 0):

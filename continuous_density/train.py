@@ -75,6 +75,49 @@ def evaluate_mixed(loss_fn, variables, primary, augmentation,
     return total / n_batches
 
 
+def trajectory_validation_metrics(model, variables, store, labels, n_wraps=4):
+    """Raw-NLL and maximum moment errors on fixed labeled trajectories."""
+    from continuous_density import evaluate as evaluate_mod
+
+    labels = np.asarray(labels)
+    if labels.shape != (store.n_rows,):
+        raise ValueError('trajectory labels must match reference rows')
+    group_nll, mean_errors, sd_errors, group_names = [], [], [], []
+    for component in (0, 1):
+        params = (store.design if component == 0 else
+                  np.asarray(wm.mirror_params(store.design)))
+        bias = store.bias[:, :, component]
+        nll, _ = evaluate_mod.model_case_nll(
+            model, variables, params, bias, n_wraps=n_wraps,
+            case_block=16, chunk=min(2000, bias.shape[1]))
+        empirical = evaluate_mod.empirical_moments(bias)
+        dist = model.apply(variables, jnp.asarray(params))
+        pred_mean, _ = wm.mean_and_resultant(dist)
+        pred_sd = wm.circular_sd(dist)
+        mean_error = np.abs(np.asarray(wm.wrap_deg(
+            np.asarray(pred_mean) - empirical['mean_bias'])))
+        sd_error = np.abs(np.asarray(pred_sd) - empirical['circ_sd'])
+        for label in np.unique(labels):
+            keep = labels == label
+            group_nll.append(float(np.nanmean(nll[keep])))
+            mean_errors.append(float(np.nanmax(mean_error[keep])))
+            sd_errors.append(float(np.nanmax(sd_error[keep])))
+            group_names.append(f'{label}:component{component + 1}')
+
+    worst_nll = int(np.nanargmax(group_nll))
+    worst_mean = int(np.nanargmax(mean_errors))
+    worst_sd = int(np.nanargmax(sd_errors))
+    return {
+        'trajectory_nll': float(np.nanmean(group_nll)),
+        'worst_trajectory_nll': float(group_nll[worst_nll]),
+        'worst_trajectory_nll_group': group_names[worst_nll],
+        'max_mean_error': float(mean_errors[worst_mean]),
+        'max_mean_error_group': group_names[worst_mean],
+        'max_sd_error': float(sd_errors[worst_sd]),
+        'max_sd_error_group': group_names[worst_sd],
+    }
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -100,14 +143,28 @@ def main():
     p.add_argument('--corpus-files', type=int, default=800)
     p.add_argument('--corpus-sims', type=int, default=400)
     p.add_argument('--seed', type=int, default=0)
+    p.add_argument('--selection-reference', type=Path, default=None,
+                   help='modest raw trajectory NPZ used during checkpoint selection')
+    p.add_argument('--selection-every', type=int, default=2000,
+                   help='steps between trajectory-reference evaluations')
+    p.add_argument('--checkpoint-metric', choices=['val-nll', 'trajectory-nll'],
+                   default='val-nll',
+                   help='metric minimized when retaining the best checkpoint')
     args = p.parse_args()
     if not 0. <= args.augmentation_fraction <= 1.:
         p.error('--augmentation-fraction must lie in [0,1]')
+    if args.checkpoint_metric == 'trajectory-nll' and not args.selection_reference:
+        p.error('--checkpoint-metric trajectory-nll requires --selection-reference')
+    if args.selection_every < 1 or args.selection_every % args.eval_every:
+        p.error('--selection-every must be a positive multiple of --eval-every')
 
     print(f"Loading {args.source} ...", flush=True)
     store, source_meta = data_mod.load_source(
         args.source, corpus_files=args.corpus_files, corpus_sims=args.corpus_sims,
         seed=args.seed, progress=True)
+    source_strata = source_meta.pop('strata', None)
+    if source_strata:
+        source_meta['n_trajectory_labels'] = len(set(source_strata))
     train_store, val_store = data_mod.split_by_params(
         store, args.val_fraction, seed=args.seed)
     print(f"{store.n_rows} parameter rows, {store.n_observations:,} finite outcomes; "
@@ -117,6 +174,9 @@ def main():
     augmentation_meta = None
     if args.augmentation:
         augmentation, augmentation_meta = data_mod.load_source(args.augmentation)
+        augmentation_strata = augmentation_meta.pop('strata', None)
+        if augmentation_strata:
+            augmentation_meta['n_trajectory_labels'] = len(set(augmentation_strata))
         augmentation_train, augmentation_val = data_mod.split_by_params(
             augmentation, args.val_fraction, seed=args.seed)
         data_mod.require_matching_n_samples(
@@ -124,6 +184,17 @@ def main():
         print(f"augmentation: {augmentation.n_rows} parameter rows, "
               f"{augmentation.n_observations:,} finite outcomes; sampling "
               f"{args.augmentation_fraction:.0%} per batch")
+
+    selection_store = selection_labels = selection_meta = None
+    if args.selection_reference:
+        selection_store, selection_meta = data_mod.load_source(args.selection_reference)
+        selection_labels = selection_meta.pop('strata', None)
+        if not selection_labels:
+            raise ValueError('--selection-reference must contain trajectory labels')
+        selection_meta['n_trajectory_labels'] = len(set(selection_labels))
+        data_mod.require_matching_n_samples({'source_meta': source_meta}, selection_meta)
+        print(f'selection reference: {selection_store.n_rows} rows x '
+              f'{selection_store.bias.shape[1]} simulations')
 
     if args.init_model:
         model, variables, init_meta = wm.load_model(args.init_model)
@@ -172,19 +243,34 @@ def main():
                 args.eval_batches, args.batch_size)
             history.append({'step': step, 'train_nll': float(loss),
                             'val_nll': val_nll})
-            if val_nll < best[0]:
-                best = (val_nll, jax.tree.map(np.array, variables))
-            print(f"step {step:6d}  train {float(loss):8.4f}  val {val_nll:8.4f}  "
-                  f"({time.time() - t0:.0f}s)", flush=True)
+            trajectory_metrics = None
+            if (selection_store is not None and
+                    (step % args.selection_every == 0 or step == args.steps)):
+                trajectory_metrics = trajectory_validation_metrics(
+                    model, variables, selection_store, selection_labels, args.n_wraps)
+                history[-1].update(trajectory_metrics)
+            score = (val_nll if args.checkpoint_metric == 'val-nll' else
+                     (trajectory_metrics['trajectory_nll']
+                      if trajectory_metrics else np.inf))
+            if score < best[0]:
+                best = (score, jax.tree.map(np.array, variables))
+            detail = ''
+            if trajectory_metrics:
+                detail = (f"  trajectory {trajectory_metrics['trajectory_nll']:.4f}"
+                          f"  max-mean {trajectory_metrics['max_mean_error']:.3f}"
+                          f"  max-sd {trajectory_metrics['max_sd_error']:.3f}")
+            print(f"step {step:6d}  train {float(loss):8.4f}  val {val_nll:8.4f}"
+                  f"{detail}  ({time.time() - t0:.0f}s)", flush=True)
 
     meta = dict(vars(args) | {'out': str(args.out), 'source_meta': source_meta,
                               'augmentation_meta': augmentation_meta,
-                              'best_val_nll': best[0], 'history': history,
+                              'selection_meta': selection_meta,
+                              'best_checkpoint_score': best[0], 'history': history,
                               'n_network_params': n_params,
                               'train_seconds': time.time() - t0})
     meta = json.loads(json.dumps(meta, default=str))
     wm.save_model(args.out, best[1], model, meta)
-    print(f"Best held-out NLL {best[0]:.4f}; saved {args.out} "
+    print(f"Best {args.checkpoint_metric} {best[0]:.4f}; saved {args.out} "
           f"({args.out.stat().st_size / 1e3:.0f} kB)")
 
 

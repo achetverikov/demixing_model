@@ -16,6 +16,7 @@ import pytest
 
 from continuous_density import compare_existing_model as cmp
 from continuous_density import data as data_mod
+from continuous_density import design as design_mod
 from continuous_density import evaluate as ev
 from continuous_density import wrapped_mixture_model as wm
 from shared.mu1_axis import mu1_cell_width, mu1_grid_np, mu1_size
@@ -238,3 +239,23 @@ def test_validation_coverage_reports_missing_behaviours():
     assert coverage.loc['attraction (mean bias > 1 deg)', 'n_cases'] == 1
     assert coverage.loc['repulsion (mean bias < -1 deg)', 'n_cases'] == 1
     assert coverage.loc['multimodal reference', 'n_cases'] == 1
+
+
+def test_training_trajectory_metrics_report_maxima_and_group_names():
+    from continuous_density import train
+
+    model, variables = _model(k=4)
+    design, labels = design_mod.low_dprime_trajectory_design(2, 3, seed=3)
+    dist = model.apply(variables, jnp.asarray(design))
+    mean, _ = wm.mean_and_resultant(dist)
+    rng = np.random.default_rng(5)
+    comp1 = np.asarray(mean)[:, None] + rng.normal(0, 5, (len(design), 40))
+    mirrored = np.asarray(wm.mirror_params(design))
+    mean2, _ = wm.mean_and_resultant(model.apply(variables, jnp.asarray(mirrored)))
+    comp2 = np.asarray(mean2)[:, None] + rng.normal(0, 7, (len(design), 40))
+    store = data_mod.SampleStore(design, np.stack([comp1, comp2], axis=-1))
+    got = train.trajectory_validation_metrics(model, variables, store, labels)
+    assert np.isfinite(got['trajectory_nll'])
+    assert got['worst_trajectory_nll'] >= got['trajectory_nll']
+    assert got['max_mean_error'] >= 0 and got['max_sd_error'] >= 0
+    assert ':component' in got['max_mean_error_group']

@@ -46,6 +46,10 @@ Validation has two complementary raw-simulation designs:
 - `trajectories`: off-grid perturbations of previously identified peaked, flat,
   seam, asymmetric, and multimodal SD regimes, each evaluated along a fixed-SD
   `feat_diff` trajectory including 2° and 180°.
+- `low-dprime-trajectories`: independently seeded off-grid feature-noise pairs
+  at actual simulator spatial d′ 0.3–0.85, crossed with complete `feat_diff`
+  curves. This design supports a modest checkpoint-selection set and a separate
+  high-simulation final test.
 
 Earlier `results/mu1_experiments` work showed why both are needed: feature-axis
 KDE pooling was the dominant old-pipeline distortion, especially at the
@@ -70,6 +74,45 @@ export DEMIXING_ARTIFACT_ROOT=/workspaces/demixing_model/results
 export PYTHONPATH=.
 PY=/workspaces/.venv/bin/python
 mkdir -p "$DEMIXING_ARTIFACT_ROOT/continuous_density"
+
+# Revised controlled experiment: coherent trajectories rather than isolated
+# 4-D points. Here --n-points is the number of SD triples, so this creates
+# 2,048 x 45 = 92,160 parameter rows. CRN is shared within, not between, curves.
+$PY continuous_density/generate_training_data.py \
+  --training-design trajectories --n-points 2048 --trajectory-points 45 \
+  --n-simulations 500 --n-samples 100 --crn-within-trajectories \
+  --block-rows 8 --simulation-chunk 500 --shard-rows 32 --resume \
+  --seed 731 --design-seed 731 \
+  --out "$DEMIXING_ARTIFACT_ROOT/continuous_density/train_trajectories_2k_45x500.npz"
+
+# Modest fixed selection set. It is evaluated during training and must not be
+# reused as the final high-simulation test set.
+$PY continuous_density/generate_training_data.py --validation \
+  --validation-design low-dprime-trajectories \
+  --trajectory-curves 24 --trajectory-points 45 \
+  --n-simulations 2000 --n-samples 100 --crn-within-trajectories \
+  --block-rows 4 --simulation-chunk 500 --shard-rows 16 --resume \
+  --seed 811 --design-seed 811 \
+  --out "$DEMIXING_ARTIFACT_ROOT/continuous_density/selection_lowd_24x45_2k.npz"
+
+# Train from scratch. Equal-trajectory-weighted raw NLL selects the checkpoint;
+# the log prints the largest mean-bias and response-SD deviations, not only MAE.
+$PY continuous_density/train.py \
+  --source "$DEMIXING_ARTIFACT_ROOT/continuous_density/train_trajectories_2k_45x500.npz" \
+  --selection-reference "$DEMIXING_ARTIFACT_ROOT/continuous_density/selection_lowd_24x45_2k.npz" \
+  --checkpoint-metric trajectory-nll --selection-every 2000 \
+  --components 12 --steps 20000 --batch-size 8192 --seed 37 \
+  --out "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_trajectory_design.pkl"
+
+# Generate this independently only after the model/training choices are frozen.
+# Conservative device chunks avoid repeating the earlier GPU OOM failure.
+$PY continuous_density/generate_training_data.py --validation \
+  --validation-design low-dprime-trajectories \
+  --trajectory-curves 16 --trajectory-points 90 \
+  --n-simulations 100000 --n-samples 100 --block-rows 1 \
+  --simulation-chunk 1000 --shard-rows 8 --resume \
+  --seed 991 --design-seed 991 \
+  --out "$DEMIXING_ARTIFACT_ROOT/continuous_density/test_lowd_16x90_100k.npz"
 
 # Moderate continuous training set (raise sizes after the smoke run succeeds).
 $PY continuous_density/generate_training_data.py \
@@ -123,8 +166,9 @@ for SEED in 314159 271828; do
     --out "$DEMIXING_ARTIFACT_ROOT/continuous_density/validation_trajectories_${SEED}.npz"
 done
 
-# Structured unequal-encoding-variability curves. Spatial d' = 40 / sd_ident;
-# canonical feature-SD pairs retain both component curves without duplication.
+# Structured unequal-encoding-variability regression curves. Their labels retain
+# the historical nominal convention d' = 40 / sd_ident, while generated metadata
+# records that the production simulator itself uses a 42-degree separation.
 $PY continuous_density/generate_training_data.py --validation \
   --validation-design uev --uev-feature-step 2 \
   --n-simulations 100000 --n-samples 100 --block-rows 4 \

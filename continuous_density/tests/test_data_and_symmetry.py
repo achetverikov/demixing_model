@@ -39,6 +39,28 @@ def test_sobol_design_covers_the_domain():
     assert on_grid < 0.01
 
 
+def test_trajectory_training_design_crosses_sd_triples_with_complete_curves():
+    d, labels = design_mod.trajectory_training_design(8, 13, seed=9)
+    assert d.shape == (104, 4) and len(labels) == 104
+    assert len(set(labels)) == 8
+    for label in set(labels):
+        block = d[np.asarray(labels) == label]
+        assert len(block) == 13
+        assert np.all(block[:, :3] == block[0, :3])
+        assert block[0, 3] == pytest.approx(2.)
+        assert block[-1, 3] == pytest.approx(180.)
+    assert np.mean(np.isclose(d[:, :3] % 5., 0., atol=1e-3)) < .01
+
+
+def test_low_dprime_trajectory_design_uses_actual_simulator_separation():
+    d, labels = design_mod.low_dprime_trajectory_design(8, 11, seed=7)
+    assert d.shape == (88, 4) and len(set(labels)) == 8
+    dprime = design_mod.SIM_SPAT_DIFF / d[:, 2]
+    assert dprime.min() >= .3 and dprime.max() <= .85
+    assert np.all(d[:, 0] < d[:, 1])
+    assert not np.any(np.isclose(d[:, :3] % 5., 0., atol=1e-3))
+
+
 def test_low_dprime_augmentation_design_targets_off_grid_unequal_noise():
     d = design_mod.low_dprime_augmentation_design(512, seed=4)
     assert d.shape == (512, 4)
@@ -143,6 +165,15 @@ def test_simulation_keys_are_shard_invariant_and_crn_aware():
     later = np.asarray(sim_interface.simulation_keys(
         key, 1, common_random_numbers=True, simulation_offset=500))
     assert not np.array_equal(crn[0], later[0])
+
+    grouped = np.asarray(sim_interface.simulation_keys(
+        key, 5, common_random_groups=np.array([2, 2, 8, 8, 9]),
+        simulation_offset=250))
+    assert np.array_equal(grouped[0], grouped[1])
+    assert np.array_equal(grouped[2], grouped[3])
+    assert not np.array_equal(grouped[0], grouped[2])
+    with pytest.raises(ValueError, match='shape'):
+        sim_interface.simulation_keys(key, 5, common_random_groups=np.array([1, 2]))
 
 
 def test_label_cases_finds_two_modes():

@@ -84,7 +84,7 @@ def main():
     p.add_argument('--out', required=True, type=Path)
     p.add_argument('--n-points', type=int, default=4000,
                    help='design points (training mode)')
-    p.add_argument('--training-design', choices=['sobol', 'low-dprime'],
+    p.add_argument('--training-design', choices=['sobol', 'low-dprime', 'trajectories'],
                    default='sobol', help='training design when --validation is absent')
     p.add_argument('--n-simulations', type=int, default=200,
                    help='EM runs per design point')
@@ -92,7 +92,8 @@ def main():
                    help="observer's internal evidence samples per trial (20 or 100)")
     p.add_argument('--validation', action='store_true',
                    help='use an off-grid validation design instead of training Sobol')
-    p.add_argument('--validation-design', choices=['points', 'trajectories', 'uev'],
+    p.add_argument('--validation-design',
+                   choices=['points', 'trajectories', 'low-dprime-trajectories', 'uev'],
                    default='points',
                    help='scattered points, difficult trajectories, or the UEV figure grid')
     p.add_argument('--per-stratum', type=int, default=12)
@@ -103,6 +104,8 @@ def main():
     p.add_argument('--fix-weights', action='store_true')
     p.add_argument('--crn', action='store_true',
                    help='common random numbers across design rows')
+    p.add_argument('--crn-within-trajectories', action='store_true',
+                   help='reuse random streams only within each labeled trajectory')
     p.add_argument('--block-rows', type=int, default=1,
                    help='design rows simultaneously processed on device')
     p.add_argument('--simulation-chunk', type=int, default=250,
@@ -129,12 +132,18 @@ def main():
         p.error('--progress-every cannot be negative')
     if args.block_rows > args.shard_rows:
         p.error('--block-rows cannot exceed --shard-rows')
+    if args.crn and args.crn_within_trajectories:
+        p.error('--crn and --crn-within-trajectories are mutually exclusive')
 
+    strata = None
     if args.validation:
         if args.validation_design == 'points':
             design, strata = design_mod.validation_design(args.per_stratum, seed=design_seed)
         elif args.validation_design == 'trajectories':
             design, strata = design_mod.stress_trajectory_design(
+                args.trajectory_curves, args.trajectory_points, seed=design_seed)
+        elif args.validation_design == 'low-dprime-trajectories':
+            design, strata = design_mod.low_dprime_trajectory_design(
                 args.trajectory_curves, args.trajectory_points, seed=design_seed)
         else:
             design, strata = design_mod.uev_design(args.uev_feature_step)
@@ -142,13 +151,24 @@ def main():
         if args.training_design == 'sobol':
             design = design_mod.sobol_design(args.n_points, seed=design_seed,
                                              sd_scale=args.sd_scale)
-        else:
+        elif args.training_design == 'low-dprime':
             design = design_mod.low_dprime_augmentation_design(
                 args.n_points, seed=design_seed)
-        strata = None
+            strata = None
+        else:
+            design, strata = design_mod.trajectory_training_design(
+                args.n_points, args.trajectory_points, seed=design_seed,
+                sd_scale=args.sd_scale)
+
+    crn_groups = None
+    if args.crn_within_trajectories:
+        if not strata:
+            p.error('--crn-within-trajectories requires a trajectory design')
+        _, crn_groups = np.unique(np.asarray(strata), return_inverse=True)
 
     print(f"Design: {design.shape[0]} points x {args.n_simulations} simulations "
           f"(n_samples={args.n_samples}, crn={args.crn}, "
+          f"trajectory_crn={args.crn_within_trajectories}, "
           f"device chunk <= {args.block_rows} rows x {args.simulation_chunk} simulations)")
     t0 = time.time()
     base_key = jax.random.PRNGKey(args.seed + 1)
@@ -160,6 +180,7 @@ def main():
         'n_rows': len(design), 'n_simulations': args.n_simulations,
         'n_samples': args.n_samples, 'fix_weights': args.fix_weights,
         'crn': args.crn, 'seed': args.seed, 'design_seed': design_seed,
+        'crn_within_trajectories': args.crn_within_trajectories,
         'shard_rows': args.shard_rows,
         'simulation_chunk': args.simulation_chunk,
     }
@@ -192,7 +213,10 @@ def main():
                     n_samples=args.n_samples, fix_weights=args.fix_weights,
                     common_random_numbers=args.crn,
                     block_rows=min(args.block_rows, len(expected)), progress=False,
-                    row_offset=row_start, simulation_offset=sim_start), dtype=np.float32)
+                    row_offset=row_start, simulation_offset=sim_start,
+                    common_random_groups=(None if crn_groups is None else
+                                          crn_groups[row_start:row_stop])),
+                    dtype=np.float32)
                 _save_npz(path, args.compress, design=expected, bias=chunk_bias,
                           coordinates=coordinates)
                 action = 'saved'
@@ -212,6 +236,7 @@ def main():
                               'n_nonfinite': n_bad,
                               'effective_design_seed': design_seed,
                               'spat_diff': sim_interface.SPAT_DIFF,
+                              'dprime_definition': 'spat_diff / sd_ident',
                               'param_names': list(design_mod.PARAM_NAMES)})
     _save_npz(args.out, args.compress, design=design, bias=bias,
               strata=np.asarray(strata if strata else [], dtype=object),
