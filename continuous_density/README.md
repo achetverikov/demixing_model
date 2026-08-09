@@ -81,7 +81,7 @@ mkdir -p "$DEMIXING_ARTIFACT_ROOT/continuous_density"
 $PY continuous_density/generate_training_data.py \
   --training-design trajectories --n-points 2048 --trajectory-points 45 \
   --n-simulations 500 --n-samples 100 --crn-within-trajectories \
-  --block-rows 8 --simulation-chunk 500 --shard-rows 32 --resume \
+  --block-rows 32 --simulation-chunk 500 --shard-rows 32 --resume \
   --seed 731 --design-seed 731 \
   --out "$DEMIXING_ARTIFACT_ROOT/continuous_density/train_trajectories_2k_45x500.npz"
 
@@ -91,26 +91,27 @@ $PY continuous_density/generate_training_data.py --validation \
   --validation-design low-dprime-trajectories \
   --trajectory-curves 24 --trajectory-points 45 \
   --n-simulations 2000 --n-samples 100 --crn-within-trajectories \
-  --block-rows 4 --simulation-chunk 500 --shard-rows 16 --resume \
+  --block-rows 16 --simulation-chunk 500 --shard-rows 16 --resume \
   --seed 811 --design-seed 811 \
   --out "$DEMIXING_ARTIFACT_ROOT/continuous_density/selection_lowd_24x45_2k.npz"
 
 # Train from scratch. Equal-trajectory-weighted raw NLL selects the checkpoint;
-# the log prints the largest mean-bias and response-SD deviations, not only MAE.
+# the log prints the largest mean-bias and response-SD deviations for reference
+# curves with resultant >= 0.2. Raw unfiltered maxima remain in checkpoint history.
 $PY continuous_density/train.py \
   --source "$DEMIXING_ARTIFACT_ROOT/continuous_density/train_trajectories_2k_45x500.npz" \
   --selection-reference "$DEMIXING_ARTIFACT_ROOT/continuous_density/selection_lowd_24x45_2k.npz" \
   --checkpoint-metric trajectory-nll --selection-every 2000 \
-  --components 12 --steps 20000 --batch-size 8192 --seed 37 \
-  --out "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_trajectory_design.pkl"
+  --components 12 --hidden 128 256 256 --steps 20000 --batch-size 8192 --seed 37 \
+  --out "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_trajectory_design_large.pkl"
 
 # Generate this independently only after the model/training choices are frozen.
 # Conservative device chunks avoid repeating the earlier GPU OOM failure.
 $PY continuous_density/generate_training_data.py --validation \
   --validation-design low-dprime-trajectories \
   --trajectory-curves 16 --trajectory-points 90 \
-  --n-simulations 100000 --n-samples 100 --block-rows 1 \
-  --simulation-chunk 1000 --shard-rows 8 --resume \
+  --n-simulations 100000 --n-samples 100 --block-rows 4 \
+  --simulation-chunk 5000 --shard-rows 8 --resume \
   --seed 991 --design-seed 991 \
   --out "$DEMIXING_ARTIFACT_ROOT/continuous_density/test_lowd_16x90_100k.npz"
 

@@ -75,14 +75,16 @@ def evaluate_mixed(loss_fn, variables, primary, augmentation,
     return total / n_batches
 
 
-def trajectory_validation_metrics(model, variables, store, labels, n_wraps=4):
+def trajectory_validation_metrics(model, variables, store, labels, n_wraps=4,
+                                  min_resultant=.2):
     """Raw-NLL and maximum moment errors on fixed labeled trajectories."""
     from continuous_density import evaluate as evaluate_mod
 
     labels = np.asarray(labels)
     if labels.shape != (store.n_rows,):
         raise ValueError('trajectory labels must match reference rows')
-    group_nll, mean_errors, sd_errors, group_names = [], [], [], []
+    group_nll, mean_errors, sd_errors, identified_mean, identified_sd = [], [], [], [], []
+    group_names = []
     for component in (0, 1):
         params = (store.design if component == 0 else
                   np.asarray(wm.mirror_params(store.design)))
@@ -99,14 +101,21 @@ def trajectory_validation_metrics(model, variables, store, labels, n_wraps=4):
         sd_error = np.abs(np.asarray(pred_sd) - empirical['circ_sd'])
         for label in np.unique(labels):
             keep = labels == label
+            identified = keep & (empirical['resultant'] >= min_resultant)
             group_nll.append(float(np.nanmean(nll[keep])))
             mean_errors.append(float(np.nanmax(mean_error[keep])))
             sd_errors.append(float(np.nanmax(sd_error[keep])))
+            identified_mean.append(float(np.nanmax(mean_error[identified]))
+                                   if np.any(identified) else np.nan)
+            identified_sd.append(float(np.nanmax(sd_error[identified]))
+                                 if np.any(identified) else np.nan)
             group_names.append(f'{label}:component{component + 1}')
 
     worst_nll = int(np.nanargmax(group_nll))
     worst_mean = int(np.nanargmax(mean_errors))
     worst_sd = int(np.nanargmax(sd_errors))
+    worst_identified_mean = int(np.nanargmax(identified_mean))
+    worst_identified_sd = int(np.nanargmax(identified_sd))
     return {
         'trajectory_nll': float(np.nanmean(group_nll)),
         'worst_trajectory_nll': float(group_nll[worst_nll]),
@@ -115,6 +124,11 @@ def trajectory_validation_metrics(model, variables, store, labels, n_wraps=4):
         'max_mean_error_group': group_names[worst_mean],
         'max_sd_error': float(sd_errors[worst_sd]),
         'max_sd_error_group': group_names[worst_sd],
+        'moment_min_resultant': min_resultant,
+        'max_mean_error_identified': float(identified_mean[worst_identified_mean]),
+        'max_mean_error_identified_group': group_names[worst_identified_mean],
+        'max_sd_error_identified': float(identified_sd[worst_identified_sd]),
+        'max_sd_error_identified_group': group_names[worst_identified_sd],
     }
 
 
@@ -150,6 +164,8 @@ def main():
     p.add_argument('--checkpoint-metric', choices=['val-nll', 'trajectory-nll'],
                    default='val-nll',
                    help='metric minimized when retaining the best checkpoint')
+    p.add_argument('--moment-min-resultant', type=float, default=.2,
+                   help='minimum empirical resultant for interpretable max moment errors')
     args = p.parse_args()
     if not 0. <= args.augmentation_fraction <= 1.:
         p.error('--augmentation-fraction must lie in [0,1]')
@@ -157,6 +173,8 @@ def main():
         p.error('--checkpoint-metric trajectory-nll requires --selection-reference')
     if args.selection_every < 1 or args.selection_every % args.eval_every:
         p.error('--selection-every must be a positive multiple of --eval-every')
+    if not 0 <= args.moment_min_resultant <= 1:
+        p.error('--moment-min-resultant must lie in [0,1]')
 
     print(f"Loading {args.source} ...", flush=True)
     store, source_meta = data_mod.load_source(
@@ -247,7 +265,8 @@ def main():
             if (selection_store is not None and
                     (step % args.selection_every == 0 or step == args.steps)):
                 trajectory_metrics = trajectory_validation_metrics(
-                    model, variables, selection_store, selection_labels, args.n_wraps)
+                    model, variables, selection_store, selection_labels, args.n_wraps,
+                    args.moment_min_resultant)
                 history[-1].update(trajectory_metrics)
             score = (val_nll if args.checkpoint_metric == 'val-nll' else
                      (trajectory_metrics['trajectory_nll']
@@ -257,8 +276,9 @@ def main():
             detail = ''
             if trajectory_metrics:
                 detail = (f"  trajectory {trajectory_metrics['trajectory_nll']:.4f}"
-                          f"  max-mean {trajectory_metrics['max_mean_error']:.3f}"
-                          f"  max-sd {trajectory_metrics['max_sd_error']:.3f}")
+                          f"  max-mean[R] "
+                          f"{trajectory_metrics['max_mean_error_identified']:.3f}"
+                          f"  max-sd[R] {trajectory_metrics['max_sd_error_identified']:.3f}")
             print(f"step {step:6d}  train {float(loss):8.4f}  val {val_nll:8.4f}"
                   f"{detail}  ({time.time() - t0:.0f}s)", flush=True)
 

@@ -258,4 +258,7 @@ def test_training_trajectory_metrics_report_maxima_and_group_names():
     assert np.isfinite(got['trajectory_nll'])
     assert got['worst_trajectory_nll'] >= got['trajectory_nll']
     assert got['max_mean_error'] >= 0 and got['max_sd_error'] >= 0
+    assert got['max_mean_error_identified'] >= 0
+    assert got['max_sd_error_identified'] >= 0
+    assert got['moment_min_resultant'] == .2
     assert ':component' in got['max_mean_error_group']
