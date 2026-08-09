@@ -187,7 +187,8 @@ def plot_averaged_uev(df: pd.DataFrame, dprime: float, out: Path,
     sd1_vals = sorted(agg.sd_feat1.unique())
     blues = plt.cm.Blues(np.linspace(.45, .9, len(sd1_vals)))
     oranges = plt.cm.Oranges(np.linspace(.45, .9, len(sd1_vals)))
-    fig, ax = plt.subplots(figsize=(7, 4.5))
+    fig, ax = plt.subplots(figsize=(10, 4.8))
+    fig.subplots_adjust(left=.09, right=.68, bottom=.13, top=.88)
     if metric == 'mean_bias':
         ax.axhline(0, color='#9ca3af', linewidth=.8)
     for i, sd1 in enumerate(sd1_vals):
@@ -203,18 +204,19 @@ def plot_averaged_uev(df: pd.DataFrame, dprime: float, out: Path,
                  f'(sd_ident={design_mod.UEV_SPAT_DIFF / dprime:g}°)')
     ax.grid(True, color='#e5e7eb', linewidth=.6)
     color_handles = [mlines.Line2D([], [], color=blues[i], lw=2,
-                                  label=f'lower-noise σ={v:g}°')
+                                  label=f'lower-noise item, σ_low={v:g}°')
                      for i, v in enumerate(sd1_vals)]
     color_handles += [mlines.Line2D([], [], color=oranges[i], lw=2,
-                                   label=f'higher-noise item (σ_low={v:g}° group)')
+                                   label=f'higher-noise item, σ_low={v:g}°')
                       for i, v in enumerate(sd1_vals)]
     method_handles = [mlines.Line2D([], [], color='#555555', ls=METHOD_LS[m], lw=2,
                                    label=m) for m in df.method.unique()]
-    leg = ax.legend(handles=color_handles, loc='upper right', fontsize=7, ncol=2)
+    leg = ax.legend(handles=color_handles, loc='upper left',
+                    bbox_to_anchor=(1.01, 1.0), fontsize=7, ncol=1)
     ax.add_artist(leg)
-    ax.legend(handles=method_handles, loc='lower right', fontsize=8)
-    fig.tight_layout()
-    fig.savefig(out, dpi=180, bbox_inches='tight')
+    ax.legend(handles=method_handles, loc='lower left',
+              bbox_to_anchor=(1.01, 0.0), fontsize=8)
+    fig.savefig(out, dpi=180)
     plt.close(fig)
 
 
