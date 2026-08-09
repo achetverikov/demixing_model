@@ -192,15 +192,13 @@ $PY continuous_density/generate_training_data.py \
   --seed 271828 \
   --out "$DEMIXING_ARTIFACT_ROOT/continuous_density/validation_uev_highfeat_dprime2_100k_seed271828.npz"
 
-# Compare objective ablations on the development UEV curves. Each spatial d'
-# receives separate mean-bias, response-variability, density-asymmetry, and
-# signed residual figures. Negative residuals mean that the approximation
-# undershoots raw 100k.
+# Compare the retained density and production NN on the development UEV curves.
+# Each spatial d' receives separate mean-bias, response-variability,
+# density-asymmetry, and signed residual figures. Negative residuals mean that
+# the approximation undershoots raw 100k.
 $PY continuous_density/plot_uev.py \
   --model "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_trajectory_design_large.pkl" \
-  --model-label "trajectory NLL" \
-  --additional-model "moment w=2" "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_grouped_moment2.pkl" \
-  --additional-model "moment w=10" "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_grouped_moment10.pkl" \
+  --model-label "trajectory density" \
   --checkpoint pretrained/model_epoch1500_10ktrain_100samples.pkl \
   --reference "$DEMIXING_ARTIFACT_ROOT/continuous_density/validation_uev_100k_seed161803.npz" \
   --reference-extension "$DEMIXING_ARTIFACT_ROOT/continuous_density/validation_uev_highfeat_dprime2_100k_seed271828.npz" \

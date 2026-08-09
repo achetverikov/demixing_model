@@ -143,7 +143,9 @@ def plot_matrix(df: pd.DataFrame, dprime: float, out: Path,
     labels = {'mean_bias': ('mean bias, °', 'Mean bias'),
               'response_sd': ('circular response SD, °', 'Response variability')}
     ylabel, metric_title = labels[metric]
-    vals = sorted(df.sd_feat1.unique())
+    dprime_df = df[np.isclose(df.spat_dprime, dprime)]
+    vals = sorted(np.unique(np.concatenate([dprime_df.sd_feat1,
+                                             dprime_df.sd_feat2])))
     fig, axes = plt.subplots(len(vals), len(vals), figsize=(11.2, 9.6),
                              sharex=True, sharey=True)
     for row, sd1 in enumerate(vals):
