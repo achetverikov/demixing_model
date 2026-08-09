@@ -121,6 +121,15 @@ $PY continuous_density/plot_uev.py \
   --reference "$DEMIXING_ARTIFACT_ROOT/continuous_density/validation_uev_100k_seed161803.npz" \
   --out-dir "$DEMIXING_ARTIFACT_ROOT/continuous_density/uev_raw100k_vs_models"
 
+# Diagnose whether the worst UEV trough is limited by K=12 or global training.
+# Fits on half the raw outcomes and reports only held-out-half likelihoods.
+$PY continuous_density/diagnose_local_capacity.py \
+  --model "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_16k500.pkl" \
+  --checkpoint pretrained/model_epoch1500_10ktrain_100samples.pkl \
+  --reference "$DEMIXING_ARTIFACT_ROOT/continuous_density/validation_uev_100k_seed161803.npz" \
+  --summary "$DEMIXING_ARTIFACT_ROOT/continuous_density/uev_raw100k_vs_models/uev_raw100k_vs_models.csv" \
+  --out-dir "$DEMIXING_ARTIFACT_ROOT/continuous_density/uev_local_capacity"
+
 # Raw-reference metrics and repeat uncertainty; repeat for K=2,4,8,12 and both designs.
 $PY continuous_density/evaluate.py \
   --model "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k8.pkl" \

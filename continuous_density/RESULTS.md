@@ -94,6 +94,23 @@ was 0.414° for component 1 and 0.448° for component 2, falling to 0.051° and
 0.105° at d′=2. The same results directory contains separate response-SD grid
 and averaged plots for all three d′ levels.
 
+### Local capacity diagnostic
+
+The worst shared trajectory `(sd_feat1,sd_feat2,d′,component) =
+(30°,60°,0.5,2)` was refit using the first 50k raw outcomes at every
+dissimilarity and evaluated on the untouched other 50k. A local fine-tune of
+the existing K=12 MLP reduced maximum mean-bias error from 2.317° to 0.763°
+and maximum response-SD error from 1.916° to 1.053°. Held-out NLL improved
+from 4.692995 to 4.692046 and improved at 88/90 dissimilarities. At the original
+36° failure, mean bias moved from -10.416° to -13.180° against raw -12.733°.
+
+The unchanged mixture size and unchanged network architecture can therefore
+represent the trough. The failure is attributable to global training
+allocation/optimization smoothing over this localized regime, rather than a
+K=12 family-capacity limit. Independent per-dissimilarity mixtures also
+improved held-out NLL, but their moment curves were noisy because they lack the
+smooth parameter map and were fit from only 50k outcomes each.
+
 ## Remaining approximation error
 
 - **Simulator Monte Carlo:** independently measured by two 100k references;
