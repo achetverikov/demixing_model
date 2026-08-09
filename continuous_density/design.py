@@ -300,6 +300,40 @@ def uev_design(feature_step: float = 2.0) -> Tuple[np.ndarray, List[str]]:
     return np.concatenate(rows).astype(np.float32), labels
 
 
+def uev_extension_design(added_sd_feat=(90., 120.), spatial_dprime=(2.,),
+                         feature_step: float = 2.0) -> Tuple[np.ndarray, List[str]]:
+    """UEV rows involving at least one newly added feature-noise level."""
+    added = tuple(float(v) for v in added_sd_feat)
+    if not added or any(v <= 0 for v in added):
+        raise ValueError('added feature SDs must be positive')
+    if set(added) & set(UEV_SD_FEAT):
+        raise ValueError('added feature SDs must not repeat the base UEV levels')
+    if any(v < SD_BOUNDS[0] or v > SD_BOUNDS[1] for v in added):
+        raise ValueError(f'added feature SDs must lie in {SD_BOUNDS}')
+    dprime = tuple(float(v) for v in spatial_dprime)
+    if not dprime or any(v <= 0 for v in dprime):
+        raise ValueError('spatial d-prime values must be positive')
+    lo, hi = FEAT_DIFF_BOUNDS
+    if feature_step <= 0:
+        raise ValueError('feature_step must be positive and divide 2-to-180 degrees')
+    n_steps = (hi - lo) / feature_step
+    if not np.isclose(n_steps, round(n_steps)):
+        raise ValueError('feature_step must be positive and divide 2-to-180 degrees')
+    feat = np.linspace(lo, hi, int(round(n_steps)) + 1)
+    levels = tuple(sorted(set(UEV_SD_FEAT + added)))
+    rows, labels = [], []
+    for i, sd1 in enumerate(levels):
+        for sd2 in levels[i:]:
+            if sd1 not in added and sd2 not in added:
+                continue
+            for value in dprime:
+                rows.append(np.column_stack([
+                    np.full(len(feat), sd1), np.full(len(feat), sd2),
+                    np.full(len(feat), UEV_SPAT_DIFF / value), feat]))
+                labels.extend([f'uev_extension_dprime_{value:g}'] * len(feat))
+    return np.concatenate(rows).astype(np.float32), labels
+
+
 def circular_modes(density, grid, min_mass: float = 0.05) -> Dict[str, np.ndarray]:
     """Modes of one circular density, as basin count / locations / masses.
 

@@ -118,6 +118,17 @@ def test_uev_design_is_canonical_and_uses_spatial_dprime_definition():
         design_mod.uev_design(feature_step=3.0)
 
 
+def test_uev_extension_contains_only_new_pairs_at_requested_dprime():
+    d, labels = design_mod.uev_extension_design((90., 120.), (2.,), 2.)
+    pairs = set(map(tuple, d[:, :2]))
+    assert len(pairs) == 11
+    assert all(90. in pair or 120. in pair for pair in pairs)
+    assert not pairs & {(a, b) for i, a in enumerate(design_mod.UEV_SD_FEAT)
+                        for b in design_mod.UEV_SD_FEAT[i:]}
+    assert set(d[:, 2]) == {20.}
+    assert len(d) == len(labels) == 11 * 90
+
+
 def test_resumable_shard_helpers_verify_and_assemble(tmp_path):
     from continuous_density import generate_training_data as gen
     assert gen._shard_ranges(7, 3) == [(0, 3), (3, 6), (6, 7)]

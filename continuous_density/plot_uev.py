@@ -37,7 +37,8 @@ def _dprime(sd_ident):
 
 def build_summary(model_path: Path, reference_path: Path,
                   checkpoint: Path | None = None, model_label='conditional density',
-                  additional_models=()) -> pd.DataFrame:
+                  additional_models=(), reference_extension: Path | None = None
+                  ) -> pd.DataFrame:
     """Return raw/model circular means and SDs for every component curve."""
     model, variables, meta = wm.load_model(model_path)
     store, ref_meta = data_mod.load_npz(reference_path)
@@ -61,6 +62,17 @@ def build_summary(model_path: Path, reference_path: Path,
     expected, _ = design_mod.uev_design(ref_meta.get('uev_feature_step', 2.0))
     if not np.array_equal(store.design, expected):
         raise ValueError('reference is not the expected canonical UEV design')
+    if reference_extension is not None:
+        extension, extension_meta = data_mod.load_npz(reference_extension)
+        data_mod.require_matching_n_samples(meta, extension_meta)
+        expected_extension, _ = design_mod.uev_extension_design(
+            extension_meta['uev_added_sd_feat'], extension_meta['uev_spat_dprime'],
+            extension_meta.get('uev_feature_step', 2.0))
+        if not np.array_equal(extension.design, expected_extension):
+            raise ValueError('extension is not the expected UEV extension design')
+        store = data_mod.SampleStore(
+            np.concatenate([store.design, extension.design]),
+            np.concatenate([store.bias, extension.bias]))
 
     frames = []
     for component in (0, 1):
@@ -122,7 +134,7 @@ def plot_matrix(df: pd.DataFrame, dprime: float, out: Path,
     labels = {'mean_bias': ('mean bias, °', 'Mean bias'),
               'response_sd': ('circular response SD, °', 'Response variability')}
     ylabel, metric_title = labels[metric]
-    vals = design_mod.UEV_SD_FEAT
+    vals = sorted(df.sd_feat1.unique())
     fig, axes = plt.subplots(len(vals), len(vals), figsize=(11.2, 9.6),
                              sharex=True, sharey=True)
     for row, sd1 in enumerate(vals):
@@ -214,25 +226,32 @@ def main():
                         metavar=('LABEL', 'PATH'),
                         help='additional density checkpoint and legend label')
     parser.add_argument('--reference', required=True, type=Path)
+    parser.add_argument('--reference-extension', type=Path,
+                        help='raw UEV rows containing additional feature-SD levels')
     parser.add_argument('--checkpoint', type=Path,
                         help='optional production surface NN for the same raw comparison')
     parser.add_argument('--out-dir', required=True, type=Path)
+    parser.add_argument('--averaged-only', action='store_true')
     args = parser.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
     additional = [(label, Path(path)) for label, path in args.additional_model]
     summary = build_summary(args.model, args.reference, args.checkpoint,
-                            args.model_label, additional)
+                            args.model_label, additional, args.reference_extension)
     name = ('uev_raw100k_vs_models.csv' if args.checkpoint
             else 'uev_raw100k_vs_density.csv')
     summary.to_csv(args.out_dir / name, index=False)
     for dprime in design_mod.UEV_SPAT_DPRIME:
+        if not np.any(np.isclose(summary.spat_dprime, dprime)):
+            continue
         suffix = _slug(dprime)
-        plot_matrix(summary, dprime, args.out_dir / f'uev_grid_dprime_{suffix}.png')
+        if not args.averaged_only:
+            plot_matrix(summary, dprime, args.out_dir / f'uev_grid_dprime_{suffix}.png')
         plot_averaged_uev(summary, dprime,
                           args.out_dir / f'uev_averaged_dprime_{suffix}.png')
-        plot_matrix(summary, dprime,
-                    args.out_dir / f'uev_response_sd_grid_dprime_{suffix}.png',
-                    metric='response_sd')
+        if not args.averaged_only:
+            plot_matrix(summary, dprime,
+                        args.out_dir / f'uev_response_sd_grid_dprime_{suffix}.png',
+                        metric='response_sd')
         plot_averaged_uev(
             summary, dprime,
             args.out_dir / f'uev_response_sd_averaged_dprime_{suffix}.png',

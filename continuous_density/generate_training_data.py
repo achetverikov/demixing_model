@@ -93,13 +93,16 @@ def main():
     p.add_argument('--validation', action='store_true',
                    help='use an off-grid validation design instead of training Sobol')
     p.add_argument('--validation-design',
-                   choices=['points', 'trajectories', 'low-dprime-trajectories', 'uev'],
+                   choices=['points', 'trajectories', 'low-dprime-trajectories',
+                            'uev', 'uev-extension'],
                    default='points',
                    help='scattered points, difficult trajectories, or the UEV figure grid')
     p.add_argument('--per-stratum', type=int, default=12)
     p.add_argument('--trajectory-curves', type=int, default=15)
     p.add_argument('--trajectory-points', type=int, default=24)
     p.add_argument('--uev-feature-step', type=float, default=2.0)
+    p.add_argument('--uev-added-sd-feat', type=float, nargs='+', default=[90., 120.])
+    p.add_argument('--uev-spat-dprime', type=float, nargs='+', default=[2.])
     p.add_argument('--sd-scale', choices=['log', 'linear'], default='log')
     p.add_argument('--fix-weights', action='store_true')
     p.add_argument('--crn', action='store_true',
@@ -145,8 +148,12 @@ def main():
         elif args.validation_design == 'low-dprime-trajectories':
             design, strata = design_mod.low_dprime_trajectory_design(
                 args.trajectory_curves, args.trajectory_points, seed=design_seed)
-        else:
+        elif args.validation_design == 'uev':
             design, strata = design_mod.uev_design(args.uev_feature_step)
+        else:
+            design, strata = design_mod.uev_extension_design(
+                args.uev_added_sd_feat, args.uev_spat_dprime,
+                args.uev_feature_step)
     else:
         if args.training_design == 'sobol':
             design = design_mod.sobol_design(args.n_points, seed=design_seed,
