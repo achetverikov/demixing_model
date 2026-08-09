@@ -117,8 +117,9 @@ $PY continuous_density/generate_training_data.py --validation \
 
 $PY continuous_density/plot_uev.py \
   --model "$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_16k500.pkl" \
+  --checkpoint pretrained/model_epoch1500_10ktrain_100samples.pkl \
   --reference "$DEMIXING_ARTIFACT_ROOT/continuous_density/validation_uev_100k_seed161803.npz" \
-  --out-dir "$DEMIXING_ARTIFACT_ROOT/continuous_density/uev_raw100k_vs_density"
+  --out-dir "$DEMIXING_ARTIFACT_ROOT/continuous_density/uev_raw100k_vs_models"
 
 # Raw-reference metrics and repeat uncertainty; repeat for K=2,4,8,12 and both designs.
 $PY continuous_density/evaluate.py \

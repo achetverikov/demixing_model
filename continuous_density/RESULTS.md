@@ -74,8 +74,16 @@ Across both components and all 5,400 curves, the K=12 conditional density had
 was 0.156°, 0.111°, and 0.063° at d′ 0.5, 1, and 2. The largest localized
 miss was 2.32° for the higher-noise component at `(sd_feat1,sd_feat2,d′) =
 (30°,60°,0.5)`, where the model underestimates the raw repulsive trough.
-Separate raw-versus-density grid and averaged figures for every d′ level are
-under `results/continuous_density/uev_raw100k_vs_density/`.
+
+Against the same raw curves, the production NN had 0.137° mean absolute and
+0.229° RMS error. The conditional density had lower pointwise absolute error
+in 63.4% of comparisons and lower trajectory-average error for 46/60 complete
+component curves. Production was better in the main localized failure above:
+trajectory MAE was 0.241° for production versus 0.501° for the conditional
+density. Thus the direct model is better overall but does smooth away part of a
+specific strong repulsive trough. Separate three-way grid and averaged figures
+for every d′ level are under
+`results/continuous_density/uev_raw100k_vs_models/`.
 
 ## Remaining approximation error
 
