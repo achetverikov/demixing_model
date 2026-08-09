@@ -85,6 +85,15 @@ specific strong repulsive trough. Separate three-way grid and averaged figures
 for every d′ level are under
 `results/continuous_density/uev_raw100k_vs_models/`.
 
+Response variability was compared as circular SD from the same first circular
+moment. The conditional density had 0.223° MAE and 0.364° RMSE, versus 0.309°
+and 0.436° for production. It had lower pointwise absolute error in 68.8% of
+comparisons and lower trajectory-average error for 48/60 component curves.
+Both representations were least accurate at d′=0.5: conditional-density MAE
+was 0.414° for component 1 and 0.448° for component 2, falling to 0.051° and
+0.105° at d′=2. The same results directory contains separate response-SD grid
+and averaged plots for all three d′ levels.
+
 ## Remaining approximation error
 
 - **Simulator Monte Carlo:** independently measured by two 100k references;
