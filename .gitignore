@@ -28,6 +28,8 @@ __pycache__/
 *.json
 !.devcontainer/*.json
 .devcontainer/local/
+!.devcontainer/cpu/devcontainer.json
+
 *.backup
 *.gz
 *temp*
