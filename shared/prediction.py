@@ -662,6 +662,77 @@ class SurfacePredictor(BiasPredictor):
         return jnp.degrees(jnp.sqrt(-2 * jnp.log(safe)))
 
 
+def mixture_plot_curves(predictor, params_by_row, feat_grid, bin_weights=None,
+                        sd_motor_by_row=None, emp_density_weights_sd=20.0,
+                        density_smoothing_sigma=None):
+    """The four curve families the subject plots draw, for a mixture fit.
+
+    The surface backend derives these by integrating its 180-row grid; the
+    mixture has a closed form for each, so this computes them directly rather
+    than materialising a surface and then integrating it back down. That is not
+    an optimisation: a component narrower than the 2-degree reporting cell is
+    mis-massed by the grid, and those are exactly the fits this surrogate exists
+    to represent.
+
+    Deliberately additive. The surface path is untouched by this function, so no
+    plotted number on that side can move because of it.
+
+    Args:
+        predictor: a ``WrappedMixturePredictor``.
+        params_by_row: ``(n_rows, 3)`` of ``[sd_feat1, sd_feat2, sd_spat]`` --
+            one row per fitted condition-and-optimizer the plot will draw.
+        feat_grid: feature differences to evaluate, in model degrees.
+        bin_weights: ``(n_rows, n_bins, n_feat)`` for the pooled SD panel, or
+            ``None`` to skip it.
+        sd_motor_by_row: per-row motor SD, or ``None`` for no motor noise. Motor
+            noise is per fitted row because it is a fitted parameter.
+
+    Returns:
+        ``{"bias", "asymmetry", "sd"}`` each ``(n_rows, n_feat)``, plus
+        ``"pooled_sd"`` ``(n_rows, n_bins)`` when weights are given.
+    """
+    params_by_row = np.asarray(params_by_row, dtype=np.float64)
+    feat_grid = jnp.asarray(feat_grid, dtype=jnp.float32)
+    n_rows = len(params_by_row)
+    motors = (np.zeros(n_rows) if sd_motor_by_row is None
+              else np.asarray(sd_motor_by_row, dtype=np.float64))
+    if len(motors) != n_rows:
+        raise ValueError(
+            f"{len(motors)} motor SDs for {n_rows} parameter rows; they are paired "
+            "positionally, so a mismatch draws one fit's curve at another's motor noise.")
+
+    from shared.config import config
+
+    smoothing = (float(emp_density_weights_sd) / config.feat_diff_step
+                 if density_smoothing_sigma is None else float(density_smoothing_sigma))
+
+    bias, asymmetry, circular_sd, pooled = [], [], [], []
+    for index in range(n_rows):
+        sd_feat1, sd_feat2, sd_spat = params_by_row[index]
+        rows = jnp.stack([
+            jnp.full(feat_grid.shape, float(sd_feat1), jnp.float32),
+            jnp.full(feat_grid.shape, float(sd_feat2), jnp.float32),
+            jnp.full(feat_grid.shape, float(sd_spat), jnp.float32),
+            feat_grid], axis=-1)
+        motor = float(motors[index]) or None
+
+        mean, _ = predictor.mean_and_resultant(rows, validate=False, sd_motor=motor)
+        bias.append(np.asarray(mean))
+        asymmetry.append(np.asarray(gaussian_curve_smoother(
+            predictor.signed_arc_asymmetry(rows, validate=False, sd_motor=motor), smoothing)))
+        circular_sd.append(np.asarray(
+            predictor.circular_sd(rows, validate=False, sd_motor=motor)))
+        if bin_weights is not None:
+            pooled.append(np.asarray(predictor.pooled_circular_sd(
+                rows, jnp.asarray(bin_weights[index]), validate=False, sd_motor=motor)))
+
+    bundle = {"bias": np.stack(bias), "asymmetry": np.stack(asymmetry),
+              "sd": np.stack(circular_sd)}
+    if bin_weights is not None:
+        bundle["pooled_sd"] = np.stack(pooled)
+    return bundle
+
+
 def predictor_from_surrogate(loaded, sd_motor: float = 0.0) -> BiasPredictor:
     """Build a predictor from :func:`shared.surrogate.load_surrogate`'s result."""
     from shared import surrogate
