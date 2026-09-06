@@ -72,6 +72,44 @@ WNM_DEFAULTS = {
 
 SUPPORTED_SAMPLE_COUNTS = (20, 100)
 
+#: Which family the production artifacts come from. Exactly two checkpoints are
+#: production at any moment -- one per observer sample count -- and this is the
+#: single switch that says which pair. Promotion flips it once, after acceptance
+#: (transition plan step 6); until then production is the surface network.
+#:
+#: Scripts and pipelines should ask for an observer model by ``n_samples`` and
+#: let :func:`production_checkpoint` answer, rather than naming a file. A caller
+#: that hardcodes a filename keeps pointing at that file after promotion, which
+#: is how a plot or a prediction ends up computed from a different model than the
+#: fit it accompanies.
+PRODUCTION_FAMILY = FAMILY_SURFACE_NN
+
+
+def production_checkpoint(n_samples: int) -> Path:
+    """The production artifact for one observer model.
+
+    ``n_samples`` is the parameter: 20 and 100 are two different observer models,
+    and everything else about which file to load follows from
+    :data:`PRODUCTION_FAMILY`.
+    """
+    if n_samples not in SUPPORTED_SAMPLE_COUNTS:
+        raise ValueError(
+            f"n_samples={n_samples!r} is not one of {SUPPORTED_SAMPLE_COUNTS}. These are two "
+            "different observer models, not a resolution setting, so there is nothing "
+            "sensible between or beyond them.")
+    table = SURFACE_DEFAULTS if PRODUCTION_FAMILY == FAMILY_SURFACE_NN else WNM_DEFAULTS
+    path = table[n_samples]
+    if not path.exists():
+        raise FileNotFoundError(
+            f"the production {PRODUCTION_FAMILY} artifact for n_samples={n_samples} is not "
+            f"installed at {path}")
+    return path
+
+
+def load_production(n_samples: int) -> "LoadedSurrogate":
+    """Load the production artifact for one observer model."""
+    return load_surrogate(checkpoint_path=production_checkpoint(n_samples))
+
 #: The surface network's training domain, in model degrees.  Its parameter grid
 #: was swept over [5, 200] on all three SDs (see ``pretrained/README.md``), and
 #: unlike the WNM artifacts it carries no metadata, so the fact is recorded here.

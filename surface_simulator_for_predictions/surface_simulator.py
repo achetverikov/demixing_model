@@ -27,16 +27,13 @@ from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
 )
 from shared.config import config
 from shared.mu1_axis import guard_surface_mu1_axis, periodic_integral
+from shared import surrogate
 from shared.utils import (AveragedSurface, SurfaceUnpickler, resolve_input_path,
                           ensure_averaged_surface_file, gaussian_curve_smoother)
 
 RESULTS_DIR = "results"
 CHECKPOINT_PREFIX = "neural_net_checkpoints"
 CHECKPOINT_EPOCH = 1500
-PRETRAINED_CHECKPOINTS = {
-    20: "pretrained/model_epoch1425_10ktrain_20samples.pkl",
-    100: "pretrained/model_epoch1500_10ktrain_100samples.pkl",
-}
 
 def _generate_mu2_bias_curve_batch(mu2_surfaces_batch: jnp.ndarray, target_feat_indices: jnp.ndarray) -> jnp.ndarray:
     """Generate mu2 bias curves for batch of mu2 surfaces using linear integration (not circular)."""
@@ -267,14 +264,29 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
     else:
         parameters_array = jnp.array(params_df[required_cols].values, dtype=jnp.float32)
     
+    # n_samples is the parameter. Exactly two artifacts are production at any
+    # time, one per observer model, and shared.surrogate answers which -- so this
+    # script keeps working across a promotion instead of pointing at whichever
+    # filename was current when it was written.
     if explicit_checkpoint_path:
         resolved_checkpoint_path = Path(explicit_checkpoint_path)
     else:
-        checkpoint_path = PRETRAINED_CHECKPOINTS.get(
-            n_samples,
-            f'{CHECKPOINT_PREFIX}_{n_samples}samples/model_epoch_{CHECKPOINT_EPOCH:04d}.pkl',
-        )
-        resolved_checkpoint_path = resolve_input_path(checkpoint_path, RESULTS_DIR)
+        resolved_checkpoint_path = surrogate.production_checkpoint(n_samples)
+
+    # The artifact decides which observer model these curves describe, not the
+    # argument. An explicit checkpoint used to be honoured while the output rows
+    # were still stamped with the requested n_samples, so passing the n=20 model
+    # with n_samples=100 wrote n=20 curves labelled 100, silently and ungated.
+    if use_nn_surfaces:
+        identity = surrogate.load_surrogate(checkpoint_path=resolved_checkpoint_path,
+                                            n_samples=n_samples)
+        resolved_n_samples = identity.n_samples
+        surrogate_family = identity.family
+    else:
+        # The averaged-surface path is keyed by n_samples on disk, so the request
+        # is the identity there and load_averaged_surface raises if it is absent.
+        resolved_n_samples = n_samples
+        surrogate_family = "averaged_surfaces"
 
     # Initialize optimizer for simulation only (no datasets needed) - but only if using NN surfaces
     if use_nn_surfaces:
@@ -409,7 +421,10 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
             'feat_diff_step': config.feat_diff_step if i == 0 else None,
             'mu1_bias_step': config.mu1_bias_step if i == 0 else None,
             'mu2_bias_step': config.mu2_bias_step if i == 0 else None,
-            'n_samples': n_samples if i == 0 else None,
+            'n_samples': resolved_n_samples if i == 0 else None,
+            'surrogate_family': surrogate_family if i == 0 else None,
+            'surrogate_artifact': (Path(resolved_checkpoint_path).name
+                                   if i == 0 and use_nn_surfaces else None),
             'skip_motor_noise': skip_motor_noise if i == 0 else None,
             'has_mu2_data': mu2_expectation_curves is not None if i == 0 else None
         }

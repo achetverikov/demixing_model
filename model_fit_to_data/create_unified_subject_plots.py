@@ -31,6 +31,7 @@ from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
     GridBasedMultiConditionOptimizer,
 )
 from model_fit_to_data import density_objective
+from shared import surrogate
 from shared.config import config
 from shared.mu1_axis import mu1_cell_width, periodic_integral, sign_masks
 from shared import seed_manager
@@ -1867,11 +1868,16 @@ def create_unified_plots_with_summaries(
         f"{MODEL_FIT_RESULTS_PREFIX}{motor_str}{corr_str}/"
         f"{n_samples}samples/{outliers_str}/extended_fit_results.pkl"
     )
-    default_checkpoint_path = f"pretrained/model_epoch1500_10ktrain_{n_samples}samples.pkl"
     resolved_results_path = resolve_input_path(results_path or default_results_path, results_dir)
-    resolved_checkpoint_path = resolve_input_path(
-        checkpoint_path or default_checkpoint_path, results_dir
-    )
+    # n_samples is the parameter; shared.surrogate answers which artifact is
+    # production for it. This default used to name epoch 1500 while the fitter's
+    # named epoch 1425 -- different architectures, not just different epochs --
+    # so a default n=20 plot recomputed its curves, moments and SDs from a
+    # different model than the one that produced the parameters it was plotting.
+    # An explicit --checkpoint-path still selects any other artifact.
+    resolved_checkpoint_path = (
+        resolve_input_path(checkpoint_path, results_dir) if checkpoint_path
+        else surrogate.production_checkpoint(n_samples))
 
     if output_dir is None:
         resolved_output_dir = Path(resolved_results_path).parent

@@ -18,6 +18,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from shared import surrogate
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -40,7 +41,10 @@ def main():
     )
     parser.add_argument("--results-path", required=True,
                         help="Path to extended_fit_results.pkl.")
-    parser.add_argument("--checkpoint-path", default="pretrained/model_epoch1425_10ktrain_20samples.pkl",
+    parser.add_argument("--n-samples", type=int, default=20, choices=[20, 100],
+                        help="Observer evidence samples per trial. Selects the production "
+                             "artifact for that observer model; --checkpoint-path overrides it.")
+    parser.add_argument("--checkpoint-path", default=None,
                         help="Path to trained NN checkpoint.")
     parser.add_argument("--output-dir", required=True,
                         help="Directory for output plots.")
@@ -60,9 +64,14 @@ def main():
 
     results = load_extended_results(args.results_path)
 
+    # n_samples selects the production artifact for that observer model; an
+    # explicit --checkpoint-path names any other one.
+    checkpoint = (Path(args.checkpoint_path) if args.checkpoint_path
+                  else surrogate.production_checkpoint(args.n_samples))
+
     dummy = jnp.asarray(np.random.uniform(-180, 180, (100, 2)))
     optimizer = GridBasedMultiConditionOptimizer(
-        args.checkpoint_path, {"dummy": dummy}, skip_motor_noise=True,
+        str(checkpoint), {"dummy": dummy}, skip_motor_noise=True,
     )
 
     create_pdf_slice_plots(

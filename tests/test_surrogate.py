@@ -230,3 +230,55 @@ def test_the_two_feature_sds_share_one_interval():
                 "sd_spat": (5.0, 200.0), "feat_diff": (0.5, 180.0)}
     bounds = surrogate.search_bounds(lopsided)
     assert bounds["sd_feat"] == (3.0, 198.0)  # the intersection, not the union
+
+
+# ---------------------------------------------------------------------------
+# Exactly two production artifacts, selected by observer model
+# ---------------------------------------------------------------------------
+
+def test_exactly_two_checkpoints_are_production_at_a_time():
+    """One per observer model, and one switch that says which family they come
+    from. A caller asks by n_samples; nothing downstream should name a file."""
+    paths = {n: surrogate.production_checkpoint(n)
+             for n in surrogate.SUPPORTED_SAMPLE_COUNTS}
+    assert len(paths) == 2
+    assert len(set(paths.values())) == 2, "the two observer models share an artifact"
+    for n_samples, path in paths.items():
+        loaded = surrogate.load_surrogate(checkpoint_path=path)
+        assert loaded.family == surrogate.PRODUCTION_FAMILY
+        assert loaded.n_samples == n_samples
+
+
+def test_an_unsupported_sample_count_is_refused():
+    """20 and 100 are two observer models, not a resolution knob, so there is
+    nothing sensible between or beyond them."""
+    with pytest.raises(ValueError, match="two different observer models"):
+        surrogate.production_checkpoint(50)
+
+
+def test_promotion_is_one_switch():
+    """Flipping PRODUCTION_FAMILY must move both artifacts together, or the two
+    observer models would be served by different surrogates."""
+    original = surrogate.PRODUCTION_FAMILY
+    try:
+        surrogate.PRODUCTION_FAMILY = surrogate.FAMILY_WNM
+        for n_samples in surrogate.SUPPORTED_SAMPLE_COUNTS:
+            if not surrogate.WNM_DEFAULTS[n_samples].exists():
+                pytest.skip("WNM artifacts not installed")
+            loaded = surrogate.load_surrogate(
+                checkpoint_path=surrogate.production_checkpoint(n_samples))
+            assert loaded.family == surrogate.FAMILY_WNM
+            assert loaded.n_samples == n_samples
+    finally:
+        surrogate.PRODUCTION_FAMILY = original
+
+
+def test_other_checkpoints_stay_reachable_by_name():
+    """Production is the default, not a restriction: a script that takes a
+    checkpoint parameter can still load any installed artifact."""
+    historical = surrogate.PRETRAINED_DIR / "model_epoch1500_10ktrain_20samples.pkl"
+    if not historical.exists():
+        pytest.skip("historical checkpoint not installed")
+    assert historical != surrogate.production_checkpoint(20)
+    loaded = surrogate.load_surrogate(checkpoint_path=historical)
+    assert loaded.n_samples == 20
