@@ -97,6 +97,15 @@ LIKELIHOOD_COLS = [
     "loglik_density_deg",
     "nll_density_deg",
     "bin_width_deg",
+    # Which observation-scoring convention produced the row. The surface backend
+    # reads a trial's density at its grid cell's centre; the mixture evaluates at
+    # the observation. An information criterion across the two needs one
+    # convention on both sides, so the row has to say which it carries.
+    "loglik_convention",
+    # Exact log mass of the reporting cell, mixture only. loglik_mass stays the
+    # historical density-times-cell-width rectangle rule on both families so the
+    # legacy column keeps comparing like with like.
+    "loglik_cell_probability",
 ]
 
 
@@ -234,17 +243,91 @@ def normalize_condition_label(value: object) -> str:
     return re.sub(r"[\s_-]+", "", str(value).strip().lower())
 
 
+def find_run_fingerprint(fits_csv: Path) -> tuple[Path, dict] | tuple[None, None]:
+    """The fitting run's fingerprint sidecar, searched upward from the fits CSV.
+
+    The run records which surrogate produced it; rescoring should read that
+    rather than re-derive it. Returns ``(None, None)`` when no sidecar is found,
+    which is the case for results predating the fingerprint.
+    """
+    from run_fingerprint import FINGERPRINT_FILENAME
+
+    for directory in [fits_csv.parent, *fits_csv.parent.parents]:
+        candidate = directory / FINGERPRINT_FILENAME
+        if candidate.is_file():
+            payload = json.loads(candidate.read_text())
+            return candidate, payload.get("payload", payload)
+        # Do not climb past the results root.
+        if directory.name in ("results", "") or directory == directory.parent:
+            break
+    return None, None
+
+
 def infer_checkpoint_path(fits_csv: Path, checkpoint_path: str | None) -> Path:
+    """Resolve the checkpoint that produced these fits, by content not by path.
+
+    This used to substring-match the fits CSV path for ``20samples`` or
+    ``100samples``. Those are two different observer models, not two settings of
+    one, so any results directory whose name happened to contain the other
+    token -- a relocated run, a subset directory named after a comparison --
+    rescored a fit under the wrong model. The reproduction gate would usually
+    catch it, but the tool reached for when that gate "fails" is
+    ``repair_stale_reproduction.py``, which deletes results.
+
+    Resolution order:
+
+    1. An explicit ``--checkpoint-path`` is honoured, and *verified* against the
+       run's recorded checkpoint digest when a fingerprint is present.
+    2. Otherwise the run's fingerprint identifies the checkpoint by SHA-256, and
+       the installed artifact with that digest is used.
+    3. With neither, this raises. Guessing from a path is what it replaced.
+    """
+    from run_fingerprint import file_sha256
+
+    fingerprint_path, fingerprint = find_run_fingerprint(fits_csv)
+    recorded_digest = (fingerprint or {}).get("checkpoint_sha256")
+
     if checkpoint_path:
-        return Path(checkpoint_path)
-    text = str(fits_csv)
-    if "20samples" in text:
-        return Path(DEFAULT_20)
-    if "100samples" in text:
-        return Path(DEFAULT_100)
+        resolved = Path(checkpoint_path)
+        if recorded_digest and file_sha256(resolved) != recorded_digest:
+            raise ValueError(
+                f"{resolved.name} is not the checkpoint these fits were produced with. "
+                f"{fingerprint_path} records checkpoint_sha256={recorded_digest[:16]}..., and "
+                f"this file hashes to {file_sha256(resolved)[:16]}.... Rescoring under a "
+                "different surrogate silently reports another model's likelihoods against "
+                "these parameters.")
+        return resolved
+
+    if recorded_digest:
+        for candidate in _installed_checkpoints():
+            if file_sha256(candidate) == recorded_digest:
+                return candidate
+        raise ValueError(
+            f"{fingerprint_path} records checkpoint_sha256={recorded_digest[:16]}..., which "
+            f"matches none of the installed artifacts ({[c.name for c in _installed_checkpoints()]}). "
+            "Pass --checkpoint-path pointing at the artifact that produced these fits.")
+
     raise ValueError(
-        "Could not infer checkpoint path from fits CSV path; pass --checkpoint-path explicitly."
-    )
+        f"No run fingerprint was found near {fits_csv} and no --checkpoint-path was given, so "
+        "there is nothing that identifies which surrogate produced these fits. Pass the "
+        "checkpoint explicitly. (Inferring it from the results path is what this replaced: "
+        "n=20 and n=100 are different observer models, and a path substring is not evidence.)")
+
+
+def _installed_checkpoints() -> list[Path]:
+    """Every artifact a run could have used, for digest lookup."""
+    from shared import surrogate
+
+    candidates = list(surrogate.SURFACE_DEFAULTS.values())
+    candidates += [surrogate.PRETRAINED_DIR / name
+                   for name in surrogate.SURFACE_CHECKPOINT_REGISTRY]
+    candidates += list(surrogate.WNM_DEFAULTS.values())
+    seen, unique = set(), []
+    for candidate in candidates:
+        if candidate.is_file() and candidate not in seen:
+            seen.add(candidate)
+            unique.append(candidate)
+    return unique
 
 
 def load_fit_rows(path: Path, optimizers: Iterable[str] | None) -> pd.DataFrame:
@@ -426,6 +509,135 @@ def predict_log_surface(
     return np.asarray(log_surface[0]), floor_log_density
 
 
+def wnm_trial_log_density(predictor, fit_row: pd.Series, feat_diff_deg, bias_deg):
+    """Continuous log density per model degree, at each trial's own coordinates.
+
+    The surface backend reads a trial's density out of the 180-row grid, at the
+    centre of the cell the observation falls in. The mixture evaluates at the
+    observation itself. That is a different observation-scoring convention rather
+    than a better implementation of the same one, which is why the exported rows
+    carry ``loglik_convention`` and why a head-to-head information criterion
+    needs one convention applied to both families.
+    """
+    import wnm_scoring
+
+    sd_motor = float(fit_row.get("sd_motor", 0.0) or 0.0)
+    scorer = predictor.with_motor_noise(sd_motor) if sd_motor > 0 else predictor
+    return np.asarray(wnm_scoring.trial_log_density(
+        scorer,
+        float(fit_row["sd_feat1"]), float(fit_row["sd_feat2"]), float(fit_row["sd_spat"]),
+        jnp.asarray(np.asarray(feat_diff_deg), dtype=jnp.float32),
+        jnp.asarray(np.asarray(bias_deg), dtype=jnp.float32)))
+
+
+def wnm_cell_log_probability(predictor, fit_row: pd.Series, feat_diff_deg, bias_deg):
+    """Exact log mass of the reporting cell each observation falls in.
+
+    Kept separate from ``loglik_mass`` rather than replacing it. ``loglik_mass``
+    is the historical density-times-cell-width rectangle rule and stays that on
+    both families, so legacy columns keep their meaning and remain comparable;
+    this is the integral the mixture can actually compute, which differs from the
+    rectangle rule exactly where a component is narrow relative to the 2-degree
+    cell -- the regime that motivates the surrogate.
+    """
+    from shared.mu1_axis import bin_indices, mu1_cell_width, mu1_grid
+
+    sd_motor = float(fit_row.get("sd_motor", 0.0) or 0.0)
+    scorer = predictor.with_motor_noise(sd_motor) if sd_motor > 0 else predictor
+
+    centres = np.asarray(mu1_grid())
+    half = mu1_cell_width() / 2.0
+    indices = np.asarray(bin_indices(jnp.asarray(np.asarray(bias_deg), dtype=jnp.float32)))
+
+    rows = jnp.stack([
+        jnp.full(len(indices), float(fit_row["sd_feat1"]), jnp.float32),
+        jnp.full(len(indices), float(fit_row["sd_feat2"]), jnp.float32),
+        jnp.full(len(indices), float(fit_row["sd_spat"]), jnp.float32),
+        jnp.asarray(np.asarray(feat_diff_deg), dtype=jnp.float32)], axis=-1)
+    dist = scorer.distribution(rows, validate=False)
+
+    from continuous_density import wrapped_mixture_model as wm
+
+    # Each observation has its own cell, so the bounds are per row. The interval
+    # helper only does arithmetic on them and broadcasts against mu[..., None],
+    # so they go in shaped (N, 1, 1) rather than through a vmap that would force
+    # them to concrete scalars.
+    lows = jnp.asarray(centres[indices] - half, jnp.float32)[:, None, None]
+    highs = jnp.asarray(centres[indices] + half, jnp.float32)[:, None, None]
+    per_component = wm.wrapped_normal_interval_probability(
+        dist["mu"], dist["sigma"], lows, highs, 8)
+    mass = jnp.sum(jnp.exp(dist["log_pi"]) * per_component, axis=-1)
+    return np.asarray(jnp.log(jnp.clip(mass, 1e-300, None)))
+
+
+def _score_fit_row_wnm(predictor, scored, data_source, fit_row, circ_space):
+    """Rescore one fit against the wrapped-normal mixture.
+
+    Mirrors the surface branch column for column, so the exported table means the
+    same thing whichever family produced it, with two differences that are named
+    rather than silent:
+
+    * ``loglik_convention`` says which observation-scoring convention produced
+      the row, because the two are not interchangeable in an information
+      criterion.
+    * ``loglik_cell_probability`` is the exact integral over the reporting cell,
+      present only here. ``loglik_mass`` remains the historical rectangle rule on
+      both families so legacy columns keep comparing like with like.
+
+    The reproduction gate reduces with the same float32 ``segment_sum`` the
+    fitter uses, for the same reason the surface branch does: a pandas sum over
+    exported rows can differ by ~1e-2 on a large condition, and a gate that fails
+    on reduction order sends someone to ``repair_stale_reproduction.py``, which
+    deletes results.
+    """
+    feat_diff = scored["feat_diff_model_deg"].to_numpy(float)
+    bias = scored["bias_model_deg"].to_numpy(float)
+
+    loglik_density_model_deg = wnm_trial_log_density(predictor, fit_row, feat_diff, bias)
+    model_bin_width_deg = float(config.mu1_bias_step)
+    bin_width_deg = physical_bin_width_deg(circ_space)
+
+    scored["loglik_density_model_deg"] = loglik_density_model_deg
+    scored["nll_density_model_deg"] = -loglik_density_model_deg
+    scored["loglik_mass"] = loglik_density_model_deg + np.log(model_bin_width_deg)
+    scored["nll_mass"] = -scored["loglik_mass"]
+    scored["loglik_density_deg"] = scored["loglik_mass"] - np.log(bin_width_deg)
+    scored["nll_density_deg"] = scored["nll_mass"] + np.log(bin_width_deg)
+    scored["loglik_cell_probability"] = wnm_cell_log_probability(
+        predictor, fit_row, feat_diff, bias)
+    scored["bin_width_deg"] = bin_width_deg
+    scored["loglik_convention"] = "continuous_at_observation"
+    for column in ("subject", "experiment", "condition", "optimizer"):
+        scored[f"fit_{column}" if column != "optimizer" else "optimizer"] = fit_row[column]
+    for column in ("sd_feat1", "sd_feat2", "sd_spat", "sd_motor"):
+        scored[column] = float(fit_row[column])
+    scored["prepared_data_source"] = data_source
+
+    rescored_nll_density_model_deg = -float(jax.ops.segment_sum(
+        jnp.asarray(loglik_density_model_deg, dtype=jnp.float32),
+        jnp.zeros(len(loglik_density_model_deg), dtype=jnp.int32),
+        num_segments=1)[0])
+    stored_nll = float(fit_row["eval_likelihood_loss"])
+    check = {
+        "subject": fit_row["subject"], "experiment": fit_row["experiment"],
+        "condition": fit_row["condition"], "optimizer": fit_row["optimizer"],
+        "stored_eval_likelihood_loss": stored_nll,
+        "rescored_nll_density_model_deg": rescored_nll_density_model_deg,
+        "per_trial_sum_nll_density_model_deg": float(scored["nll_density_model_deg"].sum()),
+        "rescored_nll_mass": float(scored["nll_mass"].sum()),
+        "abs_diff": abs(rescored_nll_density_model_deg - stored_nll),
+        "per_trial_sum_abs_diff": abs(float(scored["nll_density_model_deg"].sum()) - stored_nll),
+        "n_obs_scored": int(len(scored)),
+        # The mixture has no density floor: motor noise widens component
+        # variances analytically rather than convolving a grid, so there is no
+        # clipped region for the floor-aware gate to allow for.
+        "n_floor_trials": 0,
+        "model_bin_width_deg": model_bin_width_deg,
+        "bin_width_deg": bin_width_deg,
+    }
+    return scored, check
+
+
 def score_fit_row(
     optimizer: GridBasedMultiConditionOptimizer,
     data_sources: list[tuple[str, pd.DataFrame]],
@@ -447,6 +659,9 @@ def score_fit_row(
         y_col=y_col,
         circ_space=circ_space,
     )
+    if not isinstance(optimizer, GridBasedMultiConditionOptimizer):
+        return _score_fit_row_wnm(optimizer, scored, data_source, fit_row, circ_space)
+
     log_surface, floor_log_density = predict_log_surface(optimizer, fit_row)
     # The NN surface is a continuous density per model-degree (see
     # shared.surface_functions.normalize_to_density), not a discrete cell mass.
@@ -478,6 +693,7 @@ def score_fit_row(
     scored["sd_spat"] = float(fit_row["sd_spat"])
     scored["sd_motor"] = float(fit_row["sd_motor"])
     scored["prepared_data_source"] = data_source
+    scored["loglik_convention"] = "grid_cell_centre"
 
     # The fitter's stored eval_likelihood_loss indexes the NN log-density directly
     # and reduces with JAX segment_sum. Validate against that reduction, not a
