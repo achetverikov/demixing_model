@@ -31,6 +31,7 @@ except ModuleNotFoundError:  # imported as `model_fit_to_data.<module>` from the
     from model_fit_to_data.run_fingerprint import effective_feat_step_schedule
 from shared.config import config
 from shared.mu1_axis import bin_indices, periodic_integral
+from fitting_targets import build_fitting_targets
 from shared.prediction import legal_warmup_params
 from shared.utils import load_checkpoint, compute_single_density_asymmetry
 
@@ -953,171 +954,50 @@ class GridBasedMultiConditionOptimizer:
         print("Shared parameter evaluation setup complete")
 
     def _precompute_target_curves(self):
-        """Precompute all target curves for all conditions using vmap (no loops)."""
+        """Build every empirical target for every condition, once.
+
+        The construction itself lives in ``fitting_targets`` so that a second
+        search engine can reach it without constructing this optimizer -- which
+        would mean loading a surface checkpoint to build targets that depend on
+        no surrogate at all. This method is the surface engine's call site: it
+        supplies the grids and settings and stores the result on ``self`` under
+        the attribute names the JIT objectives already read.
+        """
         print("Precomputing target curves for all conditions...")
 
-        # Prepare data for vectorized computation
-        condition_dataframes = [self.condition_datasets[cond_name] for cond_name in self.condition_names]
+        targets = build_fitting_targets(
+            {name: self.condition_datasets[name] for name in self.condition_names},
+            feat_diff_grid=self.feat_diff_grid,
+            d_circ_matrix=self.D_circ_matrix,
+            n_mu1_bias=self.n_mu1_bias,
+            emp_density_weights_sd=self.emp_density_weights_sd,
+            density_bandwidth_rule=self.density_bandwidth_rule,
+            density_bandwidth_mode=self.density_bandwidth_mode,
+            degenerate_targets=degenerate_targets,
+            bwcrps_condition_targets=compute_bwcrps_condition_targets,
+            target_bias_curve_core=compute_target_bias_curve_core,
+        )
+        self.fitting_targets = targets
 
-        # Extract feat_diff and bias arrays
-        all_feat_diff = [df[:, 0] for df in condition_dataframes]
-        all_bias_values = [df[:, 1] for df in condition_dataframes]
+        self.unified_feat_indices = targets.feat_indices
+        self.unified_target_bias = targets.target_bias
+        self.unified_bias_weights = targets.bias_weights
+        self.unified_target_density = targets.target_density
+        self.unified_target_bias_curve = targets.target_bias_curve
+        self.density_target_var = targets.density_target_var
+        self.density_degenerate_conditions = targets.density_degenerate
+        self.unified_target_d = targets.target_d
+        self.unified_fd_weights = targets.fd_weights
+        self.unified_bias_fd_weights = targets.bias_fd_weights
 
-        # Pad arrays to same length for vmap
-        max_trials = max(len(vals) for vals in all_feat_diff)
-
-        padded_feat_diff = jnp.stack([
-            jnp.pad(vals, (0, max_trials - len(vals)), constant_values=vals[-1] if len(vals) > 0 else 0)
-            for vals in all_feat_diff
-        ])
-        padded_bias_values = jnp.stack([
-            jnp.pad(vals, (0, max_trials - len(vals)), constant_values=vals[-1] if len(vals) > 0 else 0)
-            for vals in all_bias_values
-        ])
-
-        # Create trial counts for bias computation
-        trial_counts = jnp.array([len(vals) for vals in all_feat_diff])
-
-        # Vectorized bias curve computation using vmap
-        vectorized_bias_compute = jax.vmap(compute_target_bias_curve_core, in_axes=(0, 0, 0))
-        feat_indices, target_bias, weights = vectorized_bias_compute(padded_feat_diff, padded_bias_values, trial_counts)
-
-        # Density curve computation over the REAL (unpadded) per-condition data.
-        # Unlike the bias core, _compute_empirical_density_asymmetry_core has no
-        # trial-count mask, so vmapping it over the rectangular padded arrays would
-        # feed the repeated last-observation pad rows into the empirical density —
-        # both as a mass clump at the last trial's coordinates and via the
-        # std/quantile/n bandwidth terms. This is a one-time precompute (not in the
-        # JIT objective), so we loop over the real condition arrays instead, exactly
-        # as the balanced-CRPS block below does. See codex_audit.md #3.
-        from shared.utils import (_compute_empirical_density_asymmetry_core,
-                                  compute_target_bias_rolling_curve_core,
-                                  sheather_jones_bandwidth, silverman_bandwidth)
-        feat_diff_grid = self.feat_diff_grid
-
-        # Bias-KDE bandwidth. Default (None) lets each condition estimate its own from
-        # its own trials -- but conditions differ in error spread by construction, so
-        # the target's smoothing then varies along the very axis the experiment
-        # manipulates (measured up to 3.29x within one csh2026 subject). 'pooled' and
-        # 'average' share one bandwidth across the subject's conditions, matching what
-        # circhelp does within a single density_asymmetry call.
-        if self.density_bandwidth_rule == 'silverman':
-            estimate_bw = silverman_bandwidth
-        elif self.density_bandwidth_rule == 'sj':
-            estimate_bw = sheather_jones_bandwidth
-        else:
-            raise ValueError(
-                f"unknown density_bandwidth_rule {self.density_bandwidth_rule!r}; "
-                "expected 'silverman' or 'sj'")
-
-        # The bandwidth is ALWAYS resolved here and passed explicitly, never left to
-        # the core's default. Relying on the default meant 'silverman' silently
-        # tracked whatever that default happened to be, so flipping it (as the SJ
-        # adoption did) would have changed the one mode whose entire purpose is to
-        # reproduce pre-2026-08 fits.
-        bias_by_condition = [condition_dataframes[i][:, 1]
-                             for i in range(len(self.condition_names))]
-        shared_bw, per_condition_bw = None, None
-        if self.density_bandwidth_mode == 'pooled':
-            shared_bw = estimate_bw(jnp.concatenate(bias_by_condition))
-        elif self.density_bandwidth_mode == 'average':
-            shared_bw = jnp.mean(jnp.stack(
-                [jnp.asarray(estimate_bw(b)) for b in bias_by_condition]))
-        elif self.density_bandwidth_mode == 'per_condition':
-            per_condition_bw = [estimate_bw(b) for b in bias_by_condition]
-        else:
-            raise ValueError(
-                f"unknown density_bandwidth_mode {self.density_bandwidth_mode!r}; "
-                "expected 'per_condition', 'pooled' or 'average'")
-
-        def density_curve_wrapper(feat_diff_vals, bias_vals, grid, kernel_bw):
-            """Wrapper to extract only asymmetry values from density computation."""
-            distances, asymmetry_values = _compute_empirical_density_asymmetry_core(
-                feat_diff_vals, bias_vals, grid,
-                weights_sd=self.emp_density_weights_sd, kernel_bw=kernel_bw)
-            return asymmetry_values
-
-        density_curves = jnp.stack([
-            density_curve_wrapper(condition_dataframes[i][:, 0],
-                                  condition_dataframes[i][:, 1],
-                                  feat_diff_grid,
-                                  shared_bw if shared_bw is not None
-                                  else per_condition_bw[i])
-            for i in range(len(self.condition_names))
-        ])
-
-        # Smoothed (rolling-mean) circular bias curve, for the smoothed_exp method:
-        # same curve-vs-curve idea as the density asymmetry curve above, but for the
-        # circular-mean bias itself instead of hard 8-degree bins.
-        smoothed_bias_curves = jnp.stack([
-            compute_target_bias_rolling_curve_core(condition_dataframes[i][:, 0],
-                                                    condition_dataframes[i][:, 1],
-                                                    feat_diff_grid,
-                                                    weights_sd=self.emp_density_weights_sd)
-            for i in range(len(self.condition_names))
-        ])
-
-        # Store unified results
-        self.unified_feat_indices = feat_indices[0]  # Same for all conditions
-        self.unified_target_bias = target_bias  # Shape: (n_conditions, n_bins)
-        self.unified_bias_weights = weights  # Shape: (n_conditions, n_bins)
-        self.unified_target_density = density_curves  # Shape: (n_conditions, n_feat_points)
-        self.unified_target_bias_curve = smoothed_bias_curves  # Shape: (n_conditions, n_feat_points)
-
-        # Degenerate density targets: decided once, from the target alone. Recorded
-        # here rather than acted on, because the check is scoped to the density
-        # objective -- a flat density target says nothing about whether the same
-        # condition can be fit by likelihood or CRPS, so it must not break those.
-        # See DEGENERATE_TARGET_EPS and _check_density_targets_fittable.
-        density_target_var = np.var(np.asarray(density_curves), axis=1)
-        self.density_target_var = density_target_var
-        self.density_degenerate_conditions = degenerate_targets(density_curves)
-        for i, name in enumerate(self.condition_names):
-            # Near-constant targets are defined but numerically unstable under CCC.
-            # Warn; the refusal is at eps and nowhere else. Scale-relative, so this
-            # does not fire on a genuinely small but well-resolved curve.
-            scale = float(np.max(np.abs(np.asarray(density_curves)[i])))
-            if (not self.density_degenerate_conditions[i] and scale > 0
-                    and np.sqrt(density_target_var[i]) < 1e-3 * scale):
-                print(f"  WARNING: {name} density target is near-constant "
-                      f"(sd={np.sqrt(density_target_var[i]):.2e} vs max|curve|={scale:.2e}); "
-                      "CCC is unstable here — treat its density fit with suspicion.")
+        for warning in targets.near_constant_warnings:
+            print(warning)
 
         print(f"Target curves precomputed for {len(self.condition_names)} conditions (vmap)")
         print(f"Bias curves shape: {self.unified_target_bias.shape}")
         print(f"Bias weights shape: {self.unified_bias_weights.shape}")
         print(f"Density curves shape: {self.unified_target_density.shape}")
         print(f"Smoothed bias curves shape: {self.unified_target_bias_curve.shape}")
-
-        # Precompute empirical bias distributions shared by the balanced_crps and
-        # bias_weighted_crps methods (unified_target_d for both; unified_fd_weights
-        # for balanced_crps, unified_bias_fd_weights for bias_weighted_crps).
-        # Q[c, j, k] = Gaussian-weighted empirical probability of bias bin k at feat_diff grid point j.
-        # target_d[c, j, k] = sum_l D_circ[k,l] * Q[c,j,l]  — expected circular distance from bin k
-        #                       to the empirical distribution.  Precomputed so the JIT branch is cheap.
-        print("Precomputing empirical bias distributions for balanced_crps/bias_weighted_crps...")
-        D_np = np.array(self.D_circ_matrix)        # (n_bias, n_bias)
-        fd_grid_np = np.array(self.feat_diff_grid)  # (n_feat,)
-        bias_low = config.mu1_bias_range[0]
-        bias_step_val = config.mu1_bias_step
-        n_feat_pts = len(fd_grid_np)
-        n_bias_pts = self.n_mu1_bias
-
-        target_d_list = []
-        fd_weights_list = []
-        fd_bias_weights_list = []
-        for cond_name in self.condition_names:
-            dataset_np = np.array(self.condition_datasets[cond_name])
-            target_d, support_mask, bias_weights = compute_bwcrps_condition_targets(
-                dataset_np[:, 0], dataset_np[:, 1], fd_grid_np, D_np,
-                self.emp_density_weights_sd, bias_low, bias_step_val, n_bias_pts)
-            target_d_list.append(target_d)
-            fd_weights_list.append(support_mask)
-            fd_bias_weights_list.append(bias_weights)
-
-        self.unified_target_d = jnp.array(np.stack(target_d_list))         # (n_cond, n_feat, n_bias)
-        self.unified_fd_weights = jnp.array(np.stack(fd_weights_list))      # (n_cond, n_feat) — binary mask
-        self.unified_bias_fd_weights = jnp.array(np.stack(fd_bias_weights_list))  # (n_cond, n_feat)
         print(f"  target_d shape: {self.unified_target_d.shape}, "
               f"fd_weights shape: {self.unified_fd_weights.shape}, "
               f"mean support: {self.unified_fd_weights.mean():.2f}")

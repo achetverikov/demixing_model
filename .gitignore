@@ -59,3 +59,7 @@ MODEL_PIPELINE_FOR_AGENTS.md
 
 # Prebuilt devcontainer image bundle, rebuilt locally
 .devcontainer/*.zip
+
+# Test reference data is version-controlled: a golden record that silently
+# vanishes turns its test into a skip, which reads as coverage.
+!tests/data/*.npz
