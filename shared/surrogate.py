@@ -79,6 +79,8 @@ def production_family() -> str:
 
     Exactly two checkpoints are production at any moment, one per observer sample
     count, and :data:`DEFAULT_FAMILY` is the one switch that says which pair.
+    (There was briefly a second constant named ``PRODUCTION_FAMILY``; it is gone,
+    and a test asserts it has not come back.)
     Promotion flips it once, after acceptance (transition plan step 6).
 
     A function rather than a second constant, so that reading it cannot pick up a
@@ -98,7 +100,7 @@ def production_checkpoint(n_samples: int) -> Path:
 
     ``n_samples`` is the parameter: 20 and 100 are two different observer models,
     and everything else about which file to load follows from
-    :data:`PRODUCTION_FAMILY`.
+    :func:`production_family`.
     """
     if n_samples not in SUPPORTED_SAMPLE_COUNTS:
         raise ValueError(
@@ -133,6 +135,11 @@ def checkpoint_for_run(results_path, explicit=None, n_samples: Optional[int] = N
     results_path = Path(results_path)
     fingerprint_path, fingerprint = find_run_fingerprint(results_path)
     recorded = (fingerprint or {}).get("checkpoint_sha256")
+    if fingerprint is not None and not recorded:
+        raise ValueError(
+            f"{fingerprint_path} exists but records no checkpoint_sha256, so it cannot say "
+            "which surrogate produced this run. That is not the same as a run predating "
+            "fingerprints; treating it as one would guess.")
 
     if explicit is not None:
         path = Path(explicit)
@@ -151,15 +158,17 @@ def checkpoint_for_run(results_path, explicit=None, n_samples: Optional[int] = N
             f"{fingerprint_path} records checkpoint_sha256={recorded[:16]}..., which matches "
             f"none of the installed artifacts. Pass the checkpoint explicitly.")
 
-    if n_samples is None:
-        raise ValueError(
-            f"no run fingerprint near {results_path} and no checkpoint given, so nothing "
-            "identifies the surrogate that produced these parameters.")
-    path = production_checkpoint(n_samples)
-    print(f"  NOTE: {results_path} has no run fingerprint, so the production "
-          f"n_samples={n_samples} artifact ({path.name}) is being used. If these parameters "
-          "were fitted with a different model, its curves will not match them.")
-    return path
+    raise ValueError(
+        f"no run fingerprint near {results_path} and no checkpoint given, so nothing "
+        "identifies the surrogate that produced these parameters. Pass the checkpoint "
+        "explicitly.\n"
+        "\n"
+        "There is deliberately no fallback to the production artifact for n_samples. That "
+        "would substitute today's model for the one a stored fit was produced with: before "
+        "promotion it can pick epoch 1425 for parameters fitted at epoch 1500 -- different "
+        "architectures -- and after promotion it would recompute a surface fit's curves from "
+        "the mixture. Both cases plot one model's curves beside another model's parameters, "
+        "and neither announces itself.")
 
 
 def find_run_fingerprint(path):

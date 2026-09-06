@@ -15,6 +15,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import argparse
 import sys
+import re
 from pathlib import Path
 import pickle
 from typing import Optional, Tuple
@@ -182,13 +183,24 @@ def load_averaged_surface(sd_feat1: float, sd_feat2: float, sd_spat: float, n_sa
     # of one. It is checked against the directory instead: passing 20 while
     # reading a 100-sample directory used to return that directory's arrays
     # labelled 20, byte-identical to the same call with 100.
+    # An exact token, not containment: "120samples" contains "20samples", and a
+    # directory renamed "..._100samples_copy_20samples" would pass a containment
+    # check and export n=100 arrays under an n=20 label.
     directory_name = Path(surfaces_dir).name
-    if f"{n_samples}samples" not in directory_name:
+    tokens = re.findall(r"(?<![0-9])(\d+)samples(?![0-9])", directory_name)
+    distinct = sorted(set(tokens))
+    if len(distinct) > 1:
+        raise ValueError(
+            f"the averaged-surface directory {directory_name!r} names more than one observer "
+            f"model ({distinct}), so it cannot identify which produced its surfaces. Rename "
+            "it, or pass a directory whose name is unambiguous.")
+    if str(n_samples) not in tokens:
         raise ValueError(
             f"n_samples={n_samples} does not match the averaged-surface directory "
-            f"{directory_name!r}, which is what actually identifies the observer model here. "
-            "The surfaces are keyed on disk by directory, so the argument cannot select them "
-            "and would only mislabel the output.")
+            f"{directory_name!r}, whose sample-count tokens are {tokens or 'none'}. The "
+            "directory is what identifies the observer model here -- the surfaces are keyed "
+            "on disk by it, so the argument cannot select them and would only mislabel the "
+            "output.")
 
     # Use canonical ordering for filename; ensure .0 suffix matches saved filenames
     canonical_sf1 = float(min(sd_feat1, sd_feat2))

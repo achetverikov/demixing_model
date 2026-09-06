@@ -185,3 +185,108 @@ def test_the_plotting_entry_point_still_produces_the_reference(golden, surfaces,
     np.testing.assert_array_equal(np.isnan(got), np.isnan(reference))
     finite = np.isfinite(reference)
     np.testing.assert_array_equal(got[finite], reference[finite])
+
+
+# ---------------------------------------------------------------------------
+# Where a clamp decides the answer
+# ---------------------------------------------------------------------------
+#
+# The golden fixtures never approach the resultant clamp, so they cannot detect
+# a change to it. Routing this estimator did change it once -- [1e-10, 1-1e-10]
+# rewritten as a tidier [1e-12, 1] -- and on a surface whose first moment cancels
+# in float32 that moved the answer by 37 degrees while all 16 golden tests
+# stayed green. These cases go where the fixtures do not.
+
+
+def _pre_routing_pooled_sd(log_surfaces_batch, bin_weights_batch):
+    """The deployed implementation before the routing, transcribed verbatim."""
+    from shared.mu1_axis import mu1_grid, periodic_integral
+
+    grid = mu1_grid()
+    probabilities = jnp.exp(log_surfaces_batch)
+    weights = jnp.asarray(bin_weights_batch)
+    mixtures = jnp.einsum('smf,sbf->smb', probabilities, weights)
+    angles = jnp.radians(grid)
+    mass = periodic_integral(mixtures, axis=1)
+    mean_cos = periodic_integral(mixtures * jnp.cos(angles)[None, :, None], axis=1)
+    mean_sin = periodic_integral(mixtures * jnp.sin(angles)[None, :, None], axis=1)
+    r = jnp.sqrt(mean_cos ** 2 + mean_sin ** 2) / jnp.where(mass > 0, mass, jnp.nan)
+    r_safe = jnp.minimum(jnp.maximum(r, 1e-10), 1.0 - 1e-10)
+    return jnp.degrees(jnp.sqrt(-2 * jnp.log(r_safe)))
+
+
+def _extreme_cases():
+    from shared.mu1_axis import mu1_grid
+
+    grid = np.asarray(mu1_grid())
+    n = len(grid)
+
+    cancelling = np.full((1, n, 1), 1e-30)
+    for angle in (-180.0, -90.0, 0.0):
+        cancelling[0, int(np.argmin(np.abs(grid - angle))), 0] = 1.0 / 3.0
+
+    spike = np.full((1, n, 1), 1e-30)
+    spike[0, n // 2, 0] = 1.0
+
+    uniform = np.full((1, n, 1), 1.0 / n)
+
+    rng = np.random.default_rng(0)
+    random = np.abs(rng.normal(size=(2, n, 5)))
+    random /= random.sum(axis=1, keepdims=True)
+    random_weights = rng.random((2, 4, 5))
+    random_weights /= random_weights.sum(axis=-1, keepdims=True)
+
+    return {
+        "cancelling first moment": (cancelling, np.ones((1, 1, 1))),
+        "near-delta, resultant to 1": (spike, np.ones((1, 1, 1))),
+        "uniform, resultant to 0": (uniform, np.ones((1, 1, 1))),
+        "random": (random, random_weights),
+    }
+
+
+@pytest.mark.parametrize("case", list(_extreme_cases()))
+def test_the_clamp_is_the_deployed_one(case):
+    """Bit-identity where the clamp, not the data, decides the answer."""
+    densities, weights = _extreme_cases()[case]
+    log_surfaces = jnp.log(jnp.asarray(densities))
+    weights = jnp.asarray(weights)
+
+    predictor = SurfacePredictor(log_surfaces, n_samples=20, artifact="extremes")
+    routed = np.asarray(predictor.pooled_circular_sd(weights))
+    reference = np.asarray(_pre_routing_pooled_sd(log_surfaces, weights))
+
+    np.testing.assert_array_equal(np.isnan(routed), np.isnan(reference))
+    finite = np.isfinite(reference)
+    np.testing.assert_array_equal(routed[finite], reference[finite])
+
+
+def test_the_upper_clamp_is_inert_in_float32_and_that_is_the_deployed_behaviour():
+    """A degenerate case the estimator has always had, pinned rather than fixed.
+
+    The clamp reads ``min(max(r, 1e-10), 1 - 1e-10)``, but 1 - 1e-10 is exactly
+    1.0 in float32 (eps is 1.19e-7), so the upper bound never binds: a
+    distribution concentrated in one cell gives r == 1, log(1) == 0, and an SD of
+    -0.0 degrees. That is what the deployed code returns, and this test pins it
+    to the deployed value rather than to what the clamp appears to intend.
+
+    Changing it would be a defensible fix -- an SD of zero for a distribution
+    with one cell of support is arguably right, and arguably a floor is wanted --
+    but it is a change to a plotted number, so it belongs in a decision, not in a
+    routing commit. Recorded in OPEN_DECISIONS.md.
+    """
+    from shared.mu1_axis import mu1_grid
+
+    n = len(np.asarray(mu1_grid()))
+    spike = np.full((1, n, 1), 0.0)
+    spike[0, n // 2, 0] = 1.0
+    log_surfaces = jnp.log(jnp.asarray(spike) + 1e-300)
+    weights = jnp.ones((1, 1, 1))
+
+    routed = float(np.asarray(
+        SurfacePredictor(log_surfaces, n_samples=20, artifact="delta")
+        .pooled_circular_sd(weights))[0, 0])
+    reference = float(np.asarray(_pre_routing_pooled_sd(log_surfaces, weights))[0, 0])
+
+    assert routed == reference
+    assert abs(routed) == 0.0, (
+        "the single-cell case no longer returns zero; the clamp's behaviour changed")

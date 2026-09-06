@@ -2,12 +2,15 @@
 """Record the plotting estimators' outputs, as a frozen reference.
 
 Run this **before** the plotting path is routed through the shared prediction
-layer, and never again after. The plots are not decoration: row 3 compares a
-model circular SD against an empirical one, and the report-order panel pools
-distributions before a nonlinear CRPS score. Both are estimator definitions the
-transition plan names explicitly -- pool complex moments rather than averaging
-SDs or angles, preserve report-order pooling before the nonlinear score -- so a
-routing change that moved either would be a silent redefinition, not a refactor.
+layer, and never again after. Row 3 of the plots compares a model
+circular SD against an empirical one, and that pooling is an estimator definition
+the transition plan names explicitly -- pool complex moments rather than
+averaging SDs or angles -- so a routing change that moved it would be a silent
+redefinition, not a refactor.
+
+This file records *only* the SD path. The other estimator the plan names, the
+report-order pooling before the nonlinear CRPS score, is recorded separately by
+``record_pooled_bwcrps_golden.py``; nothing here would catch a regression in it.
 
 Same discipline as ``record_fitting_targets_golden.py``: capture what the
 deployed code produces while it is still the deployed code. Verifying a rerouted

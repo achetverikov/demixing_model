@@ -426,9 +426,16 @@ class WrappedMixturePredictor(BiasPredictor):
 
         Done here without a grid. Mixing densities is linear, so the pooled first
         moment is the weight-average of the per-column first moments, and each of
-        those is closed form for this family. That is the same estimator the
-        surface path computes by integrating a mixed grid, reached analytically:
-        checked equal to 4.6e-08 degrees.
+        those is closed form for this family -- the same estimator the surface
+        path reaches by integrating a mixed grid.
+
+        The two agree to about 9e-05 degrees on the golden fixture, not better.
+        The residual is the *grid's* error, not this one's: a 2-degree Riemann sum
+        approximates the integral this computes exactly. So the analytic value is
+        the estimand and the grid value approximates it, which is the right way
+        round -- but the agreement should not be quoted more tightly than measured.
+        (An earlier note claimed 4.6e-08; that was one column set, not the
+        fixture, and it overstated the general case.)
 
         Args:
             params: ``(n_columns, 4)`` rows, one per feature column.
@@ -444,11 +451,11 @@ class WrappedMixturePredictor(BiasPredictor):
         moments = self._wm.circular_moment(self.distribution(params, validate, sd_motor), 1)
         pooled = weights @ moments
         mass = jnp.sum(weights, axis=-1)
-        resultant = jnp.where(mass > 0, jnp.abs(pooled) / jnp.where(mass > 0, mass, 1.0),
-                              jnp.nan)
-        resultant = jnp.clip(resultant, 1e-12, 1.0)
-        return jnp.where(mass > 0,
-                         jnp.degrees(jnp.sqrt(-2.0 * jnp.log(resultant))), jnp.nan)
+        # Same clamp as the surface path, so the two families cannot disagree at
+        # the extremes where a clamp is what decides the answer.
+        resultant = jnp.abs(pooled) / jnp.where(mass > 0, mass, jnp.nan)
+        safe = jnp.minimum(jnp.maximum(resultant, 1e-10), 1.0 - 1e-10)
+        return jnp.degrees(jnp.sqrt(-2 * jnp.log(safe)))
 
     @staticmethod
     def _default_edges():
@@ -547,10 +554,15 @@ class SurfacePredictor(BiasPredictor):
         cosine = periodic_integral(mixtures * jnp.cos(angles)[None, :, None], axis=1)
         sine = periodic_integral(mixtures * jnp.sin(angles)[None, :, None], axis=1)
 
-        safe_mass = jnp.where(mass > 0, mass, 1.0)
-        resultant = jnp.clip(jnp.sqrt(cosine ** 2 + sine ** 2) / safe_mass, 1e-12, 1.0)
-        return jnp.where(mass > 0,
-                         jnp.degrees(jnp.sqrt(-2.0 * jnp.log(resultant))), jnp.nan)
+        # The clamp is the deployed one, verbatim: [1e-10, 1 - 1e-10], not a
+        # tidier [1e-12, 1]. The upper bound is the part that matters -- at r = 1
+        # exactly, log(1) is 0 and the SD collapses to 0 degrees, which this
+        # estimator never returned. Rewriting it moved the answer by 37 degrees on
+        # a surface whose first moment cancels in float32, and no golden fixture
+        # goes near the clamp, so nothing here would have caught it.
+        resultant = jnp.sqrt(cosine ** 2 + sine ** 2) / jnp.where(mass > 0, mass, jnp.nan)
+        safe = jnp.minimum(jnp.maximum(resultant, 1e-10), 1.0 - 1e-10)
+        return jnp.degrees(jnp.sqrt(-2 * jnp.log(safe)))
 
 
 def predictor_from_surrogate(loaded, sd_motor: float = 0.0) -> BiasPredictor:

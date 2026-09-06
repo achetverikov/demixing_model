@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import warnings
 from pathlib import Path
 import shutil
 import tempfile
@@ -494,10 +495,32 @@ def wnm_cell_log_probability(predictor, fit_row: pd.Series, feat_diff_deg, bias_
     # them to concrete scalars.
     lows = jnp.asarray(centres[indices] - half, jnp.float32)[:, None, None]
     highs = jnp.asarray(centres[indices] + half, jnp.float32)[:, None, None]
-    per_component = wm.wrapped_normal_interval_probability(
-        dist["mu"], dist["sigma"], lows, highs, 8)
-    mass = jnp.sum(jnp.exp(dist["log_pi"]) * per_component, axis=-1)
-    return np.asarray(jnp.log(jnp.clip(mass, 1e-300, None)))
+    # float64 on the host, deliberately. The interval mass of a narrow component
+    # far from its cell is genuinely tiny -- and legitimate: a wrapped normal
+    # assigns positive probability to every interval. Computed in float32 it
+    # underflows to zero and the log becomes -inf, which is not a small
+    # likelihood but a missing one. At the corpus's narrow corner
+    # (sd_feat 2.5, sd_spat 5, feat_diff 2) that was 79 of 180 reporting cells.
+    per_component = np.asarray(wm.wrapped_normal_interval_probability(
+        dist["mu"], dist["sigma"], lows, highs, 8), dtype=np.float64)
+    weights = np.asarray(jnp.exp(dist["log_pi"]), dtype=np.float64)
+    mass = np.sum(weights * per_component, axis=-1)
+
+    # Still floored, but far below float64's smallest normal rather than at a
+    # value float32 cannot represent. A cell that genuinely underflows float64 is
+    # reported as the floor, not as -inf, so a downstream sum stays finite and
+    # the row remains identifiable as an extreme rather than a failure.
+    floored = int(np.sum(mass <= 0.0))
+    if floored:
+        # Once per process, not once per fit row: a large rescore would otherwise
+        # bury its own results. These are true zeros at float64 -- a quarter-degree
+        # component 90 degrees from a cell has mass below any representable
+        # number -- so the floor is unavoidable rather than a precision failure.
+        warnings.warn(
+            f"{floored} of {mass.size} cell masses underflowed float64 and were floored to "
+            "the smallest positive double; these are extreme tail cells, not missing data.",
+            RuntimeWarning, stacklevel=2)
+    return np.log(np.maximum(mass, np.finfo(np.float64).tiny))
 
 
 def _score_fit_row_wnm(predictor, scored, data_source, fit_row, circ_space):
