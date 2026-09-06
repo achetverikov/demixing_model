@@ -245,7 +245,7 @@ def test_exactly_two_checkpoints_are_production_at_a_time():
     assert len(set(paths.values())) == 2, "the two observer models share an artifact"
     for n_samples, path in paths.items():
         loaded = surrogate.load_surrogate(checkpoint_path=path)
-        assert loaded.family == surrogate.PRODUCTION_FAMILY
+        assert loaded.family == surrogate.production_family()
         assert loaded.n_samples == n_samples
 
 
@@ -257,20 +257,31 @@ def test_an_unsupported_sample_count_is_refused():
 
 
 def test_promotion_is_one_switch():
-    """Flipping PRODUCTION_FAMILY must move both artifacts together, or the two
-    observer models would be served by different surrogates."""
-    original = surrogate.PRODUCTION_FAMILY
+    """One switch, moving both observer models and every resolver together.
+
+    There were briefly two -- DEFAULT_FAMILY gating bare load_surrogate calls and
+    a separate PRODUCTION_FAMILY gating production_checkpoint -- so a half-promoted
+    state was reachable in which the two disagreed about which family was live.
+    """
+    assert not hasattr(surrogate, "PRODUCTION_FAMILY"), (
+        "a second promotion switch has reappeared; promotion must be one edit")
+
+    original = surrogate.DEFAULT_FAMILY
     try:
-        surrogate.PRODUCTION_FAMILY = surrogate.FAMILY_WNM
+        surrogate.DEFAULT_FAMILY = surrogate.FAMILY_WNM
         for n_samples in surrogate.SUPPORTED_SAMPLE_COUNTS:
             if not surrogate.WNM_DEFAULTS[n_samples].exists():
                 pytest.skip("WNM artifacts not installed")
+            # Both resolvers must follow the same switch.
+            assert surrogate.production_family() == surrogate.FAMILY_WNM
+            assert (surrogate.production_checkpoint(n_samples)
+                    == surrogate.resolve_checkpoint(None, n_samples))
             loaded = surrogate.load_surrogate(
                 checkpoint_path=surrogate.production_checkpoint(n_samples))
             assert loaded.family == surrogate.FAMILY_WNM
             assert loaded.n_samples == n_samples
     finally:
-        surrogate.PRODUCTION_FAMILY = original
+        surrogate.DEFAULT_FAMILY = original
 
 
 def test_other_checkpoints_stay_reachable_by_name():

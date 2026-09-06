@@ -144,6 +144,11 @@ simulate_surfaces <- function(parameters,
       mu1_bias_step = sim_results$mu1_bias_step[1],
       mu2_bias_step = if(!is.null(sim_results$mu2_bias_step[1])) sim_results$mu2_bias_step[1] else NULL,
       n_samples = sim_results$n_samples[1],
+      # Resolved from the artifact by Python, not echoed back from the request.
+      surrogate_family = if (!is.null(sim_results$surrogate_family[1]))
+        sim_results$surrogate_family[1] else NA_character_,
+      surrogate_artifact = if (!is.null(sim_results$surrogate_artifact[1]))
+        sim_results$surrogate_artifact[1] else NA_character_,
       skip_motor_noise = sim_results$skip_motor_noise[1],
       has_mu2_data = if(!is.null(sim_results$has_mu2_data[1])) sim_results$has_mu2_data[1] else FALSE
     )
@@ -207,7 +212,16 @@ simulate_surfaces <- function(parameters,
         mu2_density_asymmetry = mu2_density_curve,
         mu1_expectation = mu1_expectation_curve,
         mu2_expectation = mu2_expectation_curve,
-        sd_curve = sd_curve
+        sd_curve = sd_curve,
+        # Which model produced these curves. Python resolves the artifact and
+        # reports its identity; dropping these here would hand R a table whose
+        # rows cannot be traced to a surrogate, which is the same defect the
+        # n_samples labelling had.
+        n_samples = if (!is.null(metadata$n_samples)) metadata$n_samples else NA,
+        surrogate_family = if (!is.null(metadata$surrogate_family))
+          metadata$surrogate_family else NA_character_,
+        surrogate_artifact = if (!is.null(metadata$surrogate_artifact))
+          metadata$surrogate_artifact else NA_character_
       )
       
       long_results <- rbind(long_results, row_data)

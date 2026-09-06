@@ -40,9 +40,11 @@ FAMILY_SURFACE_NN = "surface_nn"
 FAMILY_WNM = "wnm"
 FAMILIES = (FAMILY_SURFACE_NN, FAMILY_WNM)
 
-#: The family used when nothing asks for one.  Stays on the surface NN until the
-#: WNM artifacts have passed acceptance for both sample counts; the transition
-#: plan flips it in its promotion step, not before.
+#: Kept as the name older code imports; it is the production family, not a
+#: second setting. There was briefly a separate ``PRODUCTION_FAMILY``, which
+#: meant promotion took two edits and a half-promoted state was reachable:
+#: ``production_checkpoint(20)`` returning the mixture while a bare
+#: ``load_surrogate(n_samples=20)`` still returned the network. One switch.
 DEFAULT_FAMILY = FAMILY_SURFACE_NN
 
 #: Sample identity for the historical surface checkpoints, which predate any
@@ -72,17 +74,23 @@ WNM_DEFAULTS = {
 
 SUPPORTED_SAMPLE_COUNTS = (20, 100)
 
-#: Which family the production artifacts come from. Exactly two checkpoints are
-#: production at any moment -- one per observer sample count -- and this is the
-#: single switch that says which pair. Promotion flips it once, after acceptance
-#: (transition plan step 6); until then production is the surface network.
-#:
-#: Scripts and pipelines should ask for an observer model by ``n_samples`` and
-#: let :func:`production_checkpoint` answer, rather than naming a file. A caller
-#: that hardcodes a filename keeps pointing at that file after promotion, which
-#: is how a plot or a prediction ends up computed from a different model than the
-#: fit it accompanies.
-PRODUCTION_FAMILY = FAMILY_SURFACE_NN
+def production_family() -> str:
+    """The family the production artifacts come from.
+
+    Exactly two checkpoints are production at any moment, one per observer sample
+    count, and :data:`DEFAULT_FAMILY` is the one switch that says which pair.
+    Promotion flips it once, after acceptance (transition plan step 6).
+
+    A function rather than a second constant, so that reading it cannot pick up a
+    stale copy and so there is nowhere for a second switch to appear.
+
+    Scripts and pipelines should ask for an observer model by ``n_samples`` and
+    let :func:`production_checkpoint` answer, rather than naming a file. A caller
+    that hardcodes a filename keeps pointing at that file after promotion, which
+    is how a plot or a prediction ends up computed from a different model than the
+    fit it accompanies.
+    """
+    return DEFAULT_FAMILY
 
 
 def production_checkpoint(n_samples: int) -> Path:
@@ -97,13 +105,101 @@ def production_checkpoint(n_samples: int) -> Path:
             f"n_samples={n_samples!r} is not one of {SUPPORTED_SAMPLE_COUNTS}. These are two "
             "different observer models, not a resolution setting, so there is nothing "
             "sensible between or beyond them.")
-    table = SURFACE_DEFAULTS if PRODUCTION_FAMILY == FAMILY_SURFACE_NN else WNM_DEFAULTS
+    family = production_family()
+    table = SURFACE_DEFAULTS if family == FAMILY_SURFACE_NN else WNM_DEFAULTS
     path = table[n_samples]
     if not path.exists():
         raise FileNotFoundError(
-            f"the production {PRODUCTION_FAMILY} artifact for n_samples={n_samples} is not "
+            f"the production {family} artifact for n_samples={n_samples} is not "
             f"installed at {path}")
     return path
+
+
+def checkpoint_for_run(results_path, explicit=None, n_samples: Optional[int] = None) -> Path:
+    """The checkpoint a *fitted run* was produced with.
+
+    Consumers of a fit -- rescoring, plotting, prediction -- must use the
+    surrogate that produced the parameters, not whatever is production today.
+    Resolving by ``n_samples`` alone is right for a fresh prediction and wrong
+    for anything accompanying stored parameters: after a promotion it would
+    recompute a historical fit's curves from the new model and show them beside
+    the old fit's numbers.
+
+    Order: an explicit path wins but is verified against the run's recorded
+    digest; otherwise the digest identifies the artifact; otherwise, only if the
+    run predates fingerprints, the production artifact for ``n_samples`` is used
+    and the caller is told.
+    """
+    results_path = Path(results_path)
+    fingerprint_path, fingerprint = find_run_fingerprint(results_path)
+    recorded = (fingerprint or {}).get("checkpoint_sha256")
+
+    if explicit is not None:
+        path = Path(explicit)
+        if recorded and file_digest(path) != recorded:
+            raise ValueError(
+                f"{path.name} is not the checkpoint this run was fitted with "
+                f"({fingerprint_path} records {recorded[:16]}...). Using it would show one "
+                "model's curves beside another model's parameters.")
+        return path
+
+    if recorded:
+        for candidate in installed_checkpoints():
+            if file_digest(candidate) == recorded:
+                return candidate
+        raise ValueError(
+            f"{fingerprint_path} records checkpoint_sha256={recorded[:16]}..., which matches "
+            f"none of the installed artifacts. Pass the checkpoint explicitly.")
+
+    if n_samples is None:
+        raise ValueError(
+            f"no run fingerprint near {results_path} and no checkpoint given, so nothing "
+            "identifies the surrogate that produced these parameters.")
+    path = production_checkpoint(n_samples)
+    print(f"  NOTE: {results_path} has no run fingerprint, so the production "
+          f"n_samples={n_samples} artifact ({path.name}) is being used. If these parameters "
+          "were fitted with a different model, its curves will not match them.")
+    return path
+
+
+def find_run_fingerprint(path):
+    """The fitting run's fingerprint sidecar, searched upward from ``path``."""
+    import json
+
+    path = Path(path)
+    start = path.parent if path.suffix else path
+    for directory in [start, *start.parents]:
+        candidate = directory / "extended_run_fingerprint.json"
+        if candidate.is_file():
+            payload = json.loads(candidate.read_text())
+            return candidate, payload.get("payload", payload)
+        if directory.name == "results" or directory == directory.parent:
+            break
+    return None, None
+
+
+def file_digest(path) -> str:
+    """SHA-256 of a file, matching what the run fingerprint records."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def installed_checkpoints() -> list:
+    """Every artifact a run could have used, for digest lookup."""
+    candidates = list(SURFACE_DEFAULTS.values())
+    candidates += [PRETRAINED_DIR / name for name in SURFACE_CHECKPOINT_REGISTRY]
+    candidates += list(WNM_DEFAULTS.values())
+    seen, unique = set(), []
+    for candidate in candidates:
+        if candidate.is_file() and candidate not in seen:
+            seen.add(candidate)
+            unique.append(candidate)
+    return unique
 
 
 def load_production(n_samples: int) -> "LoadedSurrogate":

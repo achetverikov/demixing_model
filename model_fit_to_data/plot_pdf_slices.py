@@ -64,10 +64,16 @@ def main():
 
     results = load_extended_results(args.results_path)
 
-    # n_samples selects the production artifact for that observer model; an
-    # explicit --checkpoint-path names any other one.
-    checkpoint = (Path(args.checkpoint_path) if args.checkpoint_path
-                  else surrogate.production_checkpoint(args.n_samples))
+    # The stored parameters were produced by a particular surrogate, so use that
+    # one rather than today's production artifact; --checkpoint-path overrides and
+    # is verified against the run's recorded digest.
+    checkpoint = surrogate.checkpoint_for_run(
+        args.results_path, explicit=args.checkpoint_path, n_samples=args.n_samples)
+    family = surrogate.detect_family(checkpoint)
+    if family != surrogate.FAMILY_SURFACE_NN:
+        raise NotImplementedError(
+            f"plot_pdf_slices draws from the surface optimizer and cannot drive a {family} "
+            f"artifact ({Path(checkpoint).name}); see transition plan step 4c.")
 
     dummy = jnp.asarray(np.random.uniform(-180, 180, (100, 2)))
     optimizer = GridBasedMultiConditionOptimizer(

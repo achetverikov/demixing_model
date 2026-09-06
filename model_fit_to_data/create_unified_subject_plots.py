@@ -1869,15 +1869,28 @@ def create_unified_plots_with_summaries(
         f"{n_samples}samples/{outliers_str}/extended_fit_results.pkl"
     )
     resolved_results_path = resolve_input_path(results_path or default_results_path, results_dir)
-    # n_samples is the parameter; shared.surrogate answers which artifact is
-    # production for it. This default used to name epoch 1500 while the fitter's
-    # named epoch 1425 -- different architectures, not just different epochs --
-    # so a default n=20 plot recomputed its curves, moments and SDs from a
-    # different model than the one that produced the parameters it was plotting.
-    # An explicit --checkpoint-path still selects any other artifact.
-    resolved_checkpoint_path = (
-        resolve_input_path(checkpoint_path, results_dir) if checkpoint_path
-        else surrogate.production_checkpoint(n_samples))
+    # These plots recompute curves, moments and SDs at *stored* parameters, so
+    # they must use the surrogate that produced those parameters -- not whatever
+    # is production today. The run's fingerprint says which by SHA-256; only a
+    # run predating fingerprints falls back to the production artifact for
+    # n_samples, and says so. An explicit --checkpoint-path is honoured and
+    # verified against the recorded digest.
+    #
+    # Resolving by n_samples alone was wrong twice over: the old default named
+    # epoch 1500 while the fitter's named epoch 1425 -- different architectures,
+    # not just different epochs -- and after a promotion it would recompute a
+    # historical fit's curves from the new model.
+    resolved_checkpoint_path = surrogate.checkpoint_for_run(
+        resolved_results_path,
+        explicit=resolve_input_path(checkpoint_path, results_dir) if checkpoint_path else None,
+        n_samples=n_samples)
+    _family = surrogate.detect_family(resolved_checkpoint_path)
+    if _family != surrogate.FAMILY_SURFACE_NN:
+        raise NotImplementedError(
+            f"these plots recompute their curves through the surface optimizer and cannot "
+            f"drive a {_family} artifact ({Path(resolved_checkpoint_path).name}). Routing them "
+            "through shared/prediction.py is transition plan step 4c; until then, plotting a "
+            "mixture fit would need a surrogate that cannot reproduce its numbers.")
 
     if output_dir is None:
         resolved_output_dir = Path(resolved_results_path).parent

@@ -63,7 +63,7 @@ def test_an_explicit_checkpoint_is_verified_not_merely_accepted(tmp_path):
     """Passing --checkpoint-path is not a licence to rescore under any model."""
     fits = _run_dir(tmp_path, WNM)
     assert P.infer_checkpoint_path(fits, str(WNM)) == WNM
-    with pytest.raises(ValueError, match="not the checkpoint these fits were produced with"):
+    with pytest.raises(ValueError, match="not the checkpoint this run was fitted with"):
         P.infer_checkpoint_path(fits, str(SURFACE_20))
 
 
@@ -73,7 +73,7 @@ def test_without_a_fingerprint_or_an_explicit_path_it_refuses(tmp_path):
     run.mkdir(parents=True)
     fits = run / "fitted_parameters.csv"
     fits.write_text("subject\n")
-    with pytest.raises(ValueError, match="No run fingerprint was found"):
+    with pytest.raises(ValueError, match="no run fingerprint near"):
         P.infer_checkpoint_path(fits, None)
     # An explicit path still works for results predating the fingerprint.
     assert P.infer_checkpoint_path(fits, str(SURFACE_20)) == SURFACE_20
@@ -102,6 +102,8 @@ def test_the_fingerprint_is_found_from_a_nested_fits_file(tmp_path):
 
 def test_the_installed_list_covers_both_families(tmp_path):
     """A digest lookup can only resolve artifacts it knows about."""
-    names = {path.name for path in P._installed_checkpoints()}
+    from shared import surrogate as s
+
+    names = {path.name for path in s.installed_checkpoints()}
     assert any(name.startswith("wnm_") for name in names)
     assert any(name.startswith("model_epoch") for name in names)

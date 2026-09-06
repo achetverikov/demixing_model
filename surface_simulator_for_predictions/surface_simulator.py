@@ -28,12 +28,10 @@ from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
 from shared.config import config
 from shared.mu1_axis import guard_surface_mu1_axis, periodic_integral
 from shared import surrogate
-from shared.utils import (AveragedSurface, SurfaceUnpickler, resolve_input_path,
+from shared.utils import (AveragedSurface, SurfaceUnpickler,
                           ensure_averaged_surface_file, gaussian_curve_smoother)
 
 RESULTS_DIR = "results"
-CHECKPOINT_PREFIX = "neural_net_checkpoints"
-CHECKPOINT_EPOCH = 1500
 
 def _generate_mu2_bias_curve_batch(mu2_surfaces_batch: jnp.ndarray, target_feat_indices: jnp.ndarray) -> jnp.ndarray:
     """Generate mu2 bias curves for batch of mu2 surfaces using linear integration (not circular)."""
@@ -179,6 +177,19 @@ def load_averaged_surface(sd_feat1: float, sd_feat2: float, sd_spat: float, n_sa
     Raises:
         FileNotFoundError: If surface file doesn't exist
     """
+    # The directory carries the observer model -- the filename holds only the SDs
+    # -- so n_samples cannot select a file here and must not be taken as evidence
+    # of one. It is checked against the directory instead: passing 20 while
+    # reading a 100-sample directory used to return that directory's arrays
+    # labelled 20, byte-identical to the same call with 100.
+    directory_name = Path(surfaces_dir).name
+    if f"{n_samples}samples" not in directory_name:
+        raise ValueError(
+            f"n_samples={n_samples} does not match the averaged-surface directory "
+            f"{directory_name!r}, which is what actually identifies the observer model here. "
+            "The surfaces are keyed on disk by directory, so the argument cannot select them "
+            "and would only mislabel the output.")
+
     # Use canonical ordering for filename; ensure .0 suffix matches saved filenames
     canonical_sf1 = float(min(sd_feat1, sd_feat2))
     canonical_sf2 = float(max(sd_feat1, sd_feat2))
