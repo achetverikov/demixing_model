@@ -115,6 +115,7 @@ def main() -> None:
             "emp_density_weights_sd": DENSITY_CURVE_SPEC['emp_density_weights_sd'],
             "density_smoothing_sigma": DENSITY_CURVE_SPEC['density_smoothing_sigma'],
             "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            **cc.surrogate_manifest_fields(checkpoint),
         },
     )
     if args.verify:

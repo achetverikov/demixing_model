@@ -89,46 +89,21 @@ def _angle_display_scale(circ_space: int = 360) -> float:
 
 def _pooled_bias_weighted_crps(log_surfaces, datasets, feat_grid, distance_matrix,
                                weights_sd):
-    """Distribution-level BWCRPS for separately fitted report-order surfaces."""
+    """Distribution-level BWCRPS for separately fitted report-order surfaces.
+
+    The pooling and scoring live in ``shared.prediction`` so both surrogate
+    families share one definition; this wrapper supplies the surface backend's
+    own probability convention -- renormalise the sampled grid over the bias axis
+    -- and is pinned unchanged against a pre-routing reference in
+    ``tests/test_pooled_bwcrps.py``.
+    """
+    from shared.prediction import pooled_bias_weighted_crps
+
     log_surfaces = np.asarray(log_surfaces, dtype=float)
     probabilities = np.exp(log_surfaces - log_surfaces.max(axis=1, keepdims=True))
     probabilities /= probabilities.sum(axis=1, keepdims=True)
-    feat_grid = np.asarray(feat_grid, dtype=float)
-    distance_matrix = np.asarray(distance_matrix, dtype=float)
-    bias_low = config.mu1_bias_range[0]
-    bias_step = config.mu1_bias_step
-    n_bias = probabilities.shape[1]
-
-    supports = []
-    weighted_empirical = []
-    weighted_bias = []
-    for dataset in datasets:
-        values = np.asarray(dataset, dtype=float)
-        feat_diff, bias = values[:, 0], values[:, 1]
-        kernel = np.exp(-0.5 * ((feat_grid[:, None] - feat_diff[None, :]) / weights_sd) ** 2)
-        support = kernel.sum(axis=1)
-        # Circular binning: wrap, never clip (the mu1_bias axis is a circle).
-        bias_bin = np.mod(np.round((bias - bias_low) / bias_step).astype(int), n_bias)
-        one_hot = np.zeros((len(bias), n_bias), dtype=float)
-        one_hot[np.arange(len(bias)), bias_bin] = 1.0
-        supports.append(support)
-        weighted_empirical.append(kernel @ one_hot)
-        weighted_bias.append(kernel @ bias)
-
-    supports = np.stack(supports)
-    total_support = supports.sum(axis=0)
-    pred_fd = np.einsum("rf,rbf->fb", supports, probabilities)
-    pred_fd /= np.maximum(total_support[:, None], 1e-10)
-    empirical_fd = np.sum(weighted_empirical, axis=0) / np.maximum(total_support[:, None], 1e-10)
-    target_d = empirical_fd @ distance_matrix
-    mean_bias = np.sum(weighted_bias, axis=0) / np.maximum(total_support, 1e-10)
-    support_mask = total_support > np.median(total_support) * 0.01
-    fd_weights = mean_bias ** 2 * support_mask
-    if not np.any(fd_weights > 0):
-        raise ValueError("pooled report-order BWCRPS is unidentified because all bias weights are zero")
-    cross = np.sum(pred_fd * target_d, axis=1)
-    self_energy = np.sum(pred_fd * (pred_fd @ distance_matrix), axis=1)
-    return float(np.sum(fd_weights * (2 * cross - self_energy)) / np.sum(fd_weights))
+    return pooled_bias_weighted_crps(probabilities, datasets, feat_grid,
+                                     distance_matrix, weights_sd)
 
 
 SD_N_BINS = 18

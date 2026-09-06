@@ -836,9 +836,18 @@ def run_fitting(
                 _cfg.param_grid_low, _cfg.param_range_high, curve_cache_step)
             feat_pairs = curve_cache.feat_pair_lattice(sd_spat_values)
             curves = curve_cache.build_curve_lattice(optimizer, sd_spat_values, feat_pairs)
-            curve_cache.write_cache(cache_dir, cache_key=curve_cache_key,
-                                    sd_spat_values=sd_spat_values, feat_pairs=feat_pairs,
-                                    curves=curves)
+            curve_cache.write_cache(
+                cache_dir, cache_key=curve_cache_key, sd_spat_values=sd_spat_values,
+                feat_pairs=feat_pairs, curves=curves,
+                # Same fields the standalone builder records, from the same
+                # helper: a cache built by the fitter and one built by the
+                # builder must describe themselves identically.
+                manifest_extra={
+                    "checkpoint": str(resolved_checkpoint),
+                    "emp_density_weights_sd": DENSITY_CURVE_SPEC['emp_density_weights_sd'],
+                    "density_smoothing_sigma": DENSITY_CURVE_SPEC['density_smoothing_sigma'],
+                    **curve_cache.surrogate_manifest_fields(resolved_checkpoint),
+                })
 
         curve_source = curve_cache.open_or_build(curve_cache_root, curve_cache_key, _build)
         log(f"Exhaustive search over {len(curve_source.sd_spat_values)} x "

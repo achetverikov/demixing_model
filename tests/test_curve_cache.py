@@ -245,3 +245,49 @@ def test_a_cached_source_drives_the_exhaustive_backend(tmp_path):
             best = (total, i)
     assert result["best_loss"] == pytest.approx(best[0], rel=1e-4, abs=1e-6)
     assert result["shared_params"]["sd_spat"] == pytest.approx(float(sd_spat[best[1]]))
+
+
+# ---------------------------------------------------------------------------
+# Cache identity lives in the manifest, not the key
+# ---------------------------------------------------------------------------
+
+def test_the_manifest_says_which_surrogate_built_the_cache():
+    """A cache directory should answer "which model produced this" without
+    anyone having to re-derive it from the digest."""
+    import curve_cache as cc
+    from shared import surrogate
+
+    surface = surrogate.SURFACE_DEFAULTS[20]
+    if not surface.exists():
+        pytest.skip("no pretrained surface checkpoint")
+
+    fields = cc.surrogate_manifest_fields(surface)
+    assert fields["surrogate_family"] == "surface_nn"
+    assert fields["surrogate_n_samples"] == 20
+    assert fields["surrogate_artifact"] == surface.name
+
+    artifact = surrogate.WNM_DEFAULTS[20]
+    if artifact.exists():
+        mixture = cc.surrogate_manifest_fields(artifact)
+        assert mixture["surrogate_family"] == "wnm"
+        # Only the packaged family records a schema, so this is present there and
+        # absent for the surface network rather than invented for it.
+        assert mixture["surrogate_artifact_schema"].startswith("wnm/")
+        assert "surrogate_artifact_schema" not in fields
+
+
+def test_identity_is_not_in_the_key():
+    """Adding it would rename every existing cache directory and discard caches
+    that take hours to build, without changing what a single curve is. The key
+    already digests the checkpoint, so the two families cannot collide anyway.
+    """
+    import inspect
+
+    import curve_cache as cc
+
+    source = inspect.getsource(cc.compute_cache_key)
+    assert "checkpoint_sha256" in source
+    for field in ("surrogate_family", "surrogate_n_samples", "surrogate_artifact"):
+        assert field not in source, (
+            f"{field} reached the cache key; that invalidates every built cache for no "
+            "change in the curves it holds")

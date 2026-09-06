@@ -240,6 +240,29 @@ class CacheCorruptError(RuntimeError):
     """Raised when a cache's contents do not match its manifest."""
 
 
+def surrogate_manifest_fields(checkpoint_path) -> Dict[str, Any]:
+    """Which surrogate built a cache, for the manifest -- not for the key.
+
+    The key already digests ``checkpoint_sha256``, so two families cannot share a
+    cache directory and correctness does not need these. Adding them to the key
+    would rename every existing directory and discard caches that take hours to
+    build, for no change in what the curves are. They go in the manifest instead,
+    where they answer "which model produced this" without invalidating anything.
+    """
+    from shared import surrogate
+
+    loaded = surrogate.load_surrogate(checkpoint_path=checkpoint_path)
+    fields = {
+        "surrogate_family": loaded.family,
+        "surrogate_n_samples": loaded.n_samples,
+        "surrogate_artifact": loaded.path.name,
+    }
+    schema = loaded.meta.get("artifact_schema")
+    if schema:
+        fields["surrogate_artifact_schema"] = schema
+    return fields
+
+
 def write_cache(out_dir: os.PathLike | str, *, cache_key: str, sd_spat_values,
                 feat_pairs, curves, manifest_extra: Optional[Dict[str, Any]] = None) -> Path:
     """Write a complete cache directory. Centering and statistics happen here.

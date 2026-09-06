@@ -212,6 +212,86 @@ def check_curve_layout(params):
             f"[{steps.min():.6g}, {steps.max():.6g}]).")
 
 
+def pooled_bias_weighted_crps(probabilities, datasets, feat_grid, distance_matrix,
+                             weights_sd):
+    """Bias-weighted CRPS of report orders pooled into one distribution.
+
+    The order of operations is the estimator, and the two orders are not
+    interchangeable. The report orders are pooled into a single predicted
+    distribution at each feature location *first*, and the energy score is
+    applied to that. Scoring each order separately and averaging the scores is a
+    different quantity, because the score is nonlinear in the distribution -- and
+    it looks entirely plausible. Measured on the recorded fixtures the two differ
+    by up to 2.68 on a pair with unequal support (600 trials against 80), which
+    is larger than the differences these comparisons exist to detect.
+
+    Takes probabilities rather than log surfaces so both families can supply
+    them: the surface backend renormalises its sampled grid, the mixture
+    integrates each cell exactly.
+
+    Args:
+        probabilities: ``(n_orders, n_bias, n_feat)``, normalised over the bias
+            axis.
+        datasets: one ``(n_trials, 2)`` array of ``[feat_diff, bias]`` per order,
+            in the same order as ``probabilities``.
+        feat_grid: feature-difference grid.
+        distance_matrix: circular distance over the bias grid.
+        weights_sd: Gaussian feature-weight SD, in model degrees.
+
+    Returns:
+        The pooled score, as a float.
+
+    Raises:
+        ValueError: when every feature location has zero weight. A pooled score
+            with no identified feature locations is not a small score, it is no
+            score.
+    """
+    from shared.config import config
+
+    probabilities = np.asarray(probabilities, dtype=float)
+    feat_grid = np.asarray(feat_grid, dtype=float)
+    distance_matrix = np.asarray(distance_matrix, dtype=float)
+    if len(datasets) != probabilities.shape[0]:
+        raise ValueError(
+            f"{len(datasets)} report-order datasets for {probabilities.shape[0]} predicted "
+            "distributions; the two are paired positionally, so a mismatch scores one "
+            "order's model against another's trials.")
+
+    bias_low = config.mu1_bias_range[0]
+    bias_step = config.mu1_bias_step
+    n_bias = probabilities.shape[1]
+
+    supports, weighted_empirical, weighted_bias = [], [], []
+    for dataset in datasets:
+        values = np.asarray(dataset, dtype=float)
+        feat_diff, bias = values[:, 0], values[:, 1]
+        kernel = np.exp(-0.5 * ((feat_grid[:, None] - feat_diff[None, :]) / weights_sd) ** 2)
+        support = kernel.sum(axis=1)
+        # Circular binning: wrap, never clip (the mu1_bias axis is a circle).
+        bias_bin = np.mod(np.round((bias - bias_low) / bias_step).astype(int), n_bias)
+        one_hot = np.zeros((len(bias), n_bias), dtype=float)
+        one_hot[np.arange(len(bias)), bias_bin] = 1.0
+        supports.append(support)
+        weighted_empirical.append(kernel @ one_hot)
+        weighted_bias.append(kernel @ bias)
+
+    supports = np.stack(supports)
+    total_support = supports.sum(axis=0)
+    pred_fd = np.einsum("rf,rbf->fb", supports, probabilities)
+    pred_fd /= np.maximum(total_support[:, None], 1e-10)
+    empirical_fd = np.sum(weighted_empirical, axis=0) / np.maximum(total_support[:, None], 1e-10)
+    target_d = empirical_fd @ distance_matrix
+    mean_bias = np.sum(weighted_bias, axis=0) / np.maximum(total_support, 1e-10)
+    support_mask = total_support > np.median(total_support) * 0.01
+    fd_weights = mean_bias ** 2 * support_mask
+    if not np.any(fd_weights > 0):
+        raise ValueError(
+            "pooled report-order BWCRPS is unidentified because all bias weights are zero")
+    cross = np.sum(pred_fd * target_d, axis=1)
+    self_energy = np.sum(pred_fd * (pred_fd @ distance_matrix), axis=1)
+    return float(np.sum(fd_weights * (2 * cross - self_energy)) / np.sum(fd_weights))
+
+
 @dataclass(frozen=True)
 class PredictorIdentity:
     """What a prediction has to be labelled with to be interpretable later."""
