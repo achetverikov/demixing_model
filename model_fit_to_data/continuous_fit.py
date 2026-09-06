@@ -41,7 +41,8 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
                    feat_diff_grid, emp_density_weights_sd: float,
                    density_smoothing_sigma: Optional[float] = None,
                    corr_weight: float = 0.25, condition_trials=None,
-                   sd_motor: float = 0.0, n_starts: int = 8, seed: int = 0,
+                   sd_motor: float = 0.0, fit_motor: bool = False,
+                   sd_motor_bounds=(0.1, 50.0), n_starts: int = 8, seed: int = 0,
                    verbosity: int = 1) -> Dict:
     """Bounded multistart gradient fit, in the shape the other backends return.
 
@@ -72,11 +73,15 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
             f"{len(condition_trials)} trial arrays for {len(condition_names)} conditions. "
             "The sequence is positional, so a mismatch fits one condition's parameters to "
             "another's observations while every loss stays finite and plausible.")
-    if objective in MEAN_ONLY_METHODS and sd_motor:
+    if objective in MEAN_ONLY_METHODS and (sd_motor or fit_motor):
         raise ValueError(
             f"{objective!r} is invariant to motor noise -- a symmetric zero-mean convolution "
-            "leaves the circular mean exactly where it was -- so fitting it at a non-zero "
-            "sd_motor would report a number the objective cannot see.")
+            "leaves the circular mean exactly where it was -- so a motor SD fitted or fixed "
+            "under it would be a number the objective cannot see. The caller skips these "
+            "objectives in a motor-noise run rather than reporting an unidentified estimate.")
+    if fit_motor and sd_motor:
+        raise ValueError(
+            "sd_motor is either searched (fit_motor=True) or held fixed, not both.")
 
     # The per-evaluation path skips validation so it stays differentiable, so the
     # grid it will be evaluated on is checked once, here, before any fitting.
@@ -87,8 +92,9 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
 
     bounds_by_axis = surrogate_module.search_bounds(predictor.domain)
     n_conditions = len(condition_names)
-    names = condition_parameter_layout(n_conditions, fit_motor=False)
-    bounds = build_bounds(n_conditions, bounds_by_axis["sd_feat"], bounds_by_axis["sd_spat"])
+    names = condition_parameter_layout(n_conditions, fit_motor=fit_motor)
+    bounds = build_bounds(n_conditions, bounds_by_axis["sd_feat"], bounds_by_axis["sd_spat"],
+                          motor_bounds=tuple(sd_motor_bounds) if fit_motor else None)
 
     def objective_fn(parameters):
         return score_all_conditions(
@@ -97,7 +103,7 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
             feat_diff_grid=feat_diff_grid,
             emp_density_weights_sd=emp_density_weights_sd,
             density_smoothing_sigma=density_smoothing_sigma, corr_weight=corr_weight,
-            condition_trials=condition_trials)
+            condition_trials=condition_trials, fit_motor=fit_motor)
 
     started = time.time()
     fit = minimize_continuous(objective_fn, bounds, names, n_starts=n_starts, seed=seed)
@@ -105,6 +111,7 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
 
     parameters = np.asarray(fit.parameters)
     sd_spat = float(parameters[2 * n_conditions])
+    fitted_motor = float(parameters[2 * n_conditions + 1]) if fit_motor else float(sd_motor)
 
     # Per-condition losses at the joint solution. The fit minimises their sum, so
     # these are reported for diagnosis, not re-minimised: a per-condition loss
@@ -128,9 +135,11 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
             density_bandwidth=(targets.density_bandwidth[index],),
             near_constant_warnings=(),
         )
+        one_params = [parameters[2 * index], parameters[2 * index + 1], sd_spat]
+        if fit_motor:
+            one_params.append(fitted_motor)
         per_condition = score_all_conditions(
-            objective, predictor, one,
-            jnp.asarray([parameters[2 * index], parameters[2 * index + 1], sd_spat]),
+            objective, predictor, one, jnp.asarray(one_params), fit_motor=fit_motor,
             curve_losses=curve_losses, energy_score=energy_score,
             d_circ_matrix=d_circ_matrix, feat_diff_grid=feat_diff_grid,
             emp_density_weights_sd=emp_density_weights_sd,
@@ -159,7 +168,7 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
 
     return {
         'best_loss': float(fit.loss),
-        'shared_params': {'sd_spat': sd_spat, 'sd_motor': float(sd_motor)},
+        'shared_params': {'sd_spat': sd_spat, 'sd_motor': fitted_motor},
         'condition_results': condition_results,
         'total_time': total_time,
         # A gradient search has no stages; present so callers that record
@@ -292,10 +301,18 @@ class ContinuousEngine:
                  _jnp.asarray(_np.asarray(values)[:, 1]))
                 for values in self.condition_datasets.values()]
 
-    def fit(self, fitting_method: str, sd_motor: float = 0.0, verbosity: int = 1):
-        """One objective, through the gradient search."""
+    def fit(self, fitting_method: str, sd_motor: float = 0.0, sd_motor_max: float = 50.0,
+            verbosity: int = 1):
+        """One objective, through the gradient search.
+
+        When the engine was built with motor noise enabled, the motor SD is a
+        searched parameter bounded above by the caller's empirical cap -- the same
+        data-derived cap the surface backend uses, since the motor SD is one
+        component of the total response error and cannot exceed it.
+        """
         if self.targets is None:
             raise RuntimeError("call update_dataset() before fitting")
+        fit_motor = not self.skip_motor_noise and not sd_motor
         return fit_continuous(
             self.predictor, self.targets, list(self.condition_names),
             objective=fitting_method, curve_losses=self._curve_losses,
@@ -304,8 +321,9 @@ class ContinuousEngine:
             emp_density_weights_sd=self.emp_density_weights_sd,
             density_smoothing_sigma=self.density_smoothing_sigma,
             corr_weight=self.corr_weight, condition_trials=self._trials(),
-            sd_motor=sd_motor, n_starts=self.n_starts, seed=self.seed,
-            verbosity=verbosity)
+            sd_motor=sd_motor, fit_motor=fit_motor,
+            sd_motor_bounds=(0.1, float(sd_motor_max)),
+            n_starts=self.n_starts, seed=self.seed, verbosity=verbosity)
 
     def evaluate(self, params_by_condition, fitting_methods):
         """Every objective's loss per condition, at fixed parameters."""
@@ -320,9 +338,30 @@ class ContinuousEngine:
             corr_weight=self.corr_weight, condition_trials=self._trials())
 
     def search_spec(self) -> Dict:
-        """The settings that produced the parameters, for the run fingerprint."""
+        """The settings that produced the parameters, for the run fingerprint.
+
+        The one place this description is built. It used to be duplicated at the
+        fingerprint call site, which is how the two drifted: a change to the
+        optimizer's tolerances or iteration cap altered the fitted parameters
+        while both copies kept emitting the same five fields, so two genuinely
+        different searches shared a digest and could resume into each other.
+
+        Defaults are read from ``minimize_continuous`` itself rather than
+        restated, so a change there cannot silently leave the identity behind.
+        """
+        import inspect
+
         bounds = surrogate_module.search_bounds(self.predictor.domain)
-        return {"method": "L-BFGS-B", "parameterisation": "log",
-                "n_starts": self.n_starts, "seed": self.seed,
-                "sd_feat_bounds": list(bounds["sd_feat"]),
-                "sd_spat_bounds": list(bounds["sd_spat"])}
+        defaults = inspect.signature(minimize_continuous).parameters
+        return {
+            "method": "L-BFGS-B",
+            "parameterisation": "log",
+            "n_starts": int(self.n_starts),
+            "seed": int(self.seed),
+            "sd_feat_bounds": [float(v) for v in bounds["sd_feat"]],
+            "sd_spat_bounds": [float(v) for v in bounds["sd_spat"]],
+            "max_iterations": int(defaults["max_iterations"].default),
+            "tolerance": float(defaults["tolerance"].default),
+            "gradient_tolerance": float(defaults["gradient_tolerance"].default),
+            "motor": "searched" if not self.skip_motor_noise else "fixed_zero",
+        }

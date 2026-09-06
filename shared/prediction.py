@@ -307,19 +307,33 @@ class WrappedMixturePredictor(BiasPredictor):
 
     # -- the mixture --------------------------------------------------------
 
-    def distribution(self, params, validate: bool = True):
+    def distribution(self, params, validate: bool = True, sd_motor=None):
         """Mixture parameters for a ``(N, 4)`` batch, motor noise already applied.
 
         Everything else in this class goes through here, so motor noise cannot be
         applied to one quantity and forgotten for another.
+
+        Args:
+            sd_motor: overrides the predictor's own motor SD for this call, and
+                unlike :meth:`with_motor_noise` it may be a traced value. That is
+                what lets a search treat the motor SD as a fitted parameter:
+                variance addition is differentiable, but the constructor's
+                validation is not, so a traced SD has to bypass the constructor
+                rather than go through it. Bounds on a searched motor SD are the
+                optimizer's to enforce, which it does through real bounds.
         """
         params = jnp.asarray(params, dtype=jnp.float32)
         if validate:
             validate_params(params, domain=self.domain, name=f"{self.artifact} inputs")
         dist = self.model.apply(self.variables, params)
-        if self.sd_motor:
-            dist = self._wm.add_motor_noise(dist, self.sd_motor)
-        return dist
+        effective = self.sd_motor if sd_motor is None else sd_motor
+        if sd_motor is None:
+            # A concrete zero means "no motor noise" and is skipped entirely, so
+            # the no-motor case stays bit-identical to a predictor built without
+            # one rather than being convolved with a zero-width kernel.
+            if not self.sd_motor:
+                return dist
+        return self._wm.add_motor_noise(dist, effective)
 
     def component_distribution(self, params, component: int, validate: bool = True):
         """Component 1 as given; component 2 by swapping the two feature SDs."""
@@ -331,22 +345,22 @@ class WrappedMixturePredictor(BiasPredictor):
 
     # -- the operations -----------------------------------------------------
 
-    def log_density(self, params, bias, validate: bool = True):
+    def log_density(self, params, bias, validate: bool = True, sd_motor=None):
         """Log density per model degree at one bias value per parameter row.
 
         Continuous: evaluated at the observation itself, not at the centre of the
         reporting cell it falls in.
         """
-        dist = self.distribution(params, validate)
+        dist = self.distribution(params, validate, sd_motor)
         return self._wm.mixture_logpdf(jnp.asarray(bias), dist, self.n_wraps)
 
-    def grid_log_density(self, params, grid=None, validate: bool = True):
+    def grid_log_density(self, params, grid=None, validate: bool = True, sd_motor=None):
         """Log density on a shared grid -- for display, not for scoring."""
         grid = mu1_grid() if grid is None else jnp.asarray(grid)
-        dist = self.distribution(params, validate)
+        dist = self.distribution(params, validate, sd_motor)
         return self._wm.mixture_logpdf_grid(grid, dist, self.n_wraps)
 
-    def cell_probabilities(self, params, edges=None, validate: bool = True):
+    def cell_probabilities(self, params, edges=None, validate: bool = True, sd_motor=None):
         """Integrated mass per reporting cell: ``(N, len(edges) - 1)``.
 
         This is what distributional scores take.  Sampling the density at cell
@@ -355,7 +369,7 @@ class WrappedMixturePredictor(BiasPredictor):
         explicitly allows.
         """
         edges = self._default_edges() if edges is None else jnp.asarray(edges)
-        dist = self.distribution(params, validate)
+        dist = self.distribution(params, validate, sd_motor)
         weights = jnp.exp(dist['log_pi'])
 
         def mass(lo, hi):
@@ -366,13 +380,13 @@ class WrappedMixturePredictor(BiasPredictor):
         return jnp.stack([mass(float(edges[i]), float(edges[i + 1]))
                           for i in range(len(edges) - 1)], axis=-1)
 
-    def mean_and_resultant(self, params, validate: bool = True):
-        return self._wm.mean_and_resultant(self.distribution(params, validate))
+    def mean_and_resultant(self, params, validate: bool = True, sd_motor=None):
+        return self._wm.mean_and_resultant(self.distribution(params, validate, sd_motor))
 
-    def circular_sd(self, params, validate: bool = True):
-        return self._wm.circular_sd(self.distribution(params, validate))
+    def circular_sd(self, params, validate: bool = True, sd_motor=None):
+        return self._wm.circular_sd(self.distribution(params, validate, sd_motor))
 
-    def signed_arc_asymmetry(self, params, validate: bool = True):
+    def signed_arc_asymmetry(self, params, validate: bool = True, sd_motor=None):
         """Raw analytic ``P(0 < b < 180) - P(-180 < b < 0)``, one per row.
 
         Raw: this is the model's own quantity, before the density target's
@@ -380,10 +394,10 @@ class WrappedMixturePredictor(BiasPredictor):
         curve; scoring one against a target built for the other changes the
         estimator.
         """
-        return self._wm.density_asymmetry(self.distribution(params, validate),
+        return self._wm.density_asymmetry(self.distribution(params, validate, sd_motor),
                                           self.arc_wraps)
 
-    def smoothed_asymmetry_curve(self, params, smoothing_sigma, validate: bool = True):
+    def smoothed_asymmetry_curve(self, params, smoothing_sigma, validate: bool = True, sd_motor=None):
         """The asymmetry curve as the density objective sees it.
 
         ``params`` must be one curve: rows sharing an SD triple and varying only
@@ -396,7 +410,7 @@ class WrappedMixturePredictor(BiasPredictor):
         params = jnp.asarray(params, dtype=jnp.float32)
         if validate:
             check_curve_layout(params)
-        return gaussian_curve_smoother(self.signed_arc_asymmetry(params, validate),
+        return gaussian_curve_smoother(self.signed_arc_asymmetry(params, validate, sd_motor),
                                        smoothing_sigma)
 
     @staticmethod

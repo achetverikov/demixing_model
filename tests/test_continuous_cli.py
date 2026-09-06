@@ -148,3 +148,82 @@ def test_the_backends_refuse_each_other_s_checkpoints(dataset, tmp_path):
         _run(dataset, tmp_path / "a", checkpoint_path=str(SURFACE))
     with pytest.raises(ValueError, match="cannot drive"):
         _run(dataset, tmp_path / "b", search="hierarchical", checkpoint_path=str(WNM))
+
+
+# ---------------------------------------------------------------------------
+# Regressions from the step 3c/3d audit
+# ---------------------------------------------------------------------------
+
+def test_a_motor_enabled_run_actually_searches_the_motor_sd(dataset, tmp_path):
+    """The dispatch used to pass sd_motor=0.0 unconditionally, so every
+    motor-enabled continuous run fitted at zero while the command and the
+    fingerprint both labelled it motor-enabled. Feature and spatial SDs can
+    absorb response noise, so the other parameters come out wrong too.
+    """
+    out = tmp_path / "motor"
+    _run(dataset, out, skip_motor_noise=False)
+
+    results = pickle.loads((out / "extended_fit_results.pkl").read_bytes())
+    fitted_motor = {float(np.asarray(e["density_fitted_params"])[3]) for e in results.values()}
+    assert fitted_motor != {0.0}, "motor noise was enabled but every fit came back at zero"
+    # It is searched within the empirical cap, not fixed.
+    assert all(0.0 < value <= 50.0 for value in fitted_motor)
+
+    payload = _fingerprint(out)
+    assert payload["motor"]["mode"] == "enabled"
+    assert payload["continuous_spec"]["motor"] == "searched"
+
+
+def test_a_no_motor_run_reports_a_fixed_zero(dataset, tmp_path):
+    out = tmp_path / "nomotor"
+    _run(dataset, out)
+    results = pickle.loads((out / "extended_fit_results.pkl").read_bytes())
+    assert all(float(np.asarray(e["density_fitted_params"])[3]) == 0.0
+               for e in results.values())
+    assert _fingerprint(out)["continuous_spec"]["motor"] == "fixed_zero"
+
+
+def test_the_fingerprint_records_every_setting_that_moves_the_parameters(dataset, tmp_path):
+    """Tolerances and the iteration cap change which starts converge and which
+    parameters win, so two runs differing only in those must not share a digest.
+    """
+    out = tmp_path / "run"
+    _run(dataset, out)
+    spec = _fingerprint(out)["continuous_spec"]
+    for field in ("method", "parameterisation", "n_starts", "seed", "sd_feat_bounds",
+                  "sd_spat_bounds", "max_iterations", "tolerance", "gradient_tolerance",
+                  "motor"):
+        assert field in spec, field
+
+
+def test_the_recorded_spec_comes_from_the_engine_that_runs(dataset, tmp_path):
+    """It was built twice -- once for the fingerprint, once on the engine -- and
+    the two could drift, which is how a changed tolerance would alter the fitted
+    parameters while the digest stayed put.
+    """
+    import continuous_fit
+    import inspect
+
+    out = tmp_path / "run"
+    _run(dataset, out)
+    spec = _fingerprint(out)["continuous_spec"]
+
+    defaults = inspect.signature(continuous_fit.minimize_continuous).parameters
+    assert spec["max_iterations"] == defaults["max_iterations"].default
+    assert spec["tolerance"] == defaults["tolerance"].default
+    assert spec["gradient_tolerance"] == defaults["gradient_tolerance"].default
+
+
+def test_search_diagnostics_reach_the_saved_results(dataset, tmp_path):
+    """A run where one start of eight converged must not be stored
+    indistinguishably from one where all eight agreed."""
+    out = tmp_path / "run"
+    _run(dataset, out)
+    results = pickle.loads((out / "extended_fit_results.pkl").read_bytes())
+    for entry in results.values():
+        assert entry["density_search_backend"] == "continuous"
+        assert entry["density_n_starts"] == 3
+        assert 0 <= entry["density_n_converged"] <= 3
+        assert np.isfinite(entry["density_loss_spread"])
+        assert isinstance(entry["density_at_bound"], list)
+        assert len(entry["density_start_losses"]) == 3

@@ -50,9 +50,11 @@ different model than the fit used, and are listed under Known gaps below.
 **These artifacts are not yet the production default.** `shared/surrogate.py`
 still defaults to the surface network; the transition plan
 (`results/continuous_density_4.1q/TRANSITION_PLAN.md`) flips it after acceptance.
-`model_fit_to_data/continuous_fit.py` is a WNM search backend and does consume
-them, but the public `fit_model_to_data.py` command is not wired to it and
-refuses a WNM checkpoint outright, so no ordinary run reaches one.
+`fit_model_to_data.py --search continuous` runs them through the gradient
+backend, and the lattice backends refuse a mixture checkpoint (as the continuous
+one refuses a surface checkpoint, having no gradients to descend). What has not
+happened is promotion: the default is still the surface network, so a command
+without `--search continuous` reaches no mixture.
 
 **The NLL column is in-sample.** Both artifacts come from the `alldata` training
 variant, which trains on every trajectory and picks its stopping step on an
@@ -94,8 +96,8 @@ Note that `sd_feat` extends *below* the production fitting floor of 5: that wide
 narrow-density coverage is what motivates this surrogate. Search bounds now come
 from the loaded artifact's own domain (`shared/surrogate.py:search_bounds`), so a
 WNM fit searches `sd_feat` from 2.5 while the surface backend keeps its trained
-[5, 200] on every axis. The *public command's* bounds are unchanged, because it
-is not wired to the WNM backend yet.
+[5, 200] on every axis. That applies to the public command too, under
+`--search continuous`; a surface-backed run is unaffected.
 
 **Regenerating one**: `continuous_density/package_wnm_artifact.py` packages a research fit
 from a training stage's `run_cache/`. It copies weights, writes to a temporary

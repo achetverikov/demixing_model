@@ -71,7 +71,8 @@ def _smoothing_sigma(emp_density_weights_sd, density_smoothing_sigma):
 
 
 def predicted_asymmetry_curve(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid,
-                              emp_density_weights_sd, density_smoothing_sigma=None):
+                              emp_density_weights_sd, density_smoothing_sigma=None,
+                              sd_motor=None):
     """Fitting-smoothed analytic signed-arc asymmetry over the feature grid.
 
     Validation is skipped inside the call and done once on the grid instead, by
@@ -83,7 +84,7 @@ def predicted_asymmetry_curve(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_
     rows = condition_rows(sd_feat1, sd_feat2, sd_spat, feat_diff_grid)
     return predictor.smoothed_asymmetry_curve(
         rows, _smoothing_sigma(emp_density_weights_sd, density_smoothing_sigma),
-        validate=False)
+        validate=False, sd_motor=sd_motor)
 
 
 def validate_feature_grid(feat_diff_grid, predictor=None):
@@ -106,7 +107,8 @@ def validate_feature_grid(feat_diff_grid, predictor=None):
                         name="feature grid against the surrogate domain")
 
 
-def predicted_mean_bias(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_values):
+def predicted_mean_bias(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_values,
+                        sd_motor=None):
     """Analytic circular mean bias, in model degrees, at the requested features.
 
     Closed form, not the argmax or the expectation of a sampled grid: a mixture
@@ -114,11 +116,12 @@ def predicted_mean_bias(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_values
     the grid was cut.
     """
     rows = condition_rows(sd_feat1, sd_feat2, sd_spat, feat_diff_values)
-    mean, _ = predictor.mean_and_resultant(rows, validate=False)
+    mean, _ = predictor.mean_and_resultant(rows, validate=False, sd_motor=sd_motor)
     return mean
 
 
-def predicted_cell_probabilities(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid):
+def predicted_cell_probabilities(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid,
+                                 sd_motor=None):
     """``(n_bias, n_feat)`` integrated cell mass, the layout the CRPS code wants.
 
     Integrated rather than sampled-and-renormalised: ``min_scale`` is a quarter
@@ -126,11 +129,13 @@ def predicted_cell_probabilities(predictor, sd_feat1, sd_feat2, sd_spat, feat_di
     read off the grid depends on where its peak fell within the cell.
     """
     rows = condition_rows(sd_feat1, sd_feat2, sd_spat, feat_diff_grid)
-    probabilities = predictor.cell_probabilities(rows, validate=False)  # (n_feat, n_bias)
+    probabilities = predictor.cell_probabilities(rows, validate=False,
+                                                 sd_motor=sd_motor)  # (n_feat, n_bias)
     return probabilities.T
 
 
-def trial_log_density(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff, bias):
+def trial_log_density(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff, bias,
+                      sd_motor=None):
     """Log density at each trial's own bias and feature difference.
 
     Continuous, at the observation itself. The surface backend instead reads the
@@ -141,13 +146,15 @@ def trial_log_density(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff, bias):
                       jnp.broadcast_to(jnp.asarray(sd_feat2, jnp.float32), jnp.asarray(feat_diff).shape),
                       jnp.broadcast_to(jnp.asarray(sd_spat, jnp.float32), jnp.asarray(feat_diff).shape),
                       jnp.asarray(feat_diff, jnp.float32)], axis=-1)
-    return predictor.log_density(rows, jnp.asarray(bias, jnp.float32), validate=False)
+    return predictor.log_density(rows, jnp.asarray(bias, jnp.float32), validate=False,
+                                 sd_motor=sd_motor)
 
 
 def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_feat2,
                     sd_spat, *, curve_losses, ccc_or_combined_kwargs, energy_score,
                     d_circ_matrix, feat_diff_grid, emp_density_weights_sd,
-                    density_smoothing_sigma=None, trials: Optional[tuple] = None):
+                    density_smoothing_sigma=None, trials: Optional[tuple] = None,
+                    sd_motor=None):
     """Loss for one condition under one objective.
 
     Args:
@@ -191,7 +198,7 @@ def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_fe
                 "scoped to the density objectives -- likelihood and CRPS are unaffected.")
         predicted = predicted_asymmetry_curve(
             predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid,
-            emp_density_weights_sd, density_smoothing_sigma)
+            emp_density_weights_sd, density_smoothing_sigma, sd_motor=sd_motor)
         target = targets.target_density[condition_index]
         loss_type = "ccc" if method == "density" else "combined"
         extra = ccc_or_combined_kwargs if method == "density_legacy" else {}
@@ -200,21 +207,23 @@ def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_fe
 
     if method == "expectation":
         feat_values = feat_diff_grid[targets.feat_indices]
-        predicted = predicted_mean_bias(predictor, sd_feat1, sd_feat2, sd_spat, feat_values)
+        predicted = predicted_mean_bias(predictor, sd_feat1, sd_feat2, sd_spat, feat_values,
+                                        sd_motor=sd_motor)
         return curve_losses(predicted[None, :],
                             targets.target_bias[condition_index][None, :],
                             loss_type="mse", is_angular=True,
                             weights=targets.bias_weights[condition_index][None, :])[0]
 
     if method == "smoothed_exp":
-        predicted = predicted_mean_bias(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid)
+        predicted = predicted_mean_bias(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid,
+                                        sd_motor=sd_motor)
         return curve_losses(predicted[None, :],
                             targets.target_bias_curve[condition_index][None, :],
                             loss_type="mse", is_angular=True)[0]
 
     if method in ("balanced_crps", "bias_weighted_crps"):
         probabilities = predicted_cell_probabilities(
-            predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid)
+            predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid, sd_motor=sd_motor)
         weights = (targets.fd_weights if method == "balanced_crps"
                    else targets.bias_fd_weights)[condition_index]
         # bias weights can be all-zero for a condition; the binary support mask
@@ -231,12 +240,13 @@ def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_fe
 
     if method == "likelihood":
         return -jnp.sum(trial_log_density(predictor, sd_feat1, sd_feat2, sd_spat,
-                                          feat_diff, bias))
+                                          feat_diff, bias, sd_motor=sd_motor))
 
     # crps: energy score at each trial's own (bias cell, feature) location, with
     # the grid indexing the surface backend uses, so only the probabilities differ.
     probabilities = predicted_cell_probabilities(
-        predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid)          # (n_bias, n_feat)
+        predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid,
+        sd_motor=sd_motor)                                                # (n_bias, n_feat)
     cross = d_circ_matrix @ probabilities                                 # (n_bias, n_feat)
     second = jnp.sum(probabilities * cross, axis=0)                       # (n_feat,)
     per_cell = cross - 0.5 * second[None, :]
@@ -252,7 +262,7 @@ def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_fe
 def score_all_conditions(method, predictor, targets, parameters, *, curve_losses,
                          energy_score, d_circ_matrix, feat_diff_grid,
                          emp_density_weights_sd, density_smoothing_sigma=None,
-                         corr_weight=0.25, condition_trials=None):
+                         corr_weight=0.25, condition_trials=None, fit_motor=False):
     """Sum a method's per-condition losses, the aggregation the fitter uses.
 
     Conditions are summed unweighted, matching the surface backend: introducing
@@ -266,7 +276,10 @@ def score_all_conditions(method, predictor, targets, parameters, *, curve_losses
     """
     n_conditions = len(targets.condition_names)
     parameters = jnp.asarray(parameters)
-    expected = 2 * n_conditions + 1
+    # One trailing entry when the motor SD is searched. It is a shared parameter
+    # like sd_spat, and it is traced, so it reaches the scorers as a value rather
+    # than through a predictor rebuilt per evaluation.
+    expected = 2 * n_conditions + 1 + int(bool(fit_motor))
     # Exact, not "at least". A vector laid out with a trailing sd_motor would
     # otherwise have that entry silently ignored, and the fit would be scored
     # without the motor noise its own record claims it was fitted with. Motor
@@ -274,14 +287,18 @@ def score_all_conditions(method, predictor, targets, parameters, *, curve_losses
     if parameters.shape[0] != expected:
         raise ValueError(
             f"expected exactly {expected} parameters for {n_conditions} conditions (two "
-            f"feature SDs each plus a shared spatial SD), got {parameters.shape[0]}. Motor "
-            "noise is carried by the predictor, not by this vector.")
+            f"feature SDs each plus a shared spatial SD"
+            + (", plus a shared motor SD" if fit_motor else "")
+            + f"), got {parameters.shape[0]}."
+            + ("" if fit_motor else " Motor noise is carried by the predictor unless "
+                                     "fit_motor=True."))
     if condition_trials is not None and len(condition_trials) != n_conditions:
         raise ValueError(
             f"{len(condition_trials)} trial arrays for {n_conditions} conditions. The "
             "sequence is positional and is paired with the targets by index, so a length "
             "mismatch means some condition is being fitted to another's observations.")
     sd_spat = parameters[2 * n_conditions]
+    sd_motor = parameters[2 * n_conditions + 1] if fit_motor else None
 
     total = 0.0
     for index in range(n_conditions):
@@ -294,7 +311,8 @@ def score_all_conditions(method, predictor, targets, parameters, *, curve_losses
             energy_score=energy_score, d_circ_matrix=d_circ_matrix,
             feat_diff_grid=feat_diff_grid,
             emp_density_weights_sd=emp_density_weights_sd,
-            density_smoothing_sigma=density_smoothing_sigma, trials=trials)
+            density_smoothing_sigma=density_smoothing_sigma, trials=trials,
+            sd_motor=sd_motor)
     return total
 
 

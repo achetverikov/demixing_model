@@ -525,7 +525,12 @@ def process_subject(
             status.start()
         try:
             if isinstance(optimizer, ContinuousEngine):
-                result = optimizer.fit(method, sd_motor=0.0, verbosity=1)
+                # The same empirical cap the surface backend uses: the motor SD is
+                # one component of the total response error and cannot exceed it.
+                # Passing 0.0 here regardless of the motor policy, as an earlier
+                # version did, forced every motor-enabled continuous run to fit at
+                # zero while the run was labelled motor-enabled.
+                result = optimizer.fit(method, sd_motor_max=emp_motor_cap, verbosity=1)
             elif curve_source is not None and method in EXHAUSTIVE_METHODS:
                 # Exhaustive on the cache lattice. The two backends return the
                 # same object shape, so everything below this call is identical.
@@ -573,7 +578,18 @@ def process_subject(
                 f'{method}_optimization_time': mdata['duration'],
                 f'{method}_stage_times': opt.get('stage_times', []),
                 f'{method}_loss': cond_res['loss'],
+                f'{method}_search_backend': opt.get('search_backend', 'hierarchical'),
             })
+            # Search diagnostics, when the backend can produce them. Without
+            # these a run where one start of eight converged is stored
+            # indistinguishably from one where all eight agreed, and a railed
+            # parameter is indistinguishable from an interior one -- so nothing
+            # in the saved table says whether the search or the objective chose
+            # the answer. Absent for the lattice backends, which have no analogue.
+            for field in ('loss_spread', 'n_converged', 'n_starts', 'at_bound',
+                          'start_losses'):
+                if field in opt:
+                    entry[f'{method}_{field}'] = opt[field]
         condition_results[cond_key] = entry
 
     fitted_methods = sorted({
@@ -705,6 +721,33 @@ def run_fitting(
     if missing_cols:
         raise ValueError(f"Columns not found in CSV: {missing_cols}")
 
+    # The continuous engine is built before the fingerprint so the recorded
+    # identity comes from the object that will actually run, rather than from a
+    # second description of it that can drift. It is cheap to construct -- a
+    # 440 KB artifact and no compilation -- so building it ahead of the resume
+    # check costs nothing, unlike the surface optimizer.
+    continuous_engine = None
+    continuous_spec = None
+    if search == 'continuous':
+        from density_objective import degenerate_targets as _degenerate
+        from grid_based_multi_condition_optimizer_jax_loops import (
+            _compute_curve_losses as _curve_losses,
+            bwcrps_energy_score as _energy,
+            compute_bwcrps_condition_targets as _bwcrps_targets,
+            compute_target_bias_curve_core as _bias_core)
+        from shared.prediction import predictor_from_surrogate
+
+        _loaded = surrogate.load_surrogate(checkpoint_path=resolved_checkpoint)
+        continuous_engine = ContinuousEngine(
+            predictor_from_surrogate(_loaded),
+            curve_losses=_curve_losses, energy_score=_energy,
+            degenerate_targets=_degenerate, bwcrps_condition_targets=_bwcrps_targets,
+            target_bias_curve_core=_bias_core, corr_weight=corr_weight,
+            skip_motor_noise=skip_motor_noise, n_starts=continuous_starts,
+            seed=continuous_seed, **DENSITY_CURVE_SPEC,
+        )
+        continuous_spec = continuous_engine.search_spec()
+
     curve_source = None
     curve_cache_key = None
     if search == 'exhaustive':
@@ -722,20 +765,6 @@ def run_fitting(
             emp_density_weights_sd=DENSITY_CURVE_SPEC['emp_density_weights_sd'],
             density_smoothing_sigma=DENSITY_CURVE_SPEC['density_smoothing_sigma'],
         )
-
-    continuous_spec = None
-    if search == 'continuous':
-        # Built here, before the engine, so the identity is fixed by the same
-        # settings the engine will run at rather than read back off it.
-        _wnm_bounds = surrogate.search_bounds(
-            prediction_module.domain_from_meta(
-                surrogate.load_surrogate(checkpoint_path=resolved_checkpoint).meta))
-        continuous_spec = {
-            "method": "L-BFGS-B", "parameterisation": "log",
-            "n_starts": int(continuous_starts), "seed": int(continuous_seed),
-            "sd_feat_bounds": list(_wnm_bounds["sd_feat"]),
-            "sd_spat_bounds": list(_wnm_bounds["sd_spat"]),
-        }
 
     fingerprint = compute_run_fingerprint(
         data_path=data_path,
@@ -785,25 +814,8 @@ def run_fitting(
         status = console.status("[bold cyan]Loading model and compiling optimizer[/]", spinner="dots")
         status.start()
     try:
-        if search == 'continuous':
-            from continuous_density import wrapped_mixture_model  # noqa: F401  (loader dep)
-            from density_objective import degenerate_targets as _degenerate
-            from grid_based_multi_condition_optimizer_jax_loops import (
-                _compute_curve_losses as _curve_losses,
-                bwcrps_energy_score as _energy,
-                compute_bwcrps_condition_targets as _bwcrps_targets,
-                compute_target_bias_curve_core as _bias_core)
-            from shared.prediction import predictor_from_surrogate
-
-            loaded = surrogate.load_surrogate(checkpoint_path=resolved_checkpoint)
-            optimizer = ContinuousEngine(
-                predictor_from_surrogate(loaded),
-                curve_losses=_curve_losses, energy_score=_energy,
-                degenerate_targets=_degenerate, bwcrps_condition_targets=_bwcrps_targets,
-                target_bias_curve_core=_bias_core, corr_weight=corr_weight,
-                skip_motor_noise=skip_motor_noise, n_starts=continuous_starts,
-                seed=continuous_seed, **DENSITY_CURVE_SPEC,
-            )
+        if continuous_engine is not None:
+            optimizer = continuous_engine
         else:
             optimizer = GridBasedMultiConditionOptimizer(
                 str(resolved_checkpoint), {'dummy': dummy},
