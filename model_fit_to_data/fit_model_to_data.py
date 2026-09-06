@@ -640,12 +640,33 @@ def run_fitting(
     # would fail somewhere inside the optimizer with a message about a missing
     # key instead of about the wrong model family.
     checkpoint_family = surrogate.detect_family(resolved_checkpoint)
-    if checkpoint_family != surrogate.FAMILY_SURFACE_NN:
+    if search == 'continuous':
+        # The flag, the family guard and the fingerprint are in place; the
+        # per-subject dispatch is not. Refusing here is deliberate: accepting the
+        # flag and then falling through to the surface path would construct a
+        # surface optimizer around a mixture checkpoint, and the failure mode
+        # this backend has to avoid above all is a run that half-works and mixes
+        # two searches into one set of results. The backend itself is complete
+        # and tested -- model_fit_to_data/continuous_fit.py, driven directly --
+        # and TRANSITION_PLAN.md step 3 tracks connecting it here.
+        raise NotImplementedError(
+            "--search continuous is not wired into this command yet. The gradient backend "
+            "exists and is tested (model_fit_to_data/continuous_fit.py); what is missing is "
+            "the per-subject dispatch and the WNM path through evaluate_parameter_losses, "
+            "which writes every objective's score at each fitted method's parameters. "
+            "Enabling the flag before that would leave results with some columns computed "
+            "by one surrogate and some by another.")
+    if search == 'continuous' and checkpoint_family != surrogate.FAMILY_WNM:
         raise ValueError(
-            f"{Path(resolved_checkpoint).name} is a {checkpoint_family} checkpoint, and "
-            "fit_model_to_data.py currently drives the surface backend only. The continuous "
-            "search that consumes WNM artifacts is not wired up yet; pass a surface "
-            "checkpoint, or see results/continuous_density_4.1q/TRANSITION_PLAN.md step 3.")
+            f"--search continuous needs a wrapped-normal-mixture checkpoint, but "
+            f"{Path(resolved_checkpoint).name} is a {checkpoint_family} artifact. The surface "
+            "backend emits a sampled grid and has no gradients, so there is nothing for a "
+            "gradient search to descend.")
+    if search != 'continuous' and checkpoint_family != surrogate.FAMILY_SURFACE_NN:
+        raise ValueError(
+            f"{Path(resolved_checkpoint).name} is a {checkpoint_family} checkpoint, which the "
+            f"{search!r} backend cannot drive. Pass --search continuous to fit a mixture, or a "
+            "surface checkpoint to use the lattice backends.")
 
     if USE_RICH:
         table = Table.grid(padding=(0, 2))
@@ -921,12 +942,24 @@ if __name__ == '__main__':
                         help='Include motor noise parameter (slower, rarely needed).')
     parser.add_argument('--results-dir', default='results',
                         help='Base directory for relative output paths.')
-    parser.add_argument('--search', choices=['hierarchical', 'exhaustive'], default='hierarchical',
+    parser.add_argument('--search', choices=['hierarchical', 'exhaustive', 'continuous'],
+                        default='hierarchical',
                         help='Search backend. Applies per METHOD: exhaustive is used only for '
                              "'density'; every other method stays hierarchical regardless. "
-                             'The default is unchanged so every existing invocation keeps its '
-                             'current behaviour and the switch is visible in the command line '
-                             'that produced a result.')
+                             "'continuous' is bounded multistart gradient descent and requires a "
+                             'wrapped-normal-mixture checkpoint, since the surface backend has no '
+                             'gradients. The default is unchanged so every existing invocation '
+                             'keeps its current behaviour and the switch is visible in the '
+                             'command line that produced a result.')
+    parser.add_argument('--continuous-starts', type=int, default=8,
+                        help='Multistart count for --search continuous. PROVISIONAL: this budget '
+                             'materially decides the answer on multimodal objectives and is '
+                             'selected on the parameter-recovery panel, not by taste. See '
+                             'TODO.md item 3.')
+    parser.add_argument('--continuous-seed', type=int, default=0,
+                        help='Seed for --search continuous starting points. Recorded in the run '
+                             'fingerprint, since the same seed must give the same starts for two '
+                             'runs of a fit to be comparable.')
     parser.add_argument('--curve-cache', default=None,
                         help='Root directory for curve caches, required by --search exhaustive. '
                              'Built on demand if absent (single-writer locked).')

@@ -58,6 +58,44 @@ OBJECTIVE_VERSIONS: Dict[str, str] = {
     "bias_weighted_crps": "bias_weighted_crps@1",
 }
 
+#: Objectives whose *evaluation convention* differs on the wrapped-normal mixture,
+#: with the version that applies there.  The surrogate family is part of what an
+#: objective means, not merely of how fast it is computed: the surface backend
+#: reads a trial's log density out of the 180-row bias grid at the centre of the
+#: cell the observation falls in, while the mixture evaluates its density at the
+#: observation itself, and the CRPS variants integrate cell mass exactly rather
+#: than renormalising sampled grid densities. Scoring the two under one version
+#: string would make a head-to-head information criterion compare numbers
+#: computed under different conventions.
+WNM_OBJECTIVE_VERSIONS: Dict[str, str] = {
+    "likelihood": "trial_loglik_continuous@1",
+    "crps": "crps_integrated_cells@1",
+    "balanced_crps": "balanced_crps_integrated_cells@1",
+    "bias_weighted_crps": "bias_weighted_crps_integrated_cells@1",
+}
+
+
+def objective_versions_for(family: str, methods) -> Dict[str, str]:
+    """Objective versions as computed by one surrogate family.
+
+    The curve objectives -- density, density_legacy, expectation, smoothed_exp --
+    are defined identically for both families: same target, same smoother, same
+    loss, only a different prediction feeding them. The distributional ones are
+    not, and get their own strings.
+    """
+    unknown = sorted(set(methods) - set(OBJECTIVE_VERSIONS))
+    if unknown:
+        raise ValueError(
+            f"No objective version recorded for {unknown}; add them to "
+            "run_fingerprint.OBJECTIVE_VERSIONS (and bump SCHEMA_VERSION) before "
+            "results computed with them can be fingerprinted.")
+    if family == "wnm":
+        return {method: WNM_OBJECTIVE_VERSIONS.get(method, OBJECTIVE_VERSIONS[method])
+                for method in sorted(methods)}
+    if family == "surface_nn":
+        return {method: OBJECTIVE_VERSIONS[method] for method in sorted(methods)}
+    raise ValueError(f"unknown surrogate family {family!r}")
+
 #: The fixed part of the hierarchical feature-grid step schedule.  The effective
 #: schedule can differ (see `effective_feat_step_schedule`), and it is the
 #: effective one that identifies a run.
@@ -102,6 +140,8 @@ def compute_run_fingerprint(
     evaluation_methods: Sequence[str],
     search_backend: str,
     curve_cache_key: Optional[str],
+    surrogate_family: str = "surface_nn",
+    continuous_spec: Optional[Dict[str, Any]] = None,
     skip_motor_noise: bool,
     exp_col: str,
     subject_col: str,
@@ -112,8 +152,8 @@ def compute_run_fingerprint(
     include_outliers: bool,
     min_trials: int,
     corr_weight: float,
-    grid_spec: Dict[str, Any],
     density_curve_spec: Dict[str, Any],
+    grid_spec: Optional[Dict[str, Any]] = None,
     refinement_spec: Optional[Dict[str, Any]] = None,
     degenerate_eps: Optional[float] = None,
 ) -> Dict[str, Any]:
@@ -131,8 +171,17 @@ def compute_run_fingerprint(
         checkpoint_path: The surrogate ``.pkl`` actually loaded.
         evaluation_methods: Every objective the run may evaluate (not just fit).
             Each must have an entry in `OBJECTIVE_VERSIONS`.
-        search_backend: ``"hierarchical"`` or ``"exhaustive_1deg"``.
+        search_backend: ``"hierarchical"``, ``"exhaustive_1deg"`` or ``"continuous"``.
         curve_cache_key: Cache identity when cache-backed, else ``None``.
+        surrogate_family: which family computed the objectives, since some of
+            them are evaluated under different conventions per family.
+        continuous_spec: settings of the continuous search -- parameterisation,
+            starts, seed, bounds, tolerances, iteration cap. Required for
+            ``search_backend="continuous"`` and rejected otherwise. The
+            hierarchical grid fields are omitted for a continuous run rather than
+            filled with the defaults it never walked: recording a schedule the
+            search did not follow would let two genuinely different runs share a
+            digest and resume into each other.
         grid_spec: Hierarchical search settings (sizes, ``min_grid_step``,
             ``zoom_factor``) -- pass the values actually used, not defaults.
         density_curve_spec: Weighting/smoothing/bandwidth settings of the
@@ -150,13 +199,18 @@ def compute_run_fingerprint(
     """
     from shared.config import config as _cfg
 
-    unknown = sorted(set(evaluation_methods) - set(OBJECTIVE_VERSIONS))
-    if unknown:
+    is_continuous = str(search_backend) == "continuous"
+    if is_continuous and continuous_spec is None:
         raise ValueError(
-            f"No objective version recorded for {unknown}; add them to "
-            "run_fingerprint.OBJECTIVE_VERSIONS (and bump SCHEMA_VERSION) before "
-            "results computed with them can be fingerprinted."
-        )
+            "search_backend='continuous' requires continuous_spec: the starts, seed, bounds "
+            "and tolerances are what produced the parameters, so a run recorded without them "
+            "cannot be reproduced or told apart from one at a different budget.")
+    if not is_continuous and continuous_spec is not None:
+        raise ValueError(
+            f"continuous_spec was given for search_backend={search_backend!r}, which does not "
+            "use one; recording it would describe a search that did not run.")
+
+    versions = objective_versions_for(surrogate_family, evaluation_methods)
 
     if skip_motor_noise:
         motor: Dict[str, Any] = {"mode": "skip"}
@@ -171,18 +225,12 @@ def compute_run_fingerprint(
             "grid_sizing_rule": "clip(ceil(span/(2*min_grid_step))+1, 4, shared_grid_size)",
         }
 
-    feat_schedule = effective_feat_step_schedule(
-        int(grid_spec["feat_grid_size"]), _cfg.param_grid_low, _cfg.param_range_high
-    )
-
     payload: Dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "data_sha256": file_sha256(data_path),
         "checkpoint_sha256": file_sha256(checkpoint_path),
         "circ_space": int(circ_space),
-        "objective_versions": {
-            method: OBJECTIVE_VERSIONS[method] for method in sorted(evaluation_methods)
-        },
+        "objective_versions": versions,
         "search_backend": str(search_backend),
         "curve_cache_key": curve_cache_key,
         "motor": motor,
@@ -200,12 +248,6 @@ def compute_run_fingerprint(
         },
         "min_trials": int(min_trials),
         "corr_weight": float(corr_weight),
-        "grid_spec": {
-            "shared_grid_size": int(grid_spec["shared_grid_size"]),
-            "feat_grid_size": int(grid_spec["feat_grid_size"]),
-            "min_grid_step": float(grid_spec["min_grid_step"]),
-            "zoom_factor": float(grid_spec["zoom_factor"]),
-        },
         "model_grids": {
             "feat_diff_range": list(_cfg.feat_diff_range),
             "feat_diff_step": int(_cfg.feat_diff_step),
@@ -213,14 +255,41 @@ def compute_run_fingerprint(
             "mu1_bias_step": int(_cfg.mu1_bias_step),
         },
         "density_curve_spec": dict(density_curve_spec),
-        "refinement_spec": refinement_spec,
-        "param_bounds": {
-            "param_grid_low": float(_cfg.param_grid_low),
-            "param_range_high": float(_cfg.param_range_high),
-        },
-        "feat_step_schedule": [float(step) for step in feat_schedule],
         "degenerate_eps": None if degenerate_eps is None else float(degenerate_eps),
     }
+
+    # The historical payload is left byte-identical for a surface-backed lattice
+    # run. New fields appear only for configurations that did not exist under
+    # schema 2, so every in-progress run keeps resuming instead of being told its
+    # fingerprint no longer matches by a change that did not affect its numbers.
+    if str(surrogate_family) != "surface_nn":
+        payload["surrogate_family"] = str(surrogate_family)
+
+    if is_continuous:
+        # A continuous run walks no lattice, so it records the settings that did
+        # produce its parameters and omits the ones that did not. Filling the
+        # grid fields with defaults it never used would let a gradient run and a
+        # hierarchical one share a digest and resume into each other's results.
+        payload["continuous_spec"] = {
+            key: continuous_spec[key] for key in sorted(continuous_spec)
+        }
+    else:
+        payload["grid_spec"] = {
+            "shared_grid_size": int(grid_spec["shared_grid_size"]),
+            "feat_grid_size": int(grid_spec["feat_grid_size"]),
+            "min_grid_step": float(grid_spec["min_grid_step"]),
+            "zoom_factor": float(grid_spec["zoom_factor"]),
+        }
+        payload["refinement_spec"] = refinement_spec
+        payload["param_bounds"] = {
+            "param_grid_low": float(_cfg.param_grid_low),
+            "param_range_high": float(_cfg.param_range_high),
+        }
+        payload["feat_step_schedule"] = [
+            float(step) for step in effective_feat_step_schedule(
+                int(grid_spec["feat_grid_size"]), _cfg.param_grid_low,
+                _cfg.param_range_high)
+        ]
     return payload
 
 

@@ -217,3 +217,102 @@ def test_payload_records_the_live_mu1_grid_size(run_files):
     from shared.config import config
 
     assert make_payload(data, checkpoint)["mu1_grid_size"] == config.mu1_bias_grid_size
+
+
+# ---------------------------------------------------------------------------
+# Continuous runs must not be fingerprinted as though they walked the lattice
+# ---------------------------------------------------------------------------
+
+def _common(**overrides):
+    base = dict(
+        data_path=ROOT / "tests" / "data" / "bw_sj_reference.tsv",
+        checkpoint_path=ROOT / "pretrained" / "model_epoch1425_10ktrain_20samples.pkl",
+        circ_space=360, evaluation_methods=["density", "likelihood", "crps"],
+        curve_cache_key=None, skip_motor_noise=True, exp_col="e", subject_col="s",
+        condition_col="c", x_col="x", y_col="y", outlier_col=None,
+        include_outliers=False, min_trials=30, corr_weight=0.25,
+        density_curve_spec={"emp_density_weights_sd": 20.0})
+    base.update(overrides)
+    return base
+
+
+GRID = {"shared_grid_size": 20, "feat_grid_size": 20, "min_grid_step": 0.5,
+        "zoom_factor": 0.5}
+CONTINUOUS = {"n_starts": 8, "seed": 0, "parameterisation": "log",
+              "bounds": [[2.5, 200.0], [5.0, 200.0]], "method": "L-BFGS-B"}
+
+
+def test_a_continuous_run_records_its_settings_and_omits_the_grid_schedule():
+    """Filling the lattice fields with defaults a gradient search never walked
+    would let two genuinely different runs share a digest and resume into each
+    other's results."""
+    payload = rf.compute_run_fingerprint(
+        search_backend="continuous", surrogate_family="wnm",
+        continuous_spec=CONTINUOUS, **_common())
+
+    assert payload["continuous_spec"]["n_starts"] == 8
+    assert payload["continuous_spec"]["seed"] == 0
+    assert payload["continuous_spec"]["bounds"] == [[2.5, 200.0], [5.0, 200.0]]
+    for absent in ("grid_spec", "feat_step_schedule", "param_bounds", "refinement_spec"):
+        assert absent not in payload, f"{absent} describes a search that did not run"
+
+
+def test_the_two_backends_cannot_share_a_digest():
+    continuous = rf.compute_run_fingerprint(
+        search_backend="continuous", surrogate_family="wnm",
+        continuous_spec=CONTINUOUS, **_common())
+    hierarchical = rf.compute_run_fingerprint(
+        search_backend="hierarchical", grid_spec=GRID, **_common())
+    assert rf.fingerprint_digest(continuous) != rf.fingerprint_digest(hierarchical)
+
+
+def test_the_start_budget_and_seed_are_part_of_the_identity():
+    """Two runs at different budgets are different fits, not resumable halves."""
+    base = rf.compute_run_fingerprint(
+        search_backend="continuous", surrogate_family="wnm",
+        continuous_spec=CONTINUOUS, **_common())
+    for changed in ({**CONTINUOUS, "n_starts": 16}, {**CONTINUOUS, "seed": 1}):
+        other = rf.compute_run_fingerprint(
+            search_backend="continuous", surrogate_family="wnm",
+            continuous_spec=changed, **_common())
+        assert rf.fingerprint_digest(base) != rf.fingerprint_digest(other)
+
+
+def test_a_missing_or_spurious_continuous_spec_raises():
+    with pytest.raises(ValueError, match="requires continuous_spec"):
+        rf.compute_run_fingerprint(search_backend="continuous", surrogate_family="wnm",
+                                   **_common())
+    with pytest.raises(ValueError, match="does not use one"):
+        rf.compute_run_fingerprint(search_backend="hierarchical", grid_spec=GRID,
+                                   continuous_spec=CONTINUOUS, **_common())
+
+
+def test_the_distributional_objectives_are_versioned_per_family():
+    """The surface backend reads a trial's density at its grid cell's centre; the
+    mixture evaluates at the observation. One version string for both would make
+    a head-to-head information criterion compare different conventions."""
+    methods = ["density", "expectation", "likelihood", "crps", "balanced_crps"]
+    surface = rf.objective_versions_for("surface_nn", methods)
+    wnm = rf.objective_versions_for("wnm", methods)
+
+    # Curve objectives are the same computation on both sides.
+    for shared in ("density", "expectation"):
+        assert surface[shared] == wnm[shared]
+    # Distributional ones are not.
+    for differing in ("likelihood", "crps", "balanced_crps"):
+        assert surface[differing] != wnm[differing]
+
+    with pytest.raises(ValueError, match="unknown surrogate family"):
+        rf.objective_versions_for("mixture_of_hopes", methods)
+
+
+def test_existing_surface_fingerprints_are_unchanged():
+    """Adding the continuous fields must not force a refit of every run in
+    flight: a digest change that reflects no change in the numbers would refuse
+    exactly the resume it exists to protect."""
+    payload = rf.compute_run_fingerprint(
+        search_backend="hierarchical", grid_spec=GRID, **_common())
+    assert "surrogate_family" not in payload
+    assert "continuous_spec" not in payload
+    assert rf.fingerprint_digest(payload) == (
+        "5995fe11e4cb52e315855ac7ca95b77c60b48333c1b952f334c2225c06f644d9")
