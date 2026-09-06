@@ -91,6 +91,7 @@ def _score(method, predictor, targets, d_circ, params, trials=None):
     return S.score_all_conditions(
         method, predictor, targets, jnp.asarray(params), curve_losses=_compute_curve_losses,
         energy_score=bwcrps_energy_score, d_circ_matrix=d_circ,
+        feat_diff_grid=config.create_grid('feat_diff'),
         emp_density_weights_sd=20.0, condition_trials=trials)
 
 
@@ -129,9 +130,33 @@ def test_trial_summed_methods_refuse_to_run_without_trials(predictor, targets, d
             _score(method, predictor, targets, d_circ, PARAMS, trials=None)
 
 
-def test_too_few_parameters_raise(predictor, targets, d_circ):
-    with pytest.raises(ValueError, match="expected at least"):
+def test_the_parameter_vector_length_must_be_exact(predictor, targets, d_circ):
+    """Not "at least": a trailing sd_motor would be silently dropped, and the fit
+    scored without the motor noise its own record claims it was fitted with."""
+    with pytest.raises(ValueError, match="expected exactly"):
         _score("density", predictor, targets, d_circ, [20.0, 35.0, 22.0])
+    with pytest.raises(ValueError, match="Motor noise is carried by the predictor"):
+        _score("density", predictor, targets, d_circ,
+               [20.0, 35.0, 25.0, 40.0, 30.0, 30.0, 22.0, 15.0])
+
+
+def test_a_trial_list_of_the_wrong_length_is_refused(predictor, targets, d_circ, trials):
+    with pytest.raises(ValueError, match="trial arrays for"):
+        _score("likelihood", predictor, targets, d_circ, PARAMS, trials[:-1])
+
+
+def test_the_scorer_uses_the_grid_it_is_given(predictor, targets, d_circ):
+    """It used to rebuild the configured grid, so a shifted grid of the same
+    length was validated, accepted, and then ignored."""
+    on_grid = float(S.score_all_conditions(
+        "density", predictor, targets, jnp.asarray(PARAMS), curve_losses=_compute_curve_losses,
+        energy_score=bwcrps_energy_score, d_circ_matrix=d_circ,
+        feat_diff_grid=config.create_grid('feat_diff'), emp_density_weights_sd=20.0))
+    off_grid = float(S.score_all_conditions(
+        "density", predictor, targets, jnp.asarray(PARAMS), curve_losses=_compute_curve_losses,
+        energy_score=bwcrps_energy_score, d_circ_matrix=d_circ,
+        feat_diff_grid=config.create_grid('feat_diff') - 1.0, emp_density_weights_sd=20.0))
+    assert not np.isclose(on_grid, off_grid, rtol=1e-6)
 
 
 # ---------------------------------------------------------------------------

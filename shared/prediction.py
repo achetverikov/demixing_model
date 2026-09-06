@@ -118,8 +118,16 @@ def validate_params(params, *, domain, name="parameters"):
     if missing:
         raise ValueError(f"{name}: supported domain is missing bounds for {missing}")
 
+    # A search that optimises log SDs lands on a bound as exp(log(bound)), which
+    # in float32 overshoots: exp(log(200)) is 200.0000153. Refusing that as
+    # extrapolation would reject the optimizer's own legal endpoint, so bounds are
+    # compared with a relative slack far below any real domain difference and far
+    # above float32's round-trip error.
+    ROUND_TRIP_SLACK = 1e-6
     for column, key in enumerate(PARAM_ORDER):
         low, high = domain[key]
+        slack = ROUND_TRIP_SLACK * max(abs(low), abs(high), 1.0)
+        low, high = low - slack, high + slack
         values = params[:, column]
         if values.min() < low or values.max() > high:
             raise ValueError(

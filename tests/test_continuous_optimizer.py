@@ -119,9 +119,15 @@ def test_asymmetry_gradients_match_finite_differences(sigma_region, params):
     def objective(p):
         return jnp.sum(predictor.signed_arc_asymmetry(p[None, :], validate=False))
 
-    rng = np.random.default_rng(abs(hash(sigma_region)) % 2**32)
-    for _ in range(3):
-        analytic, numeric = _directional_check(objective, params, rng.normal(size=4))
+    # Fixed directions, not a hash-seeded draw: Python salts string hashes per
+    # process, so seeding from one made this test sample different directions on
+    # every run -- it failed intermittently against correct gradients and would
+    # equally have passed intermittently against wrong ones.
+    directions = np.array([[0.3, -0.5, 0.7, 0.4],
+                           [-0.8, 0.2, 0.1, -0.6],
+                           [0.5, 0.5, -0.5, 0.5]])
+    for direction in directions:
+        analytic, numeric = _directional_check(objective, params, direction)
         assert np.isclose(analytic, numeric, rtol=2e-2, atol=1e-7), (
             f"{sigma_region}: analytic {analytic:.6e} vs finite difference {numeric:.6e}")
 
@@ -135,10 +141,9 @@ def test_gradients_survive_motor_noise():
     def objective(p):
         return jnp.sum(predictor.signed_arc_asymmetry(p[None, :], validate=False))
 
-    rng = np.random.default_rng(7)
-    for _ in range(3):
+    for direction in ([0.3, -0.5, 0.7, 0.4], [-0.8, 0.2, 0.1, -0.6], [0.5, 0.5, -0.5, 0.5]):
         analytic, numeric = _directional_check(objective, [30.0, 50.0, 25.0, 40.0],
-                                               rng.normal(size=4))
+                                               np.asarray(direction))
         assert np.isclose(analytic, numeric, rtol=2e-2, atol=1e-7)
 
 
@@ -172,9 +177,9 @@ def test_circular_moment_gradients_match_finite_differences():
         mean, resultant = predictor.mean_and_resultant(p[None, :], validate=False)
         return jnp.sum(resultant) + jnp.sum(jnp.cos(jnp.radians(mean)))
 
-    rng = np.random.default_rng(11)
-    for point in ([15.0, 40.0, 20.0, 25.0], [70.0, 80.0, 40.0, 120.0]):
-        analytic, numeric = _directional_check(objective, point, rng.normal(size=4))
+    for point, direction in (([15.0, 40.0, 20.0, 25.0], [0.3, -0.5, 0.7, 0.4]),
+                             ([70.0, 80.0, 40.0, 120.0], [-0.8, 0.2, 0.1, -0.6])):
+        analytic, numeric = _directional_check(objective, point, np.asarray(direction))
         assert np.isclose(analytic, numeric, rtol=2e-2, atol=1e-7)
 
 

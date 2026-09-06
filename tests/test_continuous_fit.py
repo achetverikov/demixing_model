@@ -183,3 +183,58 @@ def test_the_run_is_reproducible_from_its_seed(setup):
     second = _fit(setup, n_starts=4)
     assert first["best_loss"] == pytest.approx(second["best_loss"], rel=1e-9)
     np.testing.assert_allclose(first["start_losses"], second["start_losses"], rtol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Regressions from the 2026-09-06 audit of step 3
+# ---------------------------------------------------------------------------
+
+def test_the_feature_grid_reaches_the_scorer(setup):
+    """It was accepted, validated, and then ignored while the scorer rebuilt the
+    configured grid. A shifted grid of the same length -- 1, 3, ... 179 against
+    2, 4, ... 180 -- lines up shape for shape while every feature location is
+    wrong, so the losses stay finite and plausible and the fit is wrong.
+    """
+    shifted = setup["feat_diff_grid"] - 1.0
+    on_grid = _fit(setup, n_starts=2)
+    off_grid = fit_continuous(
+        setup["predictor"], setup["targets"], list(setup["datasets"]),
+        objective="density", curve_losses=_compute_curve_losses,
+        energy_score=bwcrps_energy_score, d_circ_matrix=setup["d_circ"],
+        feat_diff_grid=shifted, emp_density_weights_sd=20.0,
+        n_starts=2, seed=0, verbosity=0)
+    assert not np.isclose(on_grid["best_loss"], off_grid["best_loss"], rtol=1e-6), (
+        "a shifted feature grid produced an identical loss, so the grid is still "
+        "being rebuilt inside the scorer rather than used as given")
+
+
+def test_a_trial_list_of_the_wrong_length_is_refused(setup):
+    """Positional pairing: a mismatch fits one condition to another's observations."""
+    trials = [(jnp.asarray(v[:, 0]), jnp.asarray(v[:, 1]))
+              for v in setup["datasets"].values()]
+    with pytest.raises(ValueError, match="trial arrays for"):
+        _fit(setup, objective="likelihood", condition_trials=trials[:-1])
+
+
+def test_every_start_outcome_is_recorded_not_just_its_loss(setup):
+    """Losses alone cannot say whether the winner converged or merely stopped."""
+    result = _fit(setup, n_starts=3)
+    assert len(result["start_outcomes"]) == 3
+    for outcome in result["start_outcomes"]:
+        for key in ("start", "solution", "loss", "success", "status",
+                    "n_iterations", "n_evaluations", "at_bound"):
+            assert key in outcome, key
+    # Only a converged start may be the reported winner.
+    winners = [o for o in result["start_outcomes"]
+               if np.isclose(o["loss"], result["best_loss"], rtol=1e-9)]
+    assert any(o["success"] for o in winners)
+
+
+def test_the_search_box_is_recorded_with_the_result(setup):
+    """Two runs with the same seed but different artifacts search different boxes,
+    and a railed parameter means nothing without the bound it railed against."""
+    settings = _fit(setup, n_starts=2)["search_settings"]
+    assert "bounds" in settings and "bound_names" in settings
+    assert len(settings["bounds"]) == len(settings["bound_names"])
+    assert settings["bounds"][0] == [2.5, 200.0]     # sd_feat, from the WNM domain
+    assert settings["bounds"][-1] == [5.0, 200.0]    # sd_spat

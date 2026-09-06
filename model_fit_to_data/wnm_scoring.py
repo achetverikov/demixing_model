@@ -146,8 +146,8 @@ def trial_log_density(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff, bias):
 
 def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_feat2,
                     sd_spat, *, curve_losses, ccc_or_combined_kwargs, energy_score,
-                    d_circ_matrix, emp_density_weights_sd, density_smoothing_sigma=None,
-                    trials: Optional[tuple] = None):
+                    d_circ_matrix, feat_diff_grid, emp_density_weights_sd,
+                    density_smoothing_sigma=None, trials: Optional[tuple] = None):
     """Loss for one condition under one objective.
 
     Args:
@@ -162,6 +162,9 @@ def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_fe
             branch, which is the only consumer of ``corr_weight``.
         energy_score: ``bwcrps_energy_score``, injected for the same reason.
         d_circ_matrix: circular distance matrix over the bias grid.
+        feat_diff_grid: the feature grid the targets were built on. Passed rather
+            than rebuilt, so predictions cannot be evaluated somewhere the target
+            was not.
         emp_density_weights_sd: feature-weight SD of the empirical target.
         density_smoothing_sigma: override for the model-side smoother.
         trials: ``(feat_diff, bias)`` arrays for the trial-summed objectives.
@@ -173,7 +176,12 @@ def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_fe
     if method not in SUPPORTED_METHODS:
         raise ValueError(f"unknown fitting method {method!r}; expected one of {SUPPORTED_METHODS}")
 
-    feat_diff_grid = config.create_grid('feat_diff')
+    # The grid is passed in, never rebuilt from config here. Targets are built on
+    # whatever grid the caller used, and a differently offset grid of the same
+    # length -- 1, 3, ... 179 against 2, 4, ... 180 -- would line up shape for
+    # shape while every feature location was wrong, so the losses would be
+    # finite, plausible, and computed between curves sampled at different places.
+    feat_diff_grid = jnp.asarray(feat_diff_grid)
 
     if method in ("density", "density_legacy"):
         if bool(np.asarray(targets.density_degenerate)[condition_index]):
@@ -242,9 +250,9 @@ def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_fe
 
 
 def score_all_conditions(method, predictor, targets, parameters, *, curve_losses,
-                         energy_score, d_circ_matrix, emp_density_weights_sd,
-                         density_smoothing_sigma=None, corr_weight=0.25,
-                         condition_trials=None):
+                         energy_score, d_circ_matrix, feat_diff_grid,
+                         emp_density_weights_sd, density_smoothing_sigma=None,
+                         corr_weight=0.25, condition_trials=None):
     """Sum a method's per-condition losses, the aggregation the fitter uses.
 
     Conditions are summed unweighted, matching the surface backend: introducing
@@ -258,11 +266,21 @@ def score_all_conditions(method, predictor, targets, parameters, *, curve_losses
     """
     n_conditions = len(targets.condition_names)
     parameters = jnp.asarray(parameters)
-    if parameters.shape[0] < 2 * n_conditions + 1:
+    expected = 2 * n_conditions + 1
+    # Exact, not "at least". A vector laid out with a trailing sd_motor would
+    # otherwise have that entry silently ignored, and the fit would be scored
+    # without the motor noise its own record claims it was fitted with. Motor
+    # noise reaches this function through the predictor, never through here.
+    if parameters.shape[0] != expected:
         raise ValueError(
-            f"expected at least {2 * n_conditions + 1} parameters for {n_conditions} "
-            f"conditions (two feature SDs each plus a shared spatial SD), got "
-            f"{parameters.shape[0]}")
+            f"expected exactly {expected} parameters for {n_conditions} conditions (two "
+            f"feature SDs each plus a shared spatial SD), got {parameters.shape[0]}. Motor "
+            "noise is carried by the predictor, not by this vector.")
+    if condition_trials is not None and len(condition_trials) != n_conditions:
+        raise ValueError(
+            f"{len(condition_trials)} trial arrays for {n_conditions} conditions. The "
+            "sequence is positional and is paired with the targets by index, so a length "
+            "mismatch means some condition is being fitted to another's observations.")
     sd_spat = parameters[2 * n_conditions]
 
     total = 0.0
@@ -274,6 +292,7 @@ def score_all_conditions(method, predictor, targets, parameters, *, curve_losses
             curve_losses=curve_losses,
             ccc_or_combined_kwargs={"corr_weight": corr_weight},
             energy_score=energy_score, d_circ_matrix=d_circ_matrix,
+            feat_diff_grid=feat_diff_grid,
             emp_density_weights_sd=emp_density_weights_sd,
             density_smoothing_sigma=density_smoothing_sigma, trials=trials)
     return total

@@ -50,8 +50,9 @@ different model than the fit used, and are listed under Known gaps below.
 **These artifacts are not yet the production default.** `shared/surrogate.py`
 still defaults to the surface network; the transition plan
 (`results/continuous_density_4.1q/TRANSITION_PLAN.md`) flips it after acceptance.
-`fit_model_to_data.py` currently refuses a WNM checkpoint outright, because no
-search backend consumes one yet.
+`model_fit_to_data/continuous_fit.py` is a WNM search backend and does consume
+them, but the public `fit_model_to_data.py` command is not wired to it and
+refuses a WNM checkpoint outright, so no ordinary run reaches one.
 
 **The NLL column is in-sample.** Both artifacts come from the `alldata` training
 variant, which trains on every trajectory and picks its stopping step on an
@@ -86,9 +87,15 @@ The declared box rounds the measured hull outward to the design's round numbers,
 accepting a sliver of extrapolation (largest 1.89 degrees, at `sd_feat1`'s top).
 `meta["corpus_hull"]` records what the corpus reaches and
 `meta["declared_domain_overhang"]` the accepted extrapolation at each end, so
-neither has to be taken on trust. Note that `sd_feat` extends *below* the
-production fitting floor of 5: that wider narrow-density coverage is what
-motivates this surrogate, and the fitting bounds have not been changed to use it.
+neither has to be taken on trust. The packager refuses a declared box that rounds
+inward past the corpus, and one that rounds outward by more than 5 degrees.
+
+Note that `sd_feat` extends *below* the production fitting floor of 5: that wider
+narrow-density coverage is what motivates this surrogate. Search bounds now come
+from the loaded artifact's own domain (`shared/surrogate.py:search_bounds`), so a
+WNM fit searches `sd_feat` from 2.5 while the surface backend keeps its trained
+[5, 200] on every axis. The *public command's* bounds are unchanged, because it
+is not wired to the WNM backend yet.
 
 **Regenerating one**: `continuous_density/package_wnm_artifact.py` packages a research fit
 from a training stage's `run_cache/`. It copies weights, writes to a temporary

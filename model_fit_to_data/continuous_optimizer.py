@@ -85,8 +85,9 @@ class ContinuousFit:
         loss: its objective value.
         starts: every start's outcome, in the order they were run.
         n_starts: how many were run.
-        loss_spread: max minus min final loss over starts that converged. A wide
-            spread means the search, not the objective, decided the answer.
+        loss_spread: max minus min final loss over the starts that converged. A
+            wide spread means the search, not the objective, decided the answer.
+        starts: includes the starts that failed; only converged ones can win.
         at_bound: which coordinates of the winner sit on a bound.
         names: parameter names, positionally matching ``parameters``.
     """
@@ -240,8 +241,22 @@ def minimize_continuous(objective: Callable, bounds: Sequence[tuple],
             "evaluable anywhere in these bounds, which is a problem with the objective "
             "or the data rather than with the search.")
 
-    best = min(finite, key=lambda o: o.loss)
-    converged = [o.loss for o in finite if o.success]
+    # The winner comes from the starts that actually converged. A start stopped by
+    # the iteration cap or a failed line search still carries a finite loss --
+    # the value wherever it happened to halt -- and taking the minimum over those
+    # turns a search failure into the reported scientific answer. Verified: with
+    # max_iterations=0 the old form returned a normal result whose "fit" was the
+    # loss at a starting point, with nothing converged.
+    successful = [o for o in finite if o.success]
+    if not successful:
+        raise RuntimeError(
+            f"none of {n_starts} starts converged (statuses: "
+            f"{sorted({o.status for o in outcomes})}). Every remaining loss is wherever "
+            "its start halted, not a minimum, so there is no fit to report. Raise "
+            "max_iterations, loosen the tolerances, or check the objective.")
+
+    best = min(successful, key=lambda o: o.loss)
+    converged = [o.loss for o in successful]
     spread = float(max(converged) - min(converged)) if len(converged) > 1 else 0.0
 
     return ContinuousFit(
@@ -250,7 +265,13 @@ def minimize_continuous(objective: Callable, bounds: Sequence[tuple],
         settings={"n_starts": n_starts, "seed": seed, "max_iterations": max_iterations,
                   "tolerance": tolerance, "gradient_tolerance": gradient_tolerance,
                   "parameterisation": "log", "method": "L-BFGS-B",
-                  "precision": "float32 objective, float64 optimiser"})
+                  "precision": "float32 objective, float64 optimiser",
+                  # Recorded because the bounds come from the loaded artifact's
+                  # domain: two runs with the same seed and settings but
+                  # different artifacts search different boxes, and a railed
+                  # parameter means nothing without the bound it railed against.
+                  "bounds": [[float(low), float(high)] for low, high in bounds],
+                  "bound_names": list(names)})
 
 
 def condition_parameter_layout(n_conditions: int, fit_motor: bool) -> tuple:

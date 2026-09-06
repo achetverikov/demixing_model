@@ -134,6 +134,11 @@ def corpus_domain(stage: Path) -> dict:
     # The tolerance is for representation noise only -- sd_spat's hull top is
     # 42/0.21 = 200.0000062, so declaring 200.0 "loses" six microdegrees.
     UNDERSTATEMENT_TOLERANCE = 1e-3
+    # A declared box may round outward past the corpus, but only by a sliver.
+    # Without a ceiling, "measured from the corpus" would be a claim the packager
+    # does not enforce: a corpus spanning only [50, 60] would still advertise
+    # [2.5, 200] and authorise predictions nothing was trained for.
+    MAX_OUTWARD_OVERHANG = 5.0
     declared = {key: [float(lo), float(hi)] for key, (lo, hi) in DECLARED_DOMAIN.items()}
     overhang = {}
     for key, (lo, hi) in declared.items():
@@ -146,6 +151,15 @@ def corpus_domain(stage: Path) -> dict:
                 "trained refuses predictions the network can actually make.")
         # Positive means the declaration extends past the corpus at that end.
         overhang[key] = [round(hull_lo - lo, 6), round(hi - hull_hi, 6)]
+        widest = max(overhang[key])
+        if widest > MAX_OUTWARD_OVERHANG:
+            raise SystemExit(
+                f"declared domain for {key} is [{lo}, {hi}] but the corpus only reaches "
+                f"[{hull_lo:.6g}, {hull_hi:.6g}] -- {widest:.6g} degrees of extrapolation, past "
+                f"the {MAX_OUTWARD_OVERHANG:g}-degree ceiling. Either this corpus is not the "
+                "one these declared bounds were written for, or the bounds need revisiting; "
+                "advertising a domain the corpus never covered authorises predictions nothing "
+                "was trained for.")
 
     return {"supported_domain": declared,
             "corpus_hull": hull,
@@ -306,8 +320,12 @@ def main():
             "another's weights; both counts share an architecture, so nothing downstream "
             "would notice.")
     if not run_checkpoint:
-        print("  NOTE: the fit records no run checkpoint, so its observer model could not be "
-              "cross-checked against --n-samples.")
+        raise SystemExit(
+            f"{args.fit.name} records no run checkpoint, so nothing ties its weights to an "
+            f"observer model and --n-samples={args.n_samples} cannot be checked. The two "
+            "counts share an architecture, so a mislabelled artifact loads, runs, and is "
+            "wrong everywhere silently. Package from a fit that records its source "
+            "checkpoint.")
 
     config = json.loads((args.corpus_stage / "config" / "experiment.json").read_text())
     model = wm.ConditionalWrappedMixture(

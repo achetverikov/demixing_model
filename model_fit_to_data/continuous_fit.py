@@ -1,10 +1,14 @@
 """Fit one subject's conditions by bounded gradient search over the mixture.
 
 The third search backend, alongside the hierarchical zoom and the exhaustive
-lattice scan. It returns the **same object shape** those two return, because
-``fit_model_to_data.process_subject`` consumes that shape directly and must not
-have to know which backend ran -- the alternative is a third set of result
-handling that drifts from the other two.
+lattice scan. It returns every key ``fit_model_to_data.process_subject`` consumes,
+so result handling does not fork a third way.
+
+It is a superset, not an identical shape: like the exhaustive backend it adds
+``search_backend``, which the hierarchical backend does not emit at all. Any
+consumer reading that key must use ``.get`` with a default rather than indexing
+it, or a hierarchical result raises. The extra continuous-only fields are listed
+at the bottom of the returned dict.
 
 It is the only backend that searches continuous parameters rather than a
 lattice, so its result carries the extra facts that only it can report: how many
@@ -62,6 +66,11 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
             f"condition order mismatch: asked to fit {tuple(condition_names)} against targets "
             f"built for {tuple(targets.condition_names)}. Every target array is positional, so "
             "a mismatch here scores each condition against another one's data.")
+    if condition_trials is not None and len(condition_trials) != len(condition_names):
+        raise ValueError(
+            f"{len(condition_trials)} trial arrays for {len(condition_names)} conditions. "
+            "The sequence is positional, so a mismatch fits one condition's parameters to "
+            "another's observations while every loss stays finite and plausible.")
     if objective in MEAN_ONLY_METHODS and sd_motor:
         raise ValueError(
             f"{objective!r} is invariant to motor noise -- a symmetric zero-mean convolution "
@@ -84,6 +93,7 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
         return score_all_conditions(
             objective, predictor, targets, parameters, curve_losses=curve_losses,
             energy_score=energy_score, d_circ_matrix=d_circ_matrix,
+            feat_diff_grid=feat_diff_grid,
             emp_density_weights_sd=emp_density_weights_sd,
             density_smoothing_sigma=density_smoothing_sigma, corr_weight=corr_weight,
             condition_trials=condition_trials)
@@ -121,7 +131,8 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
             objective, predictor, one,
             jnp.asarray([parameters[2 * index], parameters[2 * index + 1], sd_spat]),
             curve_losses=curve_losses, energy_score=energy_score,
-            d_circ_matrix=d_circ_matrix, emp_density_weights_sd=emp_density_weights_sd,
+            d_circ_matrix=d_circ_matrix, feat_diff_grid=feat_diff_grid,
+            emp_density_weights_sd=emp_density_weights_sd,
             density_smoothing_sigma=density_smoothing_sigma, corr_weight=corr_weight,
             condition_trials=trials)
         condition_results[name] = {
@@ -162,5 +173,15 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
         'n_starts': int(n_starts),
         'n_converged': int(sum(s.success for s in fit.starts)),
         'start_losses': [float(s.loss) for s in fit.starts],
+        # Losses alone cannot say whether the winner was a start that converged
+        # or one that merely stopped, nor which starts railed. Only converged
+        # starts can win, but the record has to show that rather than assert it.
+        'start_outcomes': [
+            {'start': [float(v) for v in s.start],
+             'solution': [float(v) for v in s.solution],
+             'loss': float(s.loss), 'success': bool(s.success), 'status': s.status,
+             'n_iterations': int(s.n_iterations), 'n_evaluations': int(s.n_evaluations),
+             'at_bound': list(s.at_bound)}
+            for s in fit.starts],
         'search_settings': dict(fit.settings),
     }
