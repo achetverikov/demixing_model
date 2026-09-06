@@ -78,6 +78,30 @@ Separate optimizer comparisons from K12-versus-surface-NN comparisons.
 The proposed recovery design and transition sequence are recorded with the generated
 experiment artifacts; no production optimizer replacement is selected yet.
 
+**Test float64 as part of the recovery panel.** The repo runs JAX in its default
+float32, so `continuous_optimizer` computes values and gradients at float32 and
+widens them only at the SciPy boundary. That floors the achievable convergence
+tolerance at roughly 1e-8 relative: recovery of a known optimum on a synthetic
+objective lands at 1.5e-7, which is the arithmetic limit rather than a search
+failure. Whether that floor costs anything *scientifically* is unknown and is a
+question only recovery can answer -- a parameter whose recovery RMSE is dominated
+by finite-trial variation will not care, while a weakly identified one on a flat
+ridge might.
+
+Run at least one recovery arm twice, identical but for `JAX_ENABLE_X64=1`, and
+compare recovered parameters, per-parameter bias/RMSE, convergence status and
+boundary hits, plus wall time and memory. Report it as its own axis, not folded
+into the search comparison.
+
+Two constraints on acting on the result. x64 is a global JAX flag, not a
+per-module one, so adopting it changes the surface backend's arithmetic too --
+either the surface parity fixtures get re-verified under x64, or adoption waits
+until that backend is retired (transition plan step 7). And if x64 does improve
+recovery, that is evidence about the objective's conditioning as much as about
+the optimizer: a parameter that only becomes recoverable at double precision is
+weakly identified, and the scientific claim resting on it should say so rather
+than quietly relying on the extra digits.
+
 ## Notes for developers
 
 The detailed plan is `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/TRANSITION_PLAN.md`.

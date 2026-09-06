@@ -162,6 +162,48 @@ def legal_warmup_params(n_rows: int, sd_range, feat_diff_range) -> jnp.ndarray:
     return jnp.tile(jnp.asarray([[sd, sd, sd, feat]], dtype=jnp.float32), (n_rows, 1))
 
 
+def check_curve_layout(params):
+    """Check that a parameter batch really is one curve along the feature axis.
+
+    All rows must share ``(sd_feat1, sd_feat2, sd_spat)`` and their ``feat_diff``
+    must be strictly increasing and evenly spaced: the smoother's width is
+    expressed in grid steps and its kernel is symmetric about each point, so a
+    shuffled or unevenly sampled batch still yields a smooth-looking curve -- one
+    that averaged the wrong neighbours.
+
+    Deliberately not called from inside the prediction itself. It inspects
+    concrete values, and under ``jax.grad`` or ``jax.jit`` the SD columns are
+    tracers, so calling it there fails outright. An optimizer is exactly the
+    caller that hits this: its feature grid is a fixed constant while the SDs
+    vary, so it validates the layout once at setup and then differentiates
+    freely. Validate outside the compiled kernel, not inside it.
+    """
+    params = np.asarray(params)
+    if params.ndim != 2 or params.shape[-1] != 4:
+        raise ValueError(f"expected (N, 4) parameter rows, got {params.shape}")
+
+    triples = params[:, :3]
+    if not np.allclose(triples, triples[:1]):
+        raise ValueError(
+            "expected one curve: all rows must share (sd_feat1, sd_feat2, sd_spat) and vary "
+            "only in feat_diff. Smoothing runs along the feature axis, so a mixed batch "
+            "would average unrelated points.")
+
+    feat = np.asarray(params[:, 3], dtype=np.float64)
+    if feat.size < 2:
+        raise ValueError("a curve needs at least two feature points")
+    steps = np.diff(feat)
+    if np.any(steps <= 0):
+        raise ValueError(
+            "feat_diff must be strictly increasing; the smoother averages each point with its "
+            f"neighbours by position, so row order is the feature axis. Got {feat[:5]}...")
+    if not np.allclose(steps, steps[0], rtol=1e-5, atol=1e-6):
+        raise ValueError(
+            "feat_diff must be evenly spaced: the kernel width is expressed in grid steps, so "
+            f"uneven spacing silently changes the smoothing width (steps range "
+            f"[{steps.min():.6g}, {steps.max():.6g}]).")
+
+
 @dataclass(frozen=True)
 class PredictorIdentity:
     """What a prediction has to be labelled with to be interpretable later."""
@@ -339,33 +381,13 @@ class WrappedMixturePredictor(BiasPredictor):
         ``params`` must be one curve: rows sharing an SD triple and varying only
         in ``feat_diff``, ordered along the feature grid, because the smoother
         runs along that axis and a reordered or mixed batch would smooth across
-        unrelated points.
+        unrelated points.  :func:`check_curve_layout` enforces that, and
+        ``validate=False`` skips it for callers that differentiate through this
+        -- see that function for why the check cannot live inside a traced call.
         """
         params = jnp.asarray(params, dtype=jnp.float32)
-        triples = np.asarray(params[:, :3])
-        if not np.allclose(triples, triples[:1]):
-            raise ValueError(
-                "smoothed_asymmetry_curve expects one curve: all rows must share "
-                "(sd_feat1, sd_feat2, sd_spat) and vary only in feat_diff. Smoothing runs "
-                "along the feature axis, so a mixed batch would average unrelated points.")
-
-        # The smoother's sigma is in grid steps and its kernel is symmetric about
-        # each point, so it assumes the rows are the feature axis in order and
-        # evenly spaced. A shuffled or unevenly sampled batch still produces a
-        # smooth-looking curve -- one that averages the wrong neighbours.
-        feat = np.asarray(params[:, 3], dtype=np.float64)
-        if feat.size < 2:
-            raise ValueError("smoothed_asymmetry_curve needs at least two feature points")
-        steps = np.diff(feat)
-        if np.any(steps <= 0):
-            raise ValueError(
-                "feat_diff must be strictly increasing; the smoother averages each point with "
-                f"its neighbours by position, so row order is the feature axis. Got {feat[:5]}...")
-        if not np.allclose(steps, steps[0], rtol=1e-5, atol=1e-6):
-            raise ValueError(
-                "feat_diff must be evenly spaced: the kernel width is expressed in grid steps, "
-                f"so uneven spacing silently changes the smoothing width (steps range "
-                f"[{steps.min():.6g}, {steps.max():.6g}]).")
+        if validate:
+            check_curve_layout(params)
         return gaussian_curve_smoother(self.signed_arc_asymmetry(params, validate),
                                        smoothing_sigma)
 
