@@ -127,10 +127,12 @@ def checkpoint_for_run(results_path, explicit=None, n_samples: Optional[int] = N
     recompute a historical fit's curves from the new model and show them beside
     the old fit's numbers.
 
-    Order: an explicit path wins but is verified against the run's recorded
-    digest; otherwise the digest identifies the artifact; otherwise, only if the
-    run predates fingerprints, the production artifact for ``n_samples`` is used
-    and the caller is told.
+    Order: an explicit path wins but is verified -- against the run's recorded
+    digest when there is one, otherwise at least against the requested observer
+    model; failing that, the digest identifies the artifact on its own. There is
+    deliberately no third branch: a run with neither raises rather than falling
+    back to the production artifact, because substituting today's model for the
+    one a stored fit used is the defect this function exists to prevent.
     """
     results_path = Path(results_path)
     fingerprint_path, fingerprint = find_run_fingerprint(results_path)
@@ -148,6 +150,13 @@ def checkpoint_for_run(results_path, explicit=None, n_samples: Optional[int] = N
                 f"{path.name} is not the checkpoint this run was fitted with "
                 f"({fingerprint_path} records {recorded[:16]}...). Using it would show one "
                 "model's curves beside another model's parameters.")
+        if not recorded and n_samples is not None:
+            # No digest to check against, so fall back to the weaker check that
+            # is still available: the artifact must at least be the observer
+            # model the caller asked for. Without this an n=20 run accepts an
+            # explicit n=100 checkpoint silently, which is the same defect the
+            # digest check exists to stop, one rung down.
+            load_surrogate(checkpoint_path=path, n_samples=n_samples)
         return path
 
     if recorded:

@@ -464,13 +464,23 @@ def wnm_trial_log_density(predictor, fit_row: pd.Series, feat_diff_deg, bias_deg
 def wnm_cell_log_probability(predictor, fit_row: pd.Series, feat_diff_deg, bias_deg):
     """Exact log mass of the reporting cell each observation falls in.
 
+    Computed on the host in float64, from the mixture parameters, rather than by
+    converting a float32 result. That distinction is the whole point: the interval
+    mass of a component far from its cell is small but *representable* -- a
+    sigma-11 component 180 degrees away has mass 7.3e-60, log -136 -- and float32
+    cannot hold it. It underflows to zero, the log becomes -inf, and a first
+    attempt at this fixed the symptom by widening the floor afterwards, which
+    reported -708 for a value whose true log is -136. A 572-nat error per cell,
+    dressed as a precision guard.
+
     Kept separate from ``loglik_mass`` rather than replacing it. ``loglik_mass``
     is the historical density-times-cell-width rectangle rule and stays that on
-    both families, so legacy columns keep their meaning and remain comparable;
-    this is the integral the mixture can actually compute, which differs from the
-    rectangle rule exactly where a component is narrow relative to the 2-degree
-    cell -- the regime that motivates the surrogate.
+    both families, so legacy columns keep comparing like with like; this is the
+    integral the mixture can actually compute, which differs from the rectangle
+    rule exactly where a component is narrow relative to the 2-degree cell.
     """
+    from scipy.stats import norm
+
     from shared.mu1_axis import bin_indices, mu1_cell_width, mu1_grid
 
     sd_motor = float(fit_row.get("sd_motor", 0.0) or 0.0)
@@ -487,109 +497,33 @@ def wnm_cell_log_probability(predictor, fit_row: pd.Series, feat_diff_deg, bias_
         jnp.asarray(np.asarray(feat_diff_deg), dtype=jnp.float32)], axis=-1)
     dist = scorer.distribution(rows, validate=False)
 
-    from continuous_density import wrapped_mixture_model as wm
-
-    # Each observation has its own cell, so the bounds are per row. The interval
-    # helper only does arithmetic on them and broadcasts against mu[..., None],
-    # so they go in shaped (N, 1, 1) rather than through a vmap that would force
-    # them to concrete scalars.
-    lows = jnp.asarray(centres[indices] - half, jnp.float32)[:, None, None]
-    highs = jnp.asarray(centres[indices] + half, jnp.float32)[:, None, None]
-    # float64 on the host, deliberately. The interval mass of a narrow component
-    # far from its cell is genuinely tiny -- and legitimate: a wrapped normal
-    # assigns positive probability to every interval. Computed in float32 it
-    # underflows to zero and the log becomes -inf, which is not a small
-    # likelihood but a missing one. At the corpus's narrow corner
-    # (sd_feat 2.5, sd_spat 5, feat_diff 2) that was 79 of 180 reporting cells.
-    per_component = np.asarray(wm.wrapped_normal_interval_probability(
-        dist["mu"], dist["sigma"], lows, highs, 8), dtype=np.float64)
+    # The mixture parameters are float32 -- that is what the network emits -- but
+    # everything downstream of them is done in float64, so the CDF difference and
+    # the wrap sum keep the precision the parameters allow.
+    mu = np.asarray(dist["mu"], dtype=np.float64)
+    sigma = np.asarray(dist["sigma"], dtype=np.float64)
     weights = np.asarray(jnp.exp(dist["log_pi"]), dtype=np.float64)
-    mass = np.sum(weights * per_component, axis=-1)
 
-    # Still floored, but far below float64's smallest normal rather than at a
-    # value float32 cannot represent. A cell that genuinely underflows float64 is
-    # reported as the floor, not as -inf, so a downstream sum stays finite and
-    # the row remains identifiable as an extreme rather than a failure.
+    lows = (centres[indices] - half)[:, None]
+    highs = (centres[indices] + half)[:, None]
+    shifts = np.arange(-8, 9, dtype=np.float64) * 360.0
+
+    mass = np.zeros(len(indices), dtype=np.float64)
+    for shift in shifts:
+        upper = (highs + shift - mu) / sigma
+        lower = (lows + shift - mu) / sigma
+        mass += np.sum(weights * (norm.cdf(upper) - norm.cdf(lower)), axis=-1)
+
     floored = int(np.sum(mass <= 0.0))
     if floored:
-        # Once per process, not once per fit row: a large rescore would otherwise
-        # bury its own results. These are true zeros at float64 -- a quarter-degree
-        # component 90 degrees from a cell has mass below any representable
-        # number -- so the floor is unavoidable rather than a precision failure.
+        # Once per process. These are true zeros at float64 -- a quarter-degree
+        # component 90 degrees from a cell is below 1e-308 -- not a precision
+        # failure, and not the float32 underflow this function exists to avoid.
         warnings.warn(
-            f"{floored} of {mass.size} cell masses underflowed float64 and were floored to "
-            "the smallest positive double; these are extreme tail cells, not missing data.",
+            f"{floored} of {mass.size} cell masses are below the smallest positive normal "
+            "double and were floored; these are genuine tail zeros, not lost precision.",
             RuntimeWarning, stacklevel=2)
     return np.log(np.maximum(mass, np.finfo(np.float64).tiny))
-
-
-def _score_fit_row_wnm(predictor, scored, data_source, fit_row, circ_space):
-    """Rescore one fit against the wrapped-normal mixture.
-
-    Mirrors the surface branch column for column, so the exported table means the
-    same thing whichever family produced it, with two differences that are named
-    rather than silent:
-
-    * ``loglik_convention`` says which observation-scoring convention produced
-      the row, because the two are not interchangeable in an information
-      criterion.
-    * ``loglik_cell_probability`` is the exact integral over the reporting cell,
-      present only here. ``loglik_mass`` remains the historical rectangle rule on
-      both families so legacy columns keep comparing like with like.
-
-    The reproduction gate reduces exactly as the mixture fitter does -- a float32
-    ``jnp.sum`` over the per-trial log densities (``wnm_scoring.score_condition``)
-    -- not with the ``segment_sum`` the surface branch uses. The two disagree by
-    more than the gate's own tolerance: on 1,171 trials at sd_feat1=2.5,
-    sd_feat2=200, sd_spat=5 they differ by 0.0127 against a 0.01 threshold, so
-    matching the wrong backend's reduction fails the gate on arithmetic rather
-    than on error -- and the tool reached for then is
-    ``repair_stale_reproduction.py``, which deletes results.
-    """
-    feat_diff = scored["feat_diff_model_deg"].to_numpy(float)
-    bias = scored["bias_model_deg"].to_numpy(float)
-
-    loglik_density_model_deg = wnm_trial_log_density(predictor, fit_row, feat_diff, bias)
-    model_bin_width_deg = float(config.mu1_bias_step)
-    bin_width_deg = physical_bin_width_deg(circ_space)
-
-    scored["loglik_density_model_deg"] = loglik_density_model_deg
-    scored["nll_density_model_deg"] = -loglik_density_model_deg
-    scored["loglik_mass"] = loglik_density_model_deg + np.log(model_bin_width_deg)
-    scored["nll_mass"] = -scored["loglik_mass"]
-    scored["loglik_density_deg"] = scored["loglik_mass"] - np.log(bin_width_deg)
-    scored["nll_density_deg"] = scored["nll_mass"] + np.log(bin_width_deg)
-    scored["loglik_cell_probability"] = wnm_cell_log_probability(
-        predictor, fit_row, feat_diff, bias)
-    scored["bin_width_deg"] = bin_width_deg
-    scored["loglik_convention"] = "continuous_at_observation"
-    for column in ("subject", "experiment", "condition", "optimizer"):
-        scored[f"fit_{column}" if column != "optimizer" else "optimizer"] = fit_row[column]
-    for column in ("sd_feat1", "sd_feat2", "sd_spat", "sd_motor"):
-        scored[column] = float(fit_row[column])
-    scored["prepared_data_source"] = data_source
-
-    rescored_nll_density_model_deg = -float(
-        jnp.sum(jnp.asarray(loglik_density_model_deg, dtype=jnp.float32)))
-    stored_nll = float(fit_row["eval_likelihood_loss"])
-    check = {
-        "subject": fit_row["subject"], "experiment": fit_row["experiment"],
-        "condition": fit_row["condition"], "optimizer": fit_row["optimizer"],
-        "stored_eval_likelihood_loss": stored_nll,
-        "rescored_nll_density_model_deg": rescored_nll_density_model_deg,
-        "per_trial_sum_nll_density_model_deg": float(scored["nll_density_model_deg"].sum()),
-        "rescored_nll_mass": float(scored["nll_mass"].sum()),
-        "abs_diff": abs(rescored_nll_density_model_deg - stored_nll),
-        "per_trial_sum_abs_diff": abs(float(scored["nll_density_model_deg"].sum()) - stored_nll),
-        "n_obs_scored": int(len(scored)),
-        # The mixture has no density floor: motor noise widens component
-        # variances analytically rather than convolving a grid, so there is no
-        # clipped region for the floor-aware gate to allow for.
-        "n_floor_trials": 0,
-        "model_bin_width_deg": model_bin_width_deg,
-        "bin_width_deg": bin_width_deg,
-    }
-    return scored, check
 
 
 def score_fit_row(

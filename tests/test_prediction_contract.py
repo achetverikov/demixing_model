@@ -459,3 +459,46 @@ def test_smoothing_refuses_a_shuffled_or_unevenly_spaced_feature_axis(predictor)
 
     # The well-formed axis still works.
     predictor.smoothed_asymmetry_curve(rows(np.arange(2.0, 182.0, 2.0)), 10.0)
+
+
+def test_scoring_cell_masses_underflow_only_where_it_cannot_matter():
+    """float32 cell probabilities return exact zeros where the true mass is tiny.
+
+    That is a deliberate trade, not an oversight, and this pins the bound that
+    makes it defensible: the zeroed cells must hold so little mass that no energy
+    score can notice. The same underflow in a per-trial *log* likelihood is not
+    tolerable -- log(0) is not a small number -- and that column is computed
+    separately in float64.
+    """
+    from scipy.stats import norm
+
+    from shared.mu1_axis import mu1_cell_width, mu1_grid
+
+    artifact = surrogate.WNM_DEFAULTS[20]
+    if not artifact.exists():
+        pytest.skip("no packaged WNM artifact")
+    predictor = predictor_from_surrogate(surrogate.load_surrogate(checkpoint_path=artifact))
+
+    # The corpus's narrowest corner, where components are tightest.
+    rows = jnp.asarray([[2.5, 2.5, 5.0, 2.0]], jnp.float32)
+    probabilities = np.asarray(predictor.cell_probabilities(rows, validate=False))[0]
+
+    centres = np.asarray(mu1_grid())
+    half = mu1_cell_width() / 2.0
+    dist = predictor.distribution(rows, validate=False)
+    mu = np.asarray(dist["mu"], np.float64)
+    sigma = np.asarray(dist["sigma"], np.float64)
+    weights = np.asarray(np.exp(np.asarray(dist["log_pi"], np.float64)), np.float64)
+
+    exact = np.zeros(len(centres))
+    for shift in np.arange(-8, 9) * 360.0:
+        upper = (centres[:, None] + half + shift - mu) / sigma
+        lower = (centres[:, None] - half + shift - mu) / sigma
+        exact += np.sum(weights * (norm.cdf(upper) - norm.cdf(lower)), axis=-1)
+
+    lost = exact[probabilities == 0.0].sum()
+    assert lost < 1e-10, (
+        f"float32 zeroed cells hold {lost:.3e} of mass; at that size the underflow could "
+        "move an energy score and the scoring path would need float64 too")
+    # And the surviving mass is still a distribution.
+    np.testing.assert_allclose(probabilities.sum(), 1.0, atol=1e-5)

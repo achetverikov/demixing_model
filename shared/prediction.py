@@ -447,6 +447,21 @@ class WrappedMixturePredictor(BiasPredictor):
         centres and renormalising is not equivalent when a component is narrower
         than a cell, which the mixture's ``min_scale`` of a quarter degree
         explicitly allows.
+
+        **Computed in float32, deliberately, and that is a decision rather than
+        an oversight.**  A cell far from every component has a mass that is small
+        but representable in float64 and not in float32 -- a sigma-11 component
+        180 degrees away holds 7.3e-60 -- so this returns exact zeros where the
+        true value is merely tiny.  For a *score* that is immaterial: on the
+        corpus's narrowest corner the 79 zeroed cells hold 3.2e-15 of total mass
+        between them, contributing at most 6e-13 to an energy score whose values
+        run from tens to thousands.  Staying in float32 keeps the path
+        differentiable and in one dtype.
+
+        Where the same underflow is *not* immaterial is a per-trial log
+        likelihood, because log(0) is not a small number.  That column is
+        computed separately in float64 from the mixture parameters; see
+        ``postprocess_fitted_likelihoods.wnm_cell_log_probability``.
         """
         edges = self._default_edges() if edges is None else jnp.asarray(edges)
         dist = self.distribution(params, validate, sd_motor)
@@ -635,11 +650,13 @@ class SurfacePredictor(BiasPredictor):
         sine = periodic_integral(mixtures * jnp.sin(angles)[None, :, None], axis=1)
 
         # The clamp is the deployed one, verbatim: [1e-10, 1 - 1e-10], not a
-        # tidier [1e-12, 1]. The upper bound is the part that matters -- at r = 1
-        # exactly, log(1) is 0 and the SD collapses to 0 degrees, which this
-        # estimator never returned. Rewriting it moved the answer by 37 degrees on
-        # a surface whose first moment cancels in float32, and no golden fixture
-        # goes near the clamp, so nothing here would have caught it.
+        # tidier [1e-12, 1]. It is the *lower* bound that carries the behaviour:
+        # a surface whose first moment cancels in float32 gives r near zero, and
+        # 1e-10 against 1e-12 moved the answer by 37 degrees. The upper bound is
+        # inert -- 1 - 1e-10 is exactly 1.0 in float32 -- which is a separate
+        # quirk, recorded as decision 6 in OPEN_DECISIONS.md rather than fixed
+        # here. No golden fixture goes near either bound, so nothing in the
+        # recorded reference would have caught the change.
         resultant = jnp.sqrt(cosine ** 2 + sine ** 2) / jnp.where(mass > 0, mass, jnp.nan)
         safe = jnp.minimum(jnp.maximum(resultant, 1e-10), 1.0 - 1e-10)
         return jnp.degrees(jnp.sqrt(-2 * jnp.log(safe)))

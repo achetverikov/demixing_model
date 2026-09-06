@@ -105,27 +105,28 @@ path, checks that the reloaded artifact reproduces the research checkpoint
 exactly and accepts its own advertised domain, and only then renames it into
 place.
 
-## Known gaps in checkpoint selection
+## How consumers pick a checkpoint
 
-Found by audit on 2026-09-06, recorded here because each one silently produces
-numbers from a model other than the one the caller asked for. None is introduced
-by the WNM work; all predate it.
+Three defects here were found by audit on 2026-09-06 and are fixed; the rules
+that replaced them are worth knowing, because each was a way to use one model's
+predictions with another model's parameters and say nothing about it.
 
-- `create_unified_subject_plots.py` defaults to
-  `model_epoch1500_10ktrain_{n}samples.pkl`, while `fit_model_to_data.py`
-  defaults to `model_epoch1425_10ktrain_20samples.pkl`. A 20-sample plotting run
-  without an explicit `--checkpoint-path` therefore recomputes curves, moments
-  and SDs from a different surrogate than the fit used.
-- `postprocess_fitted_likelihoods.py:infer_checkpoint_path` picks the checkpoint
-  by string-matching `20samples`/`100samples` in the results path, so a renamed
-  results directory rescores under the wrong observer model.
-- `surface_simulator.py` passes an explicit checkpoint straight through while
-  labelling its output with the requested `n_samples`, so a mismatched pair
-  produces one observer's curves under the other's label.
-- `SURFACE_CHECKPOINT_REGISTRY` identifies historical surface checkpoints by
-  filename. Those files carry no metadata, so this is a recorded fact about
-  specific files rather than a parsing rule -- but a different file placed at a
-  registered name is accepted as the registered model.
+- **A fitted run records its surrogate**, and consumers of that run resolve
+  through `shared.surrogate.checkpoint_for_run`, which matches the run
+  fingerprint's `checkpoint_sha256`. An explicit checkpoint is verified against
+  that digest rather than merely honoured. A run with neither a fingerprint nor
+  an explicit checkpoint raises: there is no fallback to the production artifact,
+  because that would substitute today's model for the one the fit used.
+- **A fresh prediction picks by `n_samples`**, through
+  `shared.surrogate.production_checkpoint`. Exactly two artifacts are production
+  at a time, one per observer model.
+- **Output is labelled from the artifact**, never from the request. The
+  simulator loads through `load_surrogate` with the requested count, which raises
+  on a mismatch, and its rows carry `surrogate_family` and `surrogate_artifact`.
+  The averaged-surface branch keeps `n_samples` as the request, since there the
+  directory carries the identity -- and that directory name is matched on an
+  exact sample-count token, with ambiguous names refused.
+
 
 ## Notes for developers
 
