@@ -28,7 +28,7 @@ from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
 from shared.config import config
 from shared.mu1_axis import guard_surface_mu1_axis, periodic_integral
 from shared.utils import (AveragedSurface, SurfaceUnpickler, resolve_input_path,
-                          ensure_averaged_surface_file)
+                          ensure_averaged_surface_file, gaussian_curve_smoother)
 
 RESULTS_DIR = "results"
 CHECKPOINT_PREFIX = "neural_net_checkpoints"
@@ -89,28 +89,14 @@ def _generate_mu2_density_asymmetry_batch(mu2_surfaces_batch: jnp.ndarray, targe
         p_negative = jnp.sum(negative_probs, axis=0) * dx
         
         asymmetry = p_positive - p_negative
-        
-        # Apply Gaussian smoothing if requested using JAX operations
+
+        # Same smoother as the mu1 path, from the one shared implementation.
+        # This used to be a second inline copy that convolved via `correlate`;
+        # the kernel is symmetric, so the two agree exactly (checked in
+        # tests/test_curve_smoother.py) and the duplicate bought nothing.
         if apply_smoothing:
-            # Create Gaussian kernel
-            kernel_size = int(4 * smoothing_sigma + 1)  # Kernel size based on sigma
-            if kernel_size % 2 == 0:
-                kernel_size += 1  # Ensure odd size
-            
-            # Create 1D Gaussian kernel
-            x = jnp.arange(kernel_size) - kernel_size // 2
-            kernel = jnp.exp(-0.5 * (x / smoothing_sigma) ** 2)
-            kernel = kernel / jnp.sum(kernel)  # Normalize
-            
-            # Apply convolution using JAX - pad the asymmetry values
-            pad_width = kernel_size // 2
-            padded_asymmetry = jnp.pad(asymmetry, pad_width, mode='edge')
-            
-            # Convolve using correlate (which is equivalent to convolution with flipped kernel)
-            smoothed_asymmetry = jnp.correlate(padded_asymmetry, kernel, mode='valid')
-            return smoothed_asymmetry
-        else:
-            return asymmetry
+            return gaussian_curve_smoother(asymmetry, smoothing_sigma)
+        return asymmetry
 
     # Apply to entire batch using vmap with smoothing enabled (sigma=5)
     vectorized_compute = jax.vmap(lambda log_surf: compute_single_mu2_density_asymmetry(
