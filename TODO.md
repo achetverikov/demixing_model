@@ -78,6 +78,18 @@ Separate optimizer comparisons from K12-versus-surface-NN comparisons.
 The proposed recovery design and transition sequence are recorded with the generated
 experiment artifacts; no production optimizer replacement is selected yet.
 
+**Select the gradient start budget here, not before** (decision, 2026-09-06).
+`continuous_optimizer.minimize_continuous` defaults to a placeholder `n_starts`
+and it must not be read as a tuned value. The budget matters: on a
+three-condition fixture the density objective's loss spread across six converged
+starts was 1.03, start losses running 0.96 to 2.00, so five of six starts landed
+in worse basins and the budget, not the objective, chose the answer. Tuning it on
+whatever cases are to hand would select it on its own benchmark. Choose it on the
+development groups of the recovery panel, freeze it, then score the held-out
+groups -- and record the frozen value with the results, since a fit's parameters
+mean something different at a budget that reliably finds the basin than at one
+that does not.
+
 **Test float64 as part of the recovery panel.** The repo runs JAX in its default
 float32, so `continuous_optimizer` computes values and gradients at float32 and
 widens them only at the SciPy boundary. That floors the achievable convergence

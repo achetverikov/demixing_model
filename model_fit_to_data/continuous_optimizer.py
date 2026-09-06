@@ -26,7 +26,11 @@ Design notes that are not free choices:
   Railing is information about the model or the data and must stay visible.
 * **Every start is recorded.** The spread of final losses across starts is what
   distinguishes "this objective has one basin" from "this search got lucky", and
-  it is the quantity the search comparison needs.
+  it is the quantity the search comparison needs. It is not small here: a
+  three-condition fixture gave a spread of 1.03 across six converged starts. The
+  start budget is therefore a setting with scientific consequences, deferred to
+  the recovery panel rather than guessed at now; ``n_starts`` defaults to a
+  placeholder until that panel selects one.
 
 **Precision.** The repo runs JAX in its default float32 everywhere, and the
 surface backend's deployed numbers were produced that way, so this module does
@@ -161,7 +165,15 @@ def minimize_continuous(objective: Callable, bounds: Sequence[tuple],
         bounds: ``(low, high)`` per parameter, in natural units. All must be
             strictly positive, since the search works in log space.
         names: parameter names, for boundary reporting.
-        n_starts: multistart count.
+        n_starts: multistart count. **Provisional.** The default is a placeholder,
+            not a selected value: on a three-condition fixture the density
+            objective's loss spread across six converged starts was 1.03, with
+            start losses from 0.96 to 2.00, so the budget materially decides the
+            answer and cannot be set by taste. It is chosen on development cases
+            in the parameter-recovery panel and frozen there before any held-out
+            scoring (TODO.md item 3; transition plan steps 3 and 5). Until then,
+            do not report a run's parameters as though the budget behind them had
+            been justified.
         seed: makes the starts reproducible; recorded in the result.
         max_iterations: per start.
         tolerance: L-BFGS-B ``ftol``, the relative reduction in the objective
