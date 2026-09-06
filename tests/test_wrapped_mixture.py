@@ -2,9 +2,14 @@
 
 Pure density mathematics — no simulator, no GPU work.
 
+Lives in the production suite rather than under ``continuous_density/tests``
+because ``wrapped_mixture_model`` is the production surrogate's density
+implementation: these are the contracts every fit, export and plot depends on,
+so they must run in the suite the project actually runs.
+
 Run from the repo root::
 
-    PYTHONPATH=. python -m pytest continuous_density/tests/test_wrapped_mixture.py
+    JAX_PLATFORMS=cpu python -m pytest tests/test_wrapped_mixture.py
 """
 
 import jax

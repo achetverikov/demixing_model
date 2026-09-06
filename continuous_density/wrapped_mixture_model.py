@@ -81,7 +81,7 @@ def mirror_params(params):
 #: and the Fourier series would need too many harmonics.  The two forms agree to
 #: better than float32 across a wide band around the switch, so the exact value
 #: is not delicate — 60 deg sits comfortably in that band for ``n_wraps=4`` /
-#: ``n_harmonics=8`` (see ``tests/test_wrapped_mixture.py``).
+#: ``n_harmonics=8`` (see ``tests/test_wrapped_mixture.py`` in the production suite).
 SIGMA_SWITCH = 60.0
 
 

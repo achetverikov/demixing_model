@@ -52,6 +52,7 @@ except ModuleNotFoundError:  # imported as `model_fit_to_data.fit_model_to_data`
         enforce_fingerprint,
         write_fingerprint_sidecar,
     )
+from shared import surrogate
 from shared.utils import filter_data_for_fitting, resolve_input_path, resolve_results_path
 
 
@@ -632,6 +633,19 @@ def run_fitting(
 
     resolved_output = resolve_results_path(output_dir, results_dir)
     resolved_checkpoint = resolve_input_path(checkpoint_path, results_dir)
+
+    # One place decides what a checkpoint is, and it reads the file rather than
+    # its name.  This command drives the surface backend only: no search here
+    # consumes a wrapped-normal mixture yet, so a WNM artifact passed by mistake
+    # would fail somewhere inside the optimizer with a message about a missing
+    # key instead of about the wrong model family.
+    checkpoint_family = surrogate.detect_family(resolved_checkpoint)
+    if checkpoint_family != surrogate.FAMILY_SURFACE_NN:
+        raise ValueError(
+            f"{Path(resolved_checkpoint).name} is a {checkpoint_family} checkpoint, and "
+            "fit_model_to_data.py currently drives the surface backend only. The continuous "
+            "search that consumes WNM artifacts is not wired up yet; pass a surface "
+            "checkpoint, or see results/continuous_density_4.1q/TRANSITION_PLAN.md step 3.")
 
     if USE_RICH:
         table = Table.grid(padding=(0, 2))
