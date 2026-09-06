@@ -296,3 +296,65 @@ def score_all_conditions(method, predictor, targets, parameters, *, curve_losses
             emp_density_weights_sd=emp_density_weights_sd,
             density_smoothing_sigma=density_smoothing_sigma, trials=trials)
     return total
+
+
+def evaluate_condition_losses(predictor, targets, params_by_condition, methods, *,
+                              curve_losses, energy_score, d_circ_matrix, feat_diff_grid,
+                              emp_density_weights_sd, density_smoothing_sigma=None,
+                              corr_weight=0.25, condition_trials=None):
+    """Every objective's loss per condition, at one fixed parameter set each.
+
+    The mixture's counterpart to ``fit_model_to_data.evaluate_parameter_losses``,
+    with the same semantics: one row of ``params_by_condition`` per condition, in
+    the targets' order, as ``[sd_feat1, sd_feat2, sd_spat]`` with an optional
+    fourth ``sd_motor``. Motor noise is applied per condition from that column,
+    exactly as the surface version convolves each surface with its own kernel.
+
+    This is what makes a fitted run's results interpretable: the public command
+    writes *every* objective's score at each fitted method's parameters, so all of
+    them have to be computable for the surrogate that produced the fit. A method
+    missing here leaves a results row half-populated with no indication why.
+
+    Mean-only objectives are evaluated rather than skipped, matching the surface
+    path. They are invariant to the motor SD, but a cross-evaluation column that
+    silently disappeared at non-zero motor noise would be worse than one that is
+    merely insensitive.
+
+    Returns:
+        ``{method: (n_conditions,) array}``.
+    """
+    params_by_condition = jnp.asarray(params_by_condition)
+    n_conditions = len(targets.condition_names)
+    if params_by_condition.ndim != 2 or params_by_condition.shape[0] != n_conditions:
+        raise ValueError(
+            "params_by_condition must have shape (n_conditions, 3 or 4); got "
+            f"{tuple(params_by_condition.shape)} for {n_conditions} conditions")
+    if params_by_condition.shape[1] not in (3, 4):
+        raise ValueError(
+            f"expected 3 or 4 columns [sd_feat1, sd_feat2, sd_spat, (sd_motor)], got "
+            f"{params_by_condition.shape[1]}")
+    if condition_trials is not None and len(condition_trials) != n_conditions:
+        raise ValueError(
+            f"{len(condition_trials)} trial arrays for {n_conditions} conditions; the "
+            "sequence is positional and pairs with the targets by index.")
+
+    has_motor = params_by_condition.shape[1] >= 4
+    losses = {}
+    for method in methods:
+        per_condition = []
+        for index in range(n_conditions):
+            row = params_by_condition[index]
+            scorer = predictor
+            if has_motor and float(row[3]) > 0:
+                scorer = predictor.with_motor_noise(float(row[3]))
+            trials = None if condition_trials is None else condition_trials[index]
+            per_condition.append(score_condition(
+                method, scorer, targets, index, row[0], row[1], row[2],
+                curve_losses=curve_losses,
+                ccc_or_combined_kwargs={"corr_weight": corr_weight},
+                energy_score=energy_score, d_circ_matrix=d_circ_matrix,
+                feat_diff_grid=feat_diff_grid,
+                emp_density_weights_sd=emp_density_weights_sd,
+                density_smoothing_sigma=density_smoothing_sigma, trials=trials))
+        losses[method] = jnp.stack(per_condition)
+    return losses

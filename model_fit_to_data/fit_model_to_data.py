@@ -52,6 +52,8 @@ except ModuleNotFoundError:  # imported as `model_fit_to_data.fit_model_to_data`
         enforce_fingerprint,
         write_fingerprint_sidecar,
     )
+from continuous_fit import ContinuousEngine
+from shared import prediction as prediction_module
 from shared import surrogate
 from shared.utils import filter_data_for_fitting, resolve_input_path, resolve_results_path
 
@@ -365,11 +367,21 @@ def group_conditions(
 
 
 def evaluate_parameter_losses(
-    optimizer: GridBasedMultiConditionOptimizer,
+    optimizer,
     params_by_condition: jnp.ndarray,
     fitting_methods: List[str],
 ) -> Dict[str, jnp.ndarray]:
-    """Evaluate one fixed parameter set per current condition under each objective."""
+    """Evaluate one fixed parameter set per current condition under each objective.
+
+    Dispatches on the engine: the surface backend materialises surfaces and runs
+    the compiled objective kernels, the mixture scores analytically. Both write a
+    loss for every method in ``fitting_methods``, which is what keeps a results
+    row from being half-populated when a run is fitted under one objective and
+    cross-scored under the rest.
+    """
+    if isinstance(optimizer, ContinuousEngine):
+        return optimizer.evaluate(params_by_condition, fitting_methods)
+
     params_by_condition = jnp.asarray(params_by_condition)
     if params_by_condition.ndim != 2 or params_by_condition.shape[0] != optimizer.n_conditions:
         raise ValueError(
@@ -512,7 +524,9 @@ def process_subject(
             status = console.status(f"[bold magenta]Fitting {subject_id} / {method}[/]", spinner="dots")
             status.start()
         try:
-            if curve_source is not None and method in EXHAUSTIVE_METHODS:
+            if isinstance(optimizer, ContinuousEngine):
+                result = optimizer.fit(method, sd_motor=0.0, verbosity=1)
+            elif curve_source is not None and method in EXHAUSTIVE_METHODS:
                 # Exhaustive on the cache lattice. The two backends return the
                 # same object shape, so everything below this call is identical.
                 result = fit_exhaustive_density(
@@ -622,6 +636,8 @@ def run_fitting(
     results_dir: str = 'results',
     circ_space: int = 360,
     search: str = 'hierarchical',
+    continuous_starts: int = 8,
+    continuous_seed: int = 0,
     curve_cache_root: Optional[str] = None,
     curve_cache_step: float = 1.0,
 ):
@@ -640,22 +656,6 @@ def run_fitting(
     # would fail somewhere inside the optimizer with a message about a missing
     # key instead of about the wrong model family.
     checkpoint_family = surrogate.detect_family(resolved_checkpoint)
-    if search == 'continuous':
-        # The flag, the family guard and the fingerprint are in place; the
-        # per-subject dispatch is not. Refusing here is deliberate: accepting the
-        # flag and then falling through to the surface path would construct a
-        # surface optimizer around a mixture checkpoint, and the failure mode
-        # this backend has to avoid above all is a run that half-works and mixes
-        # two searches into one set of results. The backend itself is complete
-        # and tested -- model_fit_to_data/continuous_fit.py, driven directly --
-        # and TRANSITION_PLAN.md step 3 tracks connecting it here.
-        raise NotImplementedError(
-            "--search continuous is not wired into this command yet. The gradient backend "
-            "exists and is tested (model_fit_to_data/continuous_fit.py); what is missing is "
-            "the per-subject dispatch and the WNM path through evaluate_parameter_losses, "
-            "which writes every objective's score at each fitted method's parameters. "
-            "Enabling the flag before that would leave results with some columns computed "
-            "by one surrogate and some by another.")
     if search == 'continuous' and checkpoint_family != surrogate.FAMILY_WNM:
         raise ValueError(
             f"--search continuous needs a wrapped-normal-mixture checkpoint, but "
@@ -723,15 +723,32 @@ def run_fitting(
             density_smoothing_sigma=DENSITY_CURVE_SPEC['density_smoothing_sigma'],
         )
 
+    continuous_spec = None
+    if search == 'continuous':
+        # Built here, before the engine, so the identity is fixed by the same
+        # settings the engine will run at rather than read back off it.
+        _wnm_bounds = surrogate.search_bounds(
+            prediction_module.domain_from_meta(
+                surrogate.load_surrogate(checkpoint_path=resolved_checkpoint).meta))
+        continuous_spec = {
+            "method": "L-BFGS-B", "parameterisation": "log",
+            "n_starts": int(continuous_starts), "seed": int(continuous_seed),
+            "sd_feat_bounds": list(_wnm_bounds["sd_feat"]),
+            "sd_spat_bounds": list(_wnm_bounds["sd_spat"]),
+        }
+
     fingerprint = compute_run_fingerprint(
         data_path=data_path,
         checkpoint_path=resolved_checkpoint,
+        surrogate_family=checkpoint_family,
+        continuous_spec=continuous_spec,
         circ_space=circ_space,
         # Every objective the run may WRITE, not the ones it was asked to fit:
         # `evaluate_parameter_losses` scores all of them at each fitted method's
         # parameters, so a change to any one invalidates the stored evaluations.
         evaluation_methods=LOSS_EVALUATION_METHODS,
-        search_backend=('exhaustive_1deg' if search == 'exhaustive' else 'hierarchical'),
+        search_backend=('exhaustive_1deg' if search == 'exhaustive'
+                        else 'continuous' if search == 'continuous' else 'hierarchical'),
         curve_cache_key=curve_cache_key,
         skip_motor_noise=skip_motor_noise,
         exp_col=exp_col,
@@ -743,7 +760,7 @@ def run_fitting(
         include_outliers=include_outliers,
         min_trials=min_trials,
         corr_weight=corr_weight,
-        grid_spec=HIERARCHICAL_GRID_SPEC,
+        grid_spec=None if search == 'continuous' else HIERARCHICAL_GRID_SPEC,
         density_curve_spec=DENSITY_CURVE_SPEC,
         degenerate_eps=DEGENERATE_TARGET_EPS,
     )
@@ -768,11 +785,31 @@ def run_fitting(
         status = console.status("[bold cyan]Loading model and compiling optimizer[/]", spinner="dots")
         status.start()
     try:
-        optimizer = GridBasedMultiConditionOptimizer(
-            str(resolved_checkpoint), {'dummy': dummy},
-            skip_motor_noise=skip_motor_noise, corr_weight=corr_weight,
-            **DENSITY_CURVE_SPEC,
-        )
+        if search == 'continuous':
+            from continuous_density import wrapped_mixture_model  # noqa: F401  (loader dep)
+            from density_objective import degenerate_targets as _degenerate
+            from grid_based_multi_condition_optimizer_jax_loops import (
+                _compute_curve_losses as _curve_losses,
+                bwcrps_energy_score as _energy,
+                compute_bwcrps_condition_targets as _bwcrps_targets,
+                compute_target_bias_curve_core as _bias_core)
+            from shared.prediction import predictor_from_surrogate
+
+            loaded = surrogate.load_surrogate(checkpoint_path=resolved_checkpoint)
+            optimizer = ContinuousEngine(
+                predictor_from_surrogate(loaded),
+                curve_losses=_curve_losses, energy_score=_energy,
+                degenerate_targets=_degenerate, bwcrps_condition_targets=_bwcrps_targets,
+                target_bias_curve_core=_bias_core, corr_weight=corr_weight,
+                skip_motor_noise=skip_motor_noise, n_starts=continuous_starts,
+                seed=continuous_seed, **DENSITY_CURVE_SPEC,
+            )
+        else:
+            optimizer = GridBasedMultiConditionOptimizer(
+                str(resolved_checkpoint), {'dummy': dummy},
+                skip_motor_noise=skip_motor_noise, corr_weight=corr_weight,
+                **DENSITY_CURVE_SPEC,
+            )
     finally:
         if status is not None:
             status.stop()
@@ -995,6 +1032,8 @@ if __name__ == '__main__':
             results_dir=args.results_dir,
             circ_space=args.circ_space,
             search=args.search,
+            continuous_starts=args.continuous_starts,
+            continuous_seed=args.continuous_seed,
             curve_cache_root=args.curve_cache,
             curve_cache_step=args.curve_cache_step,
         )

@@ -27,6 +27,7 @@ from typing import Dict, Optional, Sequence
 
 import jax.numpy as jnp
 import numpy as np
+import numpy as _np
 
 from continuous_optimizer import (build_bounds, condition_parameter_layout,
                                   minimize_continuous)
@@ -185,3 +186,143 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
             for s in fit.starts],
         'search_settings': dict(fit.settings),
     }
+
+
+class ContinuousEngine:
+    """Per-subject driver for the continuous backend, shaped like the optimizer.
+
+    ``process_subject`` reads a handful of attributes off whatever engine it is
+    given -- the empirical targets, the condition names, the feature grid -- and
+    then calls one fit method per objective. This exposes that same surface so the
+    loop body does not branch on which backend is running; the alternative is a
+    second copy of the per-subject bookkeeping, which is how two paths start
+    disagreeing about what a fitted run contains.
+
+    It holds no surfaces and loads no checkpoint of its own: it is constructed
+    from an already-loaded predictor, and builds its targets through
+    ``fitting_targets`` like everything else.
+    """
+
+    def __init__(self, predictor, *, curve_losses, energy_score,
+                 degenerate_targets, bwcrps_condition_targets, target_bias_curve_core,
+                 emp_density_weights_sd: float, density_smoothing_sigma=None,
+                 density_bandwidth_rule: str = "sj", density_bandwidth_mode: str = "pooled",
+                 corr_weight: float = 0.25, skip_motor_noise: bool = True,
+                 n_starts: int = 8, seed: int = 0):
+        import jax.numpy as _jnp
+        from fitting_targets import build_fitting_targets
+        from shared.config import config
+
+        self.predictor = predictor
+        self.skip_motor_noise = bool(skip_motor_noise)
+        self.corr_weight = float(corr_weight)
+        self.emp_density_weights_sd = float(emp_density_weights_sd)
+        self.density_smoothing_sigma = density_smoothing_sigma
+        self.density_bandwidth_rule = density_bandwidth_rule
+        self.density_bandwidth_mode = density_bandwidth_mode
+        self.n_starts = int(n_starts)
+        self.seed = int(seed)
+
+        self._build_targets = build_fitting_targets
+        self._curve_losses = curve_losses
+        self._energy_score = energy_score
+        self._degenerate_targets = degenerate_targets
+        self._bwcrps_condition_targets = bwcrps_condition_targets
+        self._target_bias_curve_core = target_bias_curve_core
+
+        self.feat_diff_grid = config.create_grid('feat_diff')
+        bias_grid = config.create_grid('mu1_bias')
+        self.n_mu1_bias = len(bias_grid)
+        difference = _jnp.abs(bias_grid[:, None] - bias_grid[None, :])
+        self.D_circ_matrix = _jnp.minimum(difference, 360.0 - difference)
+
+        # Checked once, here: the per-evaluation path skips validation to stay
+        # differentiable, so the grid every prediction will use is verified
+        # against the surrogate's domain before any subject is fitted.
+        validate_feature_grid(self.feat_diff_grid, predictor)
+
+        self.targets = None
+        self.condition_datasets = None
+        self.condition_names = ()
+        self.n_conditions = 0
+
+    def update_dataset(self, condition_datasets):
+        """Rebuild the empirical targets for one subject's conditions."""
+        self.condition_datasets = condition_datasets
+        self.condition_names = tuple(condition_datasets)
+        self.n_conditions = len(self.condition_names)
+        self.targets = self._build_targets(
+            condition_datasets, feat_diff_grid=self.feat_diff_grid,
+            d_circ_matrix=self.D_circ_matrix, n_mu1_bias=self.n_mu1_bias,
+            emp_density_weights_sd=self.emp_density_weights_sd,
+            density_bandwidth_rule=self.density_bandwidth_rule,
+            density_bandwidth_mode=self.density_bandwidth_mode,
+            degenerate_targets=self._degenerate_targets,
+            bwcrps_condition_targets=self._bwcrps_condition_targets,
+            target_bias_curve_core=self._target_bias_curve_core)
+        for warning in self.targets.near_constant_warnings:
+            print(warning)
+
+    # The attribute names process_subject reads, kept identical so the loop body
+    # is shared rather than duplicated.
+    @property
+    def unified_target_bias(self):
+        return self.targets.target_bias
+
+    @property
+    def unified_bias_weights(self):
+        return self.targets.bias_weights
+
+    @property
+    def unified_target_density(self):
+        return self.targets.target_density
+
+    @property
+    def unified_target_bias_curve(self):
+        return self.targets.target_bias_curve
+
+    @property
+    def unified_feat_indices(self):
+        return self.targets.feat_indices
+
+    def _trials(self):
+        import jax.numpy as _jnp
+
+        return [(_jnp.asarray(_np.asarray(values)[:, 0]),
+                 _jnp.asarray(_np.asarray(values)[:, 1]))
+                for values in self.condition_datasets.values()]
+
+    def fit(self, fitting_method: str, sd_motor: float = 0.0, verbosity: int = 1):
+        """One objective, through the gradient search."""
+        if self.targets is None:
+            raise RuntimeError("call update_dataset() before fitting")
+        return fit_continuous(
+            self.predictor, self.targets, list(self.condition_names),
+            objective=fitting_method, curve_losses=self._curve_losses,
+            energy_score=self._energy_score, d_circ_matrix=self.D_circ_matrix,
+            feat_diff_grid=self.feat_diff_grid,
+            emp_density_weights_sd=self.emp_density_weights_sd,
+            density_smoothing_sigma=self.density_smoothing_sigma,
+            corr_weight=self.corr_weight, condition_trials=self._trials(),
+            sd_motor=sd_motor, n_starts=self.n_starts, seed=self.seed,
+            verbosity=verbosity)
+
+    def evaluate(self, params_by_condition, fitting_methods):
+        """Every objective's loss per condition, at fixed parameters."""
+        from wnm_scoring import evaluate_condition_losses
+
+        return evaluate_condition_losses(
+            self.predictor, self.targets, params_by_condition, fitting_methods,
+            curve_losses=self._curve_losses, energy_score=self._energy_score,
+            d_circ_matrix=self.D_circ_matrix, feat_diff_grid=self.feat_diff_grid,
+            emp_density_weights_sd=self.emp_density_weights_sd,
+            density_smoothing_sigma=self.density_smoothing_sigma,
+            corr_weight=self.corr_weight, condition_trials=self._trials())
+
+    def search_spec(self) -> Dict:
+        """The settings that produced the parameters, for the run fingerprint."""
+        bounds = surrogate_module.search_bounds(self.predictor.domain)
+        return {"method": "L-BFGS-B", "parameterisation": "log",
+                "n_starts": self.n_starts, "seed": self.seed,
+                "sd_feat_bounds": list(bounds["sd_feat"]),
+                "sd_spat_bounds": list(bounds["sd_spat"])}
