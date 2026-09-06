@@ -310,6 +310,11 @@ def compute_predicted_sd_curves_batch_pooled(log_surfaces_batch, bin_weights_bat
     degenerate correctly: a bin whose trials all sit at one feature difference
     mixes exactly one column and the pooled value equals the unpooled one.
 
+    The computation itself lives in ``shared.prediction.SurfacePredictor`` so the
+    two surrogate families share one definition of this estimator rather than
+    two that can drift. Pinned unchanged against a pre-routing reference in
+    ``tests/test_plot_estimators.py``.
+
     Args:
         log_surfaces_batch: (n_surfaces, n_mu1_bias, n_feat_diff) log densities.
         bin_weights_batch: (n_surfaces, n_bins, n_feat_vals) mixture weights,
@@ -318,29 +323,10 @@ def compute_predicted_sd_curves_batch_pooled(log_surfaces_batch, bin_weights_bat
     Returns:
         (n_surfaces, n_bins) circular SDs in model degrees.
     """
-    mu1_bias_grid = config.create_grid('mu1_bias')
-    n_feat_diff = log_surfaces_batch.shape[2]
+    from shared.prediction import SurfacePredictor
 
-    prob_surfaces = jnp.exp(log_surfaces_batch)
-    weights = jnp.asarray(bin_weights_batch)
-    if weights.shape[2] != n_feat_diff:
-        raise ValueError(
-            f"bin weights span {weights.shape[2]} feature columns but the "
-            f"surfaces have {n_feat_diff}"
-        )
-
-    # Mixture density per (surface, bin): sum_f w[b, f] * p[:, f]
-    mixtures = jnp.einsum('smf,sbf->smb', prob_surfaces, weights)
-
-    angles_rad = jnp.radians(mu1_bias_grid)
-    mass = periodic_integral(mixtures, axis=1)
-    mean_cos = periodic_integral(mixtures * jnp.cos(angles_rad)[None, :, None], axis=1)
-    mean_sin = periodic_integral(mixtures * jnp.sin(angles_rad)[None, :, None], axis=1)
-
-    # Empty bins have zero mass -> NaN, matching the empirical curve's gaps.
-    r = jnp.sqrt(mean_cos**2 + mean_sin**2) / jnp.where(mass > 0, mass, jnp.nan)
-    r_safe = jnp.minimum(jnp.maximum(r, 1e-10), 1.0 - 1e-10)
-    return jnp.degrees(jnp.sqrt(-2 * jnp.log(r_safe)))
+    predictor = SurfacePredictor(log_surfaces_batch, n_samples=0, artifact="plots")
+    return predictor.pooled_circular_sd(bin_weights_batch)
 
 
 def _sanitize_result_key_part(value: str) -> str:

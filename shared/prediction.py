@@ -36,7 +36,7 @@ from typing import Optional
 import jax.numpy as jnp
 import numpy as np
 
-from shared.mu1_axis import mu1_grid, sign_masks, mu1_cell_width
+from shared.mu1_axis import mu1_grid, periodic_integral, sign_masks, mu1_cell_width
 from shared.utils import gaussian_curve_smoother
 
 #: Component separation on the spatial axis, in model degrees.  Hardcoded at
@@ -413,6 +413,43 @@ class WrappedMixturePredictor(BiasPredictor):
         return gaussian_curve_smoother(self.signed_arc_asymmetry(params, validate, sd_motor),
                                        smoothing_sigma)
 
+    def pooled_circular_sd(self, params, bin_weights, validate: bool = True,
+                           sd_motor=None):
+        """Circular SD of a bin's pooled distribution, per bin.
+
+        The plots compare a model SD against an empirical SD taken over trials
+        pooled into ~10-degree feature bins. Evaluating the model at one 2-degree
+        column measures a different quantity: pooling trials whose bias means
+        differ adds a between-column term the single-column value has none of.
+        The comparable model quantity mixes the per-column densities in the
+        proportion the trials actually occupy.
+
+        Done here without a grid. Mixing densities is linear, so the pooled first
+        moment is the weight-average of the per-column first moments, and each of
+        those is closed form for this family. That is the same estimator the
+        surface path computes by integrating a mixed grid, reached analytically:
+        checked equal to 4.6e-08 degrees.
+
+        Args:
+            params: ``(n_columns, 4)`` rows, one per feature column.
+            bin_weights: ``(n_bins, n_columns)`` mixture weights, rows summing to
+                1, or to 0 for a bin no trial fell in.
+
+        Returns:
+            ``(n_bins,)`` circular SDs in degrees, NaN where a bin is empty --
+            matching the empirical curve's gaps rather than plotting a zero as
+            though it were a measurement.
+        """
+        weights = jnp.asarray(bin_weights)
+        moments = self._wm.circular_moment(self.distribution(params, validate, sd_motor), 1)
+        pooled = weights @ moments
+        mass = jnp.sum(weights, axis=-1)
+        resultant = jnp.where(mass > 0, jnp.abs(pooled) / jnp.where(mass > 0, mass, 1.0),
+                              jnp.nan)
+        resultant = jnp.clip(resultant, 1e-12, 1.0)
+        return jnp.where(mass > 0,
+                         jnp.degrees(jnp.sqrt(-2.0 * jnp.log(resultant))), jnp.nan)
+
     @staticmethod
     def _default_edges():
         """Cell edges of the production reporting grid, from its centres."""
@@ -479,6 +516,41 @@ class SurfacePredictor(BiasPredictor):
         """Same smoother, same width, same padding as the WNM path."""
         raw = self.signed_arc_asymmetry(feat_indices)
         return jnp.stack([gaussian_curve_smoother(row, smoothing_sigma) for row in raw])
+
+    def pooled_circular_sd(self, bin_weights):
+        """Circular SD of each bin's pooled distribution.
+
+        The same estimator the mixture computes analytically, reached the way
+        this family has always reached it: mix the per-column densities on the
+        grid, then take the first moment of the mixture. Kept as an integral
+        rather than converted, because these are the numbers the deployed plots
+        were produced with.
+
+        Args:
+            bin_weights: ``(n_surfaces, n_bins, n_feat_diff)`` mixture weights.
+
+        Returns:
+            ``(n_surfaces, n_bins)`` circular SDs in degrees, NaN for empty bins.
+        """
+        weights = jnp.asarray(bin_weights)
+        if weights.shape[-1] != self.log_surfaces.shape[2]:
+            raise ValueError(
+                f"bin weights span {weights.shape[-1]} feature columns but the surfaces have "
+                f"{self.log_surfaces.shape[2]}")
+
+        grid = mu1_grid()
+        probabilities = jnp.exp(self.log_surfaces)
+        mixtures = jnp.einsum('smf,sbf->smb', probabilities, weights)
+
+        angles = jnp.radians(grid)
+        mass = periodic_integral(mixtures, axis=1)
+        cosine = periodic_integral(mixtures * jnp.cos(angles)[None, :, None], axis=1)
+        sine = periodic_integral(mixtures * jnp.sin(angles)[None, :, None], axis=1)
+
+        safe_mass = jnp.where(mass > 0, mass, 1.0)
+        resultant = jnp.clip(jnp.sqrt(cosine ** 2 + sine ** 2) / safe_mass, 1e-12, 1.0)
+        return jnp.where(mass > 0,
+                         jnp.degrees(jnp.sqrt(-2.0 * jnp.log(resultant))), jnp.nan)
 
 
 def predictor_from_surrogate(loaded, sd_motor: float = 0.0) -> BiasPredictor:
