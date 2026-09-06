@@ -291,6 +291,48 @@ inside `[5,200]`. Prepared example files default to `abs_td_dist` and
 independently on the same trials. `benchmark.py` reports warmed-up prediction and
 1,000-trial likelihood timings, device, and checkpoint size in JSON.
 
+## Task 2.0 local-representation benchmark
+
+The revised benchmark lives in `results/continuous_density_2.0/`. Its selection and
+confirmation triples and seeds are frozen in `BENCHMARK_DESIGN.json`. Generate selection
+first; do not generate or open confirmation until family, size, optimizer, quadrature, and
+analysis code are frozen.
+
+```bash
+PY=/workspaces/.venv/bin/python
+export PYTHONPATH=.
+
+$PY continuous_density/generate_training_data.py --validation \
+  --validation-design phase-a-trajectories --trajectory-curves 10 \
+  --trajectory-points 90 --design-seed 2608101 --seed 2608111 \
+  --n-simulations 100000 --n-samples 100 --block-rows 4 \
+  --simulation-chunk 5000 --shard-rows 8 --resume \
+  --out "$DEMIXING_ARTIFACT_ROOT/continuous_density_2.0/phase_a_selection_100k.npz"
+
+# Example independent local ladders on one selected trajectory.
+$PY continuous_density/fit_local_wrapped_mixture.py REFERENCE.npz \
+  --sd-feat1 SD1 --sd-feat2 SD2 --sd-ident SD_IDENT --component 1 \
+  --components 4 8 12 24 48 --starts 4 --resume --out-dir WRAPPED_OUT
+$PY continuous_density/fit_local_fourier.py REFERENCE.npz \
+  --sd-feat1 SD1 --sd-feat2 SD2 --sd-ident SD_IDENT --component 1 \
+  --harmonics 4 8 16 24 32 48 64 96 128 --resume --out-dir FOURIER_OUT
+```
+
+`bootstrap_local_metrics.py` applies the fixed core-metric margins, including the complex
+first-moment gate below resultant 0.5 and a separate fitting-half/evaluation-half diagnostic.
+`local_distribution_gate.py` selects the NLL reference on one held-out sub-half and reports
+NLL/Wasserstein bounds on the other. The latter covers evaluation-reference uncertainty only;
+independent fitting halves and optimizer restarts remain separate required evidence.
+
+The implemented Phase A also includes `periodic_spline.py` / `fit_local_spline.py`,
+`local_representation_benchmark.py` for resumable family ladders, and the reporting tools
+`summarize_fit_variation.py`, `combine_repeated_fit_gates.py`,
+`summarize_optimizer_variation.py`, and `plot_uncertainty_equivalence.py`. The completed
+selection and five-point 2M precision increment leave Phase A unresolved because broad
+multimodal response-SD uncertainty exceeds the frozen margin across independent fitting
+halves. Accordingly the confirmation corpus was not generated and Phase B was not started.
+See `results/continuous_density_2.0/TECHNICAL_REPORT.md`.
+
 ## Status
 
 The prototype has been trained and evaluated on two independent fresh 100k

@@ -269,15 +269,14 @@ def density_asymmetry(log_density_mu1_grid: np.ndarray) -> np.ndarray:
 def add_density_asymmetry(df: pd.DataFrame, model, variables,
                           store: data_mod.SampleStore, n_wraps: int = 4
                           ) -> pd.DataFrame:
-    """Attach model-integrated and raw-sample density asymmetry."""
-    grid = mu1_grid_np().astype(np.float32)
+    """Attach analytic mixture and direct raw-sample density asymmetry."""
     parts = []
     for c in (0, 1):
         params = store.design if c == 0 else np.asarray(wm.mirror_params(store.design))
-        log_q = model_logdensity_grid(model, variables, params, grid, n_wraps).T
+        dist = model.apply(variables, jnp.asarray(params))
         parts.append(pd.DataFrame({
             'component': c + 1,
-            'pred_density_asym': density_asymmetry(log_q),
+            'pred_density_asym': np.asarray(wm.density_asymmetry(dist)),
             'ref_density_asym': empirical_density_asymmetry(store.bias[:, :, c]),
         }))
     asym = pd.concat(parts, ignore_index=True)

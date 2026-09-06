@@ -133,10 +133,8 @@ def _metric_error(pred, raw, circular=False):
 
 
 def _dist_asymmetry(dist, n_wraps=4):
-    grid = comparison.mu1_grid_np()
-    log_density = np.asarray(wm.mixture_logpdf_grid(
-        jnp.asarray(grid), dist, n_wraps)).T
-    return evaluate.density_asymmetry(log_density)
+    del n_wraps
+    return np.asarray(wm.density_asymmetry(dist))
 
 
 def plot_diagnostic(frame, out, title):

@@ -218,3 +218,28 @@ def test_extreme_bias_values_are_stable():
     b = wm.mixture_logpdf(jnp.asarray([170.0 + 720.0, -3.0 - 360.0]), dist)
     assert np.allclose(np.asarray(a), np.asarray(b), atol=1e-5)
     assert bool(jnp.all(jnp.isfinite(a)))
+
+
+def test_analytic_asymmetry_matches_monte_carlo_for_narrow_zero_peak():
+    rng = np.random.default_rng(20)
+    dist = {"log_pi": jnp.log(jnp.asarray([[0.8, 0.2]])),
+            "mu": jnp.asarray([[0.8, -20.0]]),
+            "sigma": jnp.asarray([[1.5, 8.0]])}
+    component = rng.choice(2, size=500_000, p=[0.8, 0.2])
+    raw = rng.normal(np.array([0.8, -20.0])[component],
+                     np.array([1.5, 8.0])[component])
+    raw = (raw + 180) % 360 - 180
+    empirical = ((raw > 0).sum() - (raw < 0).sum()) / len(raw)
+    analytic = float(wm.density_asymmetry(dist)[0])
+    assert analytic == pytest.approx(empirical, abs=0.003)
+
+
+def test_analytic_asymmetry_avoids_two_degree_grid_bias():
+    dist = {"log_pi": jnp.zeros((1, 1)), "mu": jnp.asarray([[0.8]]),
+            "sigma": jnp.asarray([[1.5]])}
+    analytic = float(wm.density_asymmetry(dist)[0])
+    grid = jnp.arange(-180.0, 180.0, 2.0)
+    density = np.exp(np.asarray(wm.mixture_logpdf_grid(grid, dist))[0])
+    coarse = 2.0 * (density[np.asarray(grid) > 0].sum()
+                    - density[np.asarray(grid) < 0].sum())
+    assert abs(analytic - coarse) > 0.05

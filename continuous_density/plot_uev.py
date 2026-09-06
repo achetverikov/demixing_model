@@ -24,8 +24,6 @@ from continuous_density import data as data_mod
 from continuous_density import design as design_mod
 from continuous_density import evaluate
 from continuous_density import wrapped_mixture_model as wm
-from shared.mu1_axis import mu1_grid_np
-
 COMP_COLORS = {1: '#1d4ed8', 2: '#c2410c'}
 METHOD_LS = {'raw 100k': '-', 'conditional density': '--',
              'trajectory NLL': '--', 'moment w=2': '-.', 'moment w=10': ':'}
@@ -76,7 +74,6 @@ def build_summary(model_path: Path, reference_path: Path,
             np.concatenate([store.bias, extension.bias]))
 
     frames = []
-    asym_grid = mu1_grid_np().astype(np.float32)
     for component in (0, 1):
         params = store.design if component == 0 else np.asarray(wm.mirror_params(store.design))
         raw_mean_parts, raw_sd_parts, raw_asym_parts = [], [], []
@@ -94,9 +91,7 @@ def build_summary(model_path: Path, reference_path: Path,
             dist = density_model.apply(density_variables, jnp.asarray(params))
             pred_mean = np.asarray(wm.mean_and_resultant(dist)[0])
             pred_sd = np.asarray(wm.circular_sd(dist))
-            log_density = evaluate.model_logdensity_grid(
-                density_model, density_variables, params, asym_grid)
-            pred_asym = evaluate.density_asymmetry(log_density.T)
+            pred_asym = np.asarray(wm.density_asymmetry(dist))
             values.append((label, pred_mean, pred_sd, pred_asym))
         if checkpoint is not None:
             triples, inverse = np.unique(params[:, :3], axis=0, return_inverse=True)

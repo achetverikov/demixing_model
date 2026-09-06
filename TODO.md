@@ -62,3 +62,23 @@ exists yet anywhere in `model_fit_to_data/`, confirmed 2026-07-17):
   mean-bias curves.
 - Until resolved, treat `expectation`/mean-bias RMSE results as less reliable than
   likelihood- or CRPS-style distributional objectives.
+
+## 3. Parameter recovery and search selection for the K12 transition
+
+Open: implement replicated parameter recovery from independent DM simulator
+responses, using the existing empirical fitting targets. Forward-prediction CCC/MAE
+checks do not establish recovery of the generating noise parameters.
+
+Compare hierarchical, cached exhaustive density, multistart gradient, and a simple
+grid-seeded gradient search on identical K12 problems before selecting a default.
+Report parameter recovery, identifiability, held-out dissimilarity-dependent
+predictions, search failures, and cold/warm costs including cache amortization.
+Separate optimizer comparisons from K12-versus-surface-NN comparisons.
+
+The proposed recovery design and transition sequence are recorded with the generated
+experiment artifacts; no production optimizer replacement is selected yet.
+
+## Notes for developers
+
+The detailed plan is `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/TRANSITION_PLAN.md`.
+It is an external development artifact, not shipped or expected in a normal checkout.

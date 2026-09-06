@@ -107,6 +107,49 @@ def low_dprime_trajectory_design(n_curves: int = 24, points_per_curve: int = 45,
     return design, labels
 
 
+_PHASE_A_ANCHORS = (
+    ("narrow_equal", 10., 10., 20.),
+    ("multimodal_unequal", 10., 120., 20.),
+    ("low_identifiability", 20., 30., 80.),
+    ("high_noise", 90., 120., 20.),
+    ("broad_seam", 15., 20., 170.),
+)
+
+
+def phase_a_trajectory_design(n_curves: int = 10, points_per_curve: int = 90,
+                              seed: int = 0) -> Tuple[np.ndarray, List[str]]:
+    """Prespecified Phase A regimes plus disjoint space-filling trajectories.
+
+    Different seeds perturb the mandatory regimes to different off-grid triples,
+    allowing selection and locked confirmation to cover the same regimes without
+    sharing parameter combinations.
+    """
+    if n_curves < len(_PHASE_A_ANCHORS) or points_per_curve < 3:
+        raise ValueError(f"need at least {len(_PHASE_A_ANCHORS)} curves and three points")
+    rng = np.random.default_rng(seed)
+    triples, names = [], []
+    for name, sd1, sd2, sd_ident in _PHASE_A_ANCHORS:
+        jitter = rng.uniform(-0.83, 0.83, 3)
+        if np.isclose(sd1, sd2):
+            jitter[1] = jitter[0]
+        triple = np.clip(np.array([sd1, sd2, sd_ident]) + jitter, *SD_BOUNDS)
+        triples.append(triple)
+        names.append(name)
+    if n_curves > len(triples):
+        n_generic = n_curves - len(triples)
+        balanced_n = 1 << (n_generic - 1).bit_length()
+        generic = sobol_design(balanced_n, seed=seed + 1)[:n_generic, :3]
+        triples.extend(generic)
+        names.extend(f"space_filling_{i:02d}" for i in range(len(generic)))
+    feat = np.linspace(*FEAT_DIFF_BOUNDS, points_per_curve)
+    rows, labels = [], []
+    for name, triple in zip(names, triples):
+        rows.append(np.column_stack([
+            np.repeat(np.asarray(triple)[None, :], len(feat), axis=0), feat]))
+        labels.extend([f"phase_a_{name}"] * len(feat))
+    return np.concatenate(rows).astype(np.float32), labels
+
+
 def low_dprime_augmentation_design(n_points: int, seed: int = 0):
     """Off-grid training design emphasizing poorly separated items.
 

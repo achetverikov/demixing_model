@@ -78,10 +78,34 @@ def _assemble_chunks(records, n_rows: int, n_simulations: int):
     return bias
 
 
+def _load_design_file(path: Path) -> tuple[np.ndarray, list[str] | None]:
+    """Load an exact N x 4 design, optionally with one stratum label per row."""
+    if path.suffix == '.npy':
+        design = np.load(path)
+        strata = None
+    elif path.suffix == '.npz':
+        with np.load(path, allow_pickle=True) as blob:
+            design = np.asarray(blob['design'])
+            strata = (np.asarray(blob['strata']).astype(str).tolist()
+                      if 'strata' in blob and len(blob['strata']) else None)
+    else:
+        raise ValueError('--design-file must be an .npy or .npz file')
+    design = np.asarray(design, dtype=np.float32)
+    if design.ndim != 2 or design.shape[1] != len(design_mod.PARAM_NAMES):
+        raise ValueError('explicit design must have shape (N, 4)')
+    if not np.all(np.isfinite(design)):
+        raise ValueError('explicit design contains non-finite values')
+    if strata is not None and len(strata) != len(design):
+        raise ValueError('explicit strata must have one label per design row')
+    return design, strata
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--out', required=True, type=Path)
+    p.add_argument('--design-file', type=Path,
+                   help='exact .npy/.npz design; overrides generated designs')
     p.add_argument('--n-points', type=int, default=4000,
                    help='design points (training mode)')
     p.add_argument('--training-design', choices=['sobol', 'low-dprime', 'trajectories'],
@@ -94,7 +118,7 @@ def main():
                    help='use an off-grid validation design instead of training Sobol')
     p.add_argument('--validation-design',
                    choices=['points', 'trajectories', 'low-dprime-trajectories',
-                            'uev', 'uev-extension'],
+                            'phase-a-trajectories', 'uev', 'uev-extension'],
                    default='points',
                    help='scattered points, difficult trajectories, or the UEV figure grid')
     p.add_argument('--per-stratum', type=int, default=12)
@@ -139,7 +163,9 @@ def main():
         p.error('--crn and --crn-within-trajectories are mutually exclusive')
 
     strata = None
-    if args.validation:
+    if args.design_file is not None:
+        design, strata = _load_design_file(args.design_file)
+    elif args.validation:
         if args.validation_design == 'points':
             design, strata = design_mod.validation_design(args.per_stratum, seed=design_seed)
         elif args.validation_design == 'trajectories':
@@ -147,6 +173,9 @@ def main():
                 args.trajectory_curves, args.trajectory_points, seed=design_seed)
         elif args.validation_design == 'low-dprime-trajectories':
             design, strata = design_mod.low_dprime_trajectory_design(
+                args.trajectory_curves, args.trajectory_points, seed=design_seed)
+        elif args.validation_design == 'phase-a-trajectories':
+            design, strata = design_mod.phase_a_trajectory_design(
                 args.trajectory_curves, args.trajectory_points, seed=design_seed)
         elif args.validation_design == 'uev':
             design, strata = design_mod.uev_design(args.uev_feature_step)
@@ -238,13 +267,15 @@ def main():
     bias = _assemble_chunks(records, len(design), args.n_simulations)
     n_bad = int(np.sum(~np.isfinite(bias)))
     elapsed = time.time() - t0
-    meta = dict(vars(args) | {'out': str(args.out), 'elapsed_s': elapsed,
+    meta = dict(vars(args) | {'elapsed_s': elapsed,
                               'simulation_elapsed_s': simulation_elapsed,
                               'n_nonfinite': n_bad,
                               'effective_design_seed': design_seed,
                               'spat_diff': sim_interface.SPAT_DIFF,
                               'dprime_definition': 'spat_diff / sd_ident',
                               'param_names': list(design_mod.PARAM_NAMES)})
+    meta = {key: str(value) if isinstance(value, Path) else value
+            for key, value in meta.items()}
     _save_npz(args.out, args.compress, design=design, bias=bias,
               strata=np.asarray(strata if strata else [], dtype=object),
               meta=json.dumps(meta))

@@ -299,7 +299,9 @@ def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_
                             native_mu1_rows: int = 64,
                             training_feat_cols: int = 90,
                             init_checkpoint: Optional[str] = None,
-                            epoch_offset: int = 0) -> train_state.TrainState:
+                            epoch_offset: int = 0,
+                            param_low: Optional[float] = None,
+                            param_high: Optional[float] = None) -> train_state.TrainState:
     """
     Train mirror-aware model on averaged surfaces.
 
@@ -362,10 +364,13 @@ def train_mirror_aware_model(surfaces_folder: str = "combined_mirrored_surfaces_
 
     # config.param_grid_low extends one half-step below param_range_low (e.g. 5 when
     # step=10) so L2 grid surfaces (sp=5, sf=5, etc.) are included automatically.
+    # param_low/param_high override those defaults, for training sets that deliberately reach
+    # outside the production grid -- e.g. a trajectory corpus sampled below feature noise 5,
+    # where the default bound would silently drop the surfaces without a word.
     surfaces_list = load_averaged_surfaces(
         folder=str(resolved_surfaces_folder),
-        param_low=config.param_grid_low,
-        param_high=config.param_range_high
+        param_low=config.param_grid_low if param_low is None else param_low,
+        param_high=config.param_range_high if param_high is None else param_high
     )
     
     if len(surfaces_list) == 0:
@@ -621,6 +626,13 @@ if __name__ == "__main__":
     parser.add_argument('--init-checkpoint', type=str,
                         help='Warm-start parameters from this checkpoint using '
                              'a fresh optimizer schedule')
+    parser.add_argument('--param-low', type=float, default=None,
+                        help='override the lower surface-parameter bound (default '
+                             'config.param_grid_low = 5); admits surfaces below the production '
+                             'grid')
+    parser.add_argument('--param-high', type=float, default=None,
+                        help='override the upper surface-parameter bound (default '
+                             'config.param_range_high = 200)')
     parser.add_argument('--epoch-offset', type=int, default=0,
                         help='Epoch of --init-checkpoint; checkpoint numbering '
                              'continues from here (default: 0)')
@@ -647,6 +659,8 @@ if __name__ == "__main__":
             loss_profile_name=args.loss_profile,
             native_mu1_rows=args.native_mu1_rows,
             training_feat_cols=args.training_feat_cols,
+            param_low=args.param_low,
+            param_high=args.param_high,
             init_checkpoint=args.init_checkpoint,
             epoch_offset=args.epoch_offset,
         )

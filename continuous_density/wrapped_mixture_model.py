@@ -199,6 +199,29 @@ def circular_sd(dist):
     return jnp.degrees(jnp.sqrt(-2.0 * jnp.log(r)))
 
 
+def wrapped_normal_interval_probability(mu, sigma, lo: float, hi: float,
+                                        n_wraps: int = 8):
+    """Probability that a wrapped normal lies in the open arc ``(lo, hi)``.
+
+    Boundaries have zero mass for this continuous family.  Summing unwrapped
+    Gaussian CDF differences avoids the severe sign-mass error produced when a
+    narrow peak at zero is integrated on the legacy 2-degree reporting grid.
+    """
+    shifts = jnp.arange(-n_wraps, n_wraps + 1, dtype=jnp.asarray(mu).dtype) * PERIOD
+    upper = (hi + shifts - mu[..., None]) / sigma[..., None]
+    lower = (lo + shifts - mu[..., None]) / sigma[..., None]
+    return jnp.sum(jax.scipy.special.ndtr(upper) - jax.scipy.special.ndtr(lower), axis=-1)
+
+
+def density_asymmetry(dist, n_wraps: int = 8):
+    """Analytic mixture ``P(0 < b < 180) - P(-180 < b < 0)``."""
+    positive = wrapped_normal_interval_probability(
+        dist['mu'], dist['sigma'], 0.0, 180.0, n_wraps)
+    negative = wrapped_normal_interval_probability(
+        dist['mu'], dist['sigma'], -180.0, 0.0, n_wraps)
+    return jnp.sum(jnp.exp(dist['log_pi']) * (positive - negative), axis=-1)
+
+
 # ---------------------------------------------------------------------------
 # Network
 # ---------------------------------------------------------------------------

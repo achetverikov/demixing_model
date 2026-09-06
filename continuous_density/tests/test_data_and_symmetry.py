@@ -61,6 +61,20 @@ def test_low_dprime_trajectory_design_uses_actual_simulator_separation():
     assert not np.any(np.isclose(d[:, :3] % 5., 0., atol=1e-3))
 
 
+def test_phase_a_design_covers_regimes_and_seeds_are_disjoint():
+    selection, labels = design_mod.phase_a_trajectory_design(10, 90, seed=2608101)
+    confirmation, confirmation_labels = design_mod.phase_a_trajectory_design(
+        10, 90, seed=2608102)
+    assert selection.shape == confirmation.shape == (900, 4)
+    assert len(set(labels)) == len(set(confirmation_labels)) == 10
+    assert {"phase_a_narrow_equal", "phase_a_multimodal_unequal",
+            "phase_a_low_identifiability", "phase_a_high_noise"} <= set(labels)
+    select_triples = set(map(tuple, selection[::90, :3]))
+    confirm_triples = set(map(tuple, confirmation[::90, :3]))
+    assert not select_triples & confirm_triples
+    assert not np.any(np.isclose(selection[:, :3] % 5., 0., atol=1e-3))
+
+
 def test_low_dprime_augmentation_design_targets_off_grid_unequal_noise():
     d = design_mod.low_dprime_augmentation_design(512, seed=4)
     assert d.shape == (512, 4)
@@ -154,6 +168,17 @@ def test_resumable_shard_helpers_verify_and_assemble(tmp_path):
     assert np.all(assembled[:2, 3:] == 3)
     assert np.all(assembled[-1, :3] == 40)
     assert not list(tmp_path.glob('.*.tmp'))
+
+
+def test_load_explicit_design_file(tmp_path):
+    from continuous_density import generate_training_data as gen
+
+    design = np.array([[10., 20., 30., 40.], [11., 21., 31., 41.]])
+    path = tmp_path / 'flagships.npz'
+    np.savez(path, design=design, strata=np.array(['a', 'b']))
+    loaded, strata = gen._load_design_file(path)
+    np.testing.assert_array_equal(loaded, design.astype(np.float32))
+    assert strata == ['a', 'b']
 
 
 def test_simulation_keys_are_shard_invariant_and_crn_aware():
