@@ -31,6 +31,7 @@ except ModuleNotFoundError:  # imported as `model_fit_to_data.<module>` from the
     from model_fit_to_data.run_fingerprint import effective_feat_step_schedule
 from shared.config import config
 from shared.mu1_axis import bin_indices, periodic_integral
+from shared.prediction import legal_warmup_params
 from shared.utils import load_checkpoint, compute_single_density_asymmetry
 
 
@@ -654,8 +655,17 @@ class GridBasedMultiConditionOptimizer:
 
         # Precompile both batch sizes to avoid recompilation overhead
         print("Precompiling batch prediction functions...")
-        dummy_params_64 = jnp.ones((64, 3))  # [sd_feat1, sd_feat2, sd_spat]
-        dummy_params_256 = jnp.ones((256, 3))
+        # Warm-up rows must be legal, not just the right shape.  These used to be
+        # jnp.ones((n, 3)) -- an sd triple of 1 degree, far below the surrogate's
+        # supported range.  Compilation only needs shapes, so that cost nothing
+        # here, but the same rows double as batch padding, where an out-of-domain
+        # value is either a validation failure or a prediction nobody asked for.
+        dummy_params_64 = legal_warmup_params(
+            64, (config.param_grid_low, config.param_range_high),
+            config.feat_diff_range)[:, :3]  # [sd_feat1, sd_feat2, sd_spat]
+        dummy_params_256 = legal_warmup_params(
+            256, (config.param_grid_low, config.param_range_high),
+            config.feat_diff_range)[:, :3]
 
         # Trigger compilation
         _ = self.predict_batch_64(dummy_params_64)

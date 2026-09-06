@@ -1,0 +1,355 @@
+"""Contracts for the shared prediction layer.
+
+The failure modes this layer exists to prevent are all silent ones: motor noise
+applied to a fitted curve but not to the likelihood that scores it, component 2
+obtained by flipping a sign instead of swapping the two feature SDs, a narrow
+density's mass read off a 2-degree grid, a surrogate extrapolating outside its
+training domain because nothing checked. Every one of those produces plausible
+numbers, so each gets a test here.
+
+The surface-parity test is the load-bearing one: ``SurfacePredictor`` restates
+the historical discrete asymmetry, and if that restatement is not exactly
+``compute_single_density_asymmetry`` then the two families are being compared
+through two different estimators.
+"""
+import sys
+from pathlib import Path
+
+import jax.numpy as jnp
+import numpy as np
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from continuous_density import wrapped_mixture_model as wm  # noqa: E402
+from shared import surrogate  # noqa: E402
+from shared.mu1_axis import mu1_grid, mu1_cell_width  # noqa: E402
+from shared.prediction import (  # noqa: E402
+    PARAM_ORDER, SPATIAL_SEPARATION, SurfacePredictor, WrappedMixturePredictor,
+    dprime_from_sd_spat, gaussian_curve_smoother, legal_warmup_params, mirror_params,
+    predictor_from_surrogate, sd_spat_from_dprime, validate_params)
+from shared.utils import compute_single_density_asymmetry  # noqa: E402
+
+ARTIFACT = surrogate.WNM_DEFAULTS[20]
+needs_artifact = pytest.mark.skipif(not ARTIFACT.exists(),
+                                    reason="no packaged WNM artifact installed")
+
+# Narrow, broad, asymmetric in both orders, low and high d-prime, both ends of
+# the feature axis.
+PARAMS = jnp.asarray([
+    [10.0, 10.0, 10.0, 2.0],
+    [10.0, 120.0, 10.0, 30.0],
+    [120.0, 10.0, 10.0, 30.0],
+    [60.0, 60.0, 30.0, 90.0],
+    [200.0, 200.0, 200.0, 179.0],
+], dtype=jnp.float32)
+
+
+@pytest.fixture(scope="module")
+def predictor():
+    return predictor_from_surrogate(surrogate.load_surrogate(checkpoint_path=ARTIFACT))
+
+
+# ---------------------------------------------------------------------------
+# Conventions
+# ---------------------------------------------------------------------------
+
+def test_dprime_and_sd_spat_are_one_number_in_two_views():
+    for sd_spat in (5.0, 21.0, 42.0, 200.0):
+        dprime = float(dprime_from_sd_spat(sd_spat))
+        assert dprime == pytest.approx(SPATIAL_SEPARATION / sd_spat)
+        assert float(sd_spat_from_dprime(dprime)) == pytest.approx(sd_spat)
+
+
+def test_param_order_is_the_documented_one():
+    assert PARAM_ORDER == ("sd_feat1", "sd_feat2", "sd_spat", "feat_diff")
+
+
+def test_mirror_swaps_only_the_two_feature_sds():
+    out = np.asarray(mirror_params(PARAMS))
+    np.testing.assert_array_equal(out[:, 0], np.asarray(PARAMS)[:, 1])
+    np.testing.assert_array_equal(out[:, 1], np.asarray(PARAMS)[:, 0])
+    np.testing.assert_array_equal(out[:, 2:], np.asarray(PARAMS)[:, 2:])
+
+
+@needs_artifact
+def test_component_two_is_a_swap_not_a_sign_flip(predictor):
+    """Adding a sign flip on top of the swap would invert every component-2 curve.
+
+    Attraction and repulsion are the scientific reading of that sign, so this is
+    the difference between a result and its opposite.
+    """
+    swapped = predictor.component_distribution(PARAMS, 2)
+    reference = predictor.distribution(mirror_params(PARAMS))
+    for key in ("log_pi", "mu", "sigma"):
+        np.testing.assert_array_equal(np.asarray(swapped[key]), np.asarray(reference[key]))
+
+    # And it is genuinely a different prediction from component 1, not a no-op:
+    # the asymmetric rows must disagree.
+    comp1 = np.asarray(predictor.signed_arc_asymmetry(PARAMS))
+    comp2 = np.asarray(wm.density_asymmetry(swapped, predictor.arc_wraps))
+    asymmetric = np.asarray(PARAMS)[:, 0] != np.asarray(PARAMS)[:, 1]
+    assert np.any(np.abs(comp1[asymmetric] - comp2[asymmetric]) > 1e-4)
+    # Nor is it the negation of component 1.
+    assert not np.allclose(comp2, -comp1, atol=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# Domain validation
+# ---------------------------------------------------------------------------
+
+def test_out_of_domain_parameters_raise_and_name_the_column():
+    with pytest.raises(ValueError, match="sd_feat2"):
+        validate_params(np.array([[10.0, 400.0, 10.0, 30.0]]),
+                        sd_range=(5.0, 200.0), feat_diff_range=(0.0, 180.0))
+    with pytest.raises(ValueError, match="feat_diff"):
+        validate_params(np.array([[10.0, 10.0, 10.0, 300.0]]),
+                        sd_range=(5.0, 200.0), feat_diff_range=(0.0, 180.0))
+    with pytest.raises(ValueError, match="non-finite"):
+        validate_params(np.array([[10.0, np.nan, 10.0, 30.0]]),
+                        sd_range=(5.0, 200.0), feat_diff_range=(0.0, 180.0))
+    with pytest.raises(ValueError, match=r"shape"):
+        validate_params(np.array([[10.0, 10.0, 10.0]]),
+                        sd_range=(5.0, 200.0), feat_diff_range=(0.0, 180.0))
+
+
+def test_warmup_rows_are_inside_the_domain():
+    """Compilation warm-up used ``jnp.ones((n, 3))``: an SD of 1, out of domain.
+
+    Shapes are all compilation needs, so the illegal values cost nothing there --
+    but the same rows are used to pad batches, where they would either trip
+    validation or be predicted at and quietly mixed into a result.
+    """
+    rows = legal_warmup_params(7, (5.0, 200.0), (0.0, 180.0))
+    assert rows.shape == (7, 4)
+    validate_params(rows, sd_range=(5.0, 200.0), feat_diff_range=(0.0, 180.0))
+
+
+@needs_artifact
+def test_predictor_refuses_out_of_domain_inputs(predictor):
+    with pytest.raises(ValueError, match="supported"):
+        predictor.distribution(jnp.asarray([[1.0, 1.0, 1.0, 30.0]], jnp.float32))
+
+
+# ---------------------------------------------------------------------------
+# Motor noise lives in this layer
+# ---------------------------------------------------------------------------
+
+@needs_artifact
+def test_motor_noise_widens_variance_analytically(predictor):
+    """Wrapped normals are closed under circular convolution: variances add."""
+    noisy = predictor.with_motor_noise(15.0)
+    base = predictor.distribution(PARAMS)
+    widened = noisy.distribution(PARAMS)
+
+    np.testing.assert_allclose(np.asarray(widened["sigma"]),
+                               np.sqrt(np.asarray(base["sigma"]) ** 2 + 15.0 ** 2),
+                               rtol=1e-6)
+    # Weights and means are untouched by convolution with a zero-mean kernel.
+    np.testing.assert_array_equal(np.asarray(widened["mu"]), np.asarray(base["mu"]))
+    np.testing.assert_array_equal(np.asarray(widened["log_pi"]), np.asarray(base["log_pi"]))
+
+
+@needs_artifact
+def test_motor_noise_reaches_every_quantity_not_just_the_curve(predictor):
+    """The failure this prevents: a fit smoothed by motor noise, scored without it."""
+    noisy = predictor.with_motor_noise(20.0)
+    assert not np.allclose(np.asarray(predictor.circular_sd(PARAMS)),
+                           np.asarray(noisy.circular_sd(PARAMS)))
+    assert not np.allclose(np.asarray(predictor.log_density(PARAMS, jnp.zeros(len(PARAMS)))),
+                           np.asarray(noisy.log_density(PARAMS, jnp.zeros(len(PARAMS)))))
+    assert not np.allclose(np.asarray(predictor.cell_probabilities(PARAMS)),
+                           np.asarray(noisy.cell_probabilities(PARAMS)))
+    # Motor noise cannot sharpen a distribution.
+    assert np.all(np.asarray(noisy.circular_sd(PARAMS))
+                  >= np.asarray(predictor.circular_sd(PARAMS)) - 1e-4)
+
+
+@needs_artifact
+def test_motor_noise_is_recorded_in_the_identity(predictor):
+    assert predictor.identity().as_dict()["surrogate_sd_motor"] == 0.0
+    assert predictor.with_motor_noise(12.5).identity().as_dict()["surrogate_sd_motor"] == 12.5
+
+
+# ---------------------------------------------------------------------------
+# Grid densities are for display; probabilities are for scoring
+# ---------------------------------------------------------------------------
+
+def test_a_narrow_component_is_mis_massed_by_a_grid_but_not_by_integration():
+    """Why distributional scores must not go through the 180-row surface.
+
+    ``min_scale`` is a quarter degree, well under the 2-degree reporting cell, so
+    a component can sit almost entirely inside one cell. Sampling its peak and
+    renormalising then reports a mass that depends on where the peak fell
+    relative to the cell centre.
+    """
+    dist = {"log_pi": jnp.zeros((1, 1)),
+            "mu": jnp.asarray([[0.9]]),          # inside a cell, off its centre
+            "sigma": jnp.asarray([[0.3]])}       # far narrower than the cell
+
+    exact = float(wm.wrapped_normal_interval_probability(
+        dist["mu"], dist["sigma"], 0.0, 180.0, 8)[0, 0])
+
+    grid = mu1_grid()
+    density = jnp.exp(wm.mixture_logpdf_grid(grid, dist, 4))[0]
+    renormalised = density / jnp.sum(density)
+    grid_mass = float(jnp.sum(jnp.where(grid > 0, renormalised, 0.0)))
+
+    assert exact > 0.99
+    assert abs(grid_mass - exact) > 0.05, (
+        "a grid happened to agree here; the test is meant to exhibit the "
+        f"discrepancy (grid {grid_mass:.4f} vs exact {exact:.4f})")
+
+
+@needs_artifact
+@pytest.mark.parametrize("sd_motor", [0.0, 30.0, 150.0])
+def test_cell_probabilities_are_a_distribution_across_the_domain(predictor, sd_motor):
+    """Wrap truncation check: 8 wraps must still integrate to 1 at broad scales."""
+    probs = np.asarray(predictor.with_motor_noise(sd_motor).cell_probabilities(PARAMS))
+    assert probs.shape == (len(PARAMS), len(mu1_grid()))
+    assert np.all(probs >= -1e-9)
+    np.testing.assert_allclose(probs.sum(axis=-1), 1.0, atol=1e-5)
+
+
+@needs_artifact
+def test_grid_density_integrates_to_one(predictor):
+    density = np.exp(np.asarray(predictor.grid_log_density(PARAMS)))
+    np.testing.assert_allclose(density.sum(axis=-1) * mu1_cell_width(), 1.0, atol=1e-3)
+
+
+@needs_artifact
+def test_log_density_is_continuous_not_a_cell_lookup(predictor):
+    """Two biases inside one reporting cell must give different log densities."""
+    row = PARAMS[:1]
+    a = float(predictor.log_density(row, jnp.asarray([0.1]))[0])
+    b = float(predictor.log_density(row, jnp.asarray([0.9]))[0])
+    assert a != b
+
+
+# ---------------------------------------------------------------------------
+# Asymmetry: raw versus fitting-smoothed
+# ---------------------------------------------------------------------------
+
+@needs_artifact
+def test_smoothed_curve_is_the_raw_curve_through_the_shared_smoother(predictor):
+    """The estimator is 'analytic curve, then the existing smoother' -- in that order."""
+    feat = jnp.arange(2.0, 182.0, 2.0, dtype=jnp.float32)
+    curve = jnp.stack([jnp.full_like(feat, 30.0), jnp.full_like(feat, 60.0),
+                       jnp.full_like(feat, 20.0), feat], axis=-1)
+
+    raw = predictor.signed_arc_asymmetry(curve)
+    smoothed = predictor.smoothed_asymmetry_curve(curve, 10.0)
+    np.testing.assert_array_equal(np.asarray(smoothed),
+                                  np.asarray(gaussian_curve_smoother(raw, 10.0)))
+    assert not np.allclose(np.asarray(raw), np.asarray(smoothed))
+
+
+@needs_artifact
+def test_smoothing_refuses_a_batch_that_is_not_one_curve(predictor):
+    mixed = jnp.asarray([[10.0, 10.0, 10.0, 2.0], [60.0, 60.0, 30.0, 4.0]], jnp.float32)
+    with pytest.raises(ValueError, match="one curve"):
+        predictor.smoothed_asymmetry_curve(mixed, 10.0)
+
+
+# ---------------------------------------------------------------------------
+# The surface backend keeps its historical conventions exactly
+# ---------------------------------------------------------------------------
+
+def test_surface_asymmetry_matches_the_historical_implementation():
+    """Both families must be compared through one estimator, not two."""
+    rng = np.random.default_rng(5)
+    grid = mu1_grid()
+    surfaces = jnp.asarray(np.log(np.abs(rng.normal(size=(3, len(grid), 90))) + 1e-3))
+    indices = jnp.arange(0, 90, 5)
+
+    predictor = SurfacePredictor(surfaces, n_samples=20, artifact="test.pkl")
+    got = np.asarray(predictor.signed_arc_asymmetry(indices))
+    expected = np.stack([np.asarray(compute_single_density_asymmetry(
+        surface, indices, grid, apply_smoothing=False)) for surface in surfaces])
+    np.testing.assert_array_equal(got, expected)
+
+
+def test_surface_smoothed_curve_matches_the_historical_implementation():
+    rng = np.random.default_rng(6)
+    grid = mu1_grid()
+    surfaces = jnp.asarray(np.log(np.abs(rng.normal(size=(2, len(grid), 90))) + 1e-3))
+    indices = jnp.arange(0, 90, 3)
+
+    predictor = SurfacePredictor(surfaces, n_samples=20, artifact="test.pkl")
+    got = np.asarray(predictor.smoothed_asymmetry_curve(indices, 10.0))
+    expected = np.stack([np.asarray(compute_single_density_asymmetry(
+        surface, indices, grid, apply_smoothing=True, smoothing_sigma=10.0))
+        for surface in surfaces])
+    np.testing.assert_array_equal(got, expected)
+
+
+def test_surface_predictor_will_not_pretend_to_apply_motor_noise():
+    surfaces = jnp.zeros((1, len(mu1_grid()), 90))
+    predictor = SurfacePredictor(surfaces, n_samples=20, artifact="test.pkl")
+    with pytest.raises(NotImplementedError, match="FFT"):
+        predictor.with_motor_noise(10.0)
+
+
+def test_surface_predictor_rejects_the_wrong_shape():
+    with pytest.raises(ValueError, match="n_mu1_bias"):
+        SurfacePredictor(jnp.zeros((len(mu1_grid()), 90)), n_samples=20, artifact="t.pkl")
+
+
+@needs_artifact
+def test_a_wnm_checkpoint_does_not_silently_become_a_surface_predictor():
+    loaded = surrogate.load_surrogate(checkpoint_path=ARTIFACT)
+    assert isinstance(predictor_from_surrogate(loaded), WrappedMixturePredictor)
+
+
+# ---------------------------------------------------------------------------
+# The analytic shortcuts, checked against independent numerics
+# ---------------------------------------------------------------------------
+#
+# This layer replaces integration with closed forms in two places. Agreement
+# with the empirical target says nothing about either, so both are checked
+# directly against a dense numerical reference.
+
+def _dense_grid():
+    return jnp.arange(-180.0, 180.0, 0.02)
+
+
+def test_motor_noise_equals_numerical_circular_convolution():
+    """Analytic variance addition against an explicit FFT convolution."""
+    dist = {"log_pi": jnp.log(jnp.asarray([[0.3, 0.7]])),
+            "mu": jnp.asarray([[-25.0, 40.0]]),
+            "sigma": jnp.asarray([[12.0, 55.0]])}
+    grid = _dense_grid()
+    sd_motor = 23.0
+
+    analytic = np.exp(np.asarray(
+        wm.mixture_logpdf_grid(grid, wm.add_motor_noise(dist, sd_motor), 4))[0])
+    base = np.exp(np.asarray(wm.mixture_logpdf_grid(grid, dist, 4))[0])
+
+    x = np.asarray(grid)
+    kernel = sum(np.exp(-0.5 * ((x + shift * 360.0) / sd_motor) ** 2)
+                 for shift in range(-4, 5))
+    kernel /= kernel.sum()
+    numerical = np.real(np.fft.ifft(
+        np.fft.fft(base) * np.fft.fft(np.roll(kernel, -len(kernel) // 2))))
+
+    np.testing.assert_allclose(analytic, numerical, atol=1e-7)
+
+
+@pytest.mark.parametrize("sigma", [0.5, 12.0, 55.0, 200.0])
+def test_analytic_asymmetry_equals_dense_quadrature(sigma):
+    """Closed-form sign mass against quadrature, across narrow and broad scales."""
+    dist = {"log_pi": jnp.log(jnp.asarray([[0.35, 0.65]])),
+            "mu": jnp.asarray([[-25.0, 40.0]]),
+            "sigma": jnp.asarray([[sigma, sigma * 1.5]])}
+    grid = _dense_grid()
+    step = 0.02
+
+    density = np.exp(np.asarray(wm.mixture_logpdf_grid(grid, dist, 4))[0])
+    x = np.asarray(grid)
+    quadrature = float(density[x > 0].sum() * step - density[x < 0].sum() * step)
+    analytic = float(wm.density_asymmetry(dist, 8)[0])
+
+    assert abs(analytic - quadrature) < 1e-4, (
+        f"sigma={sigma}: analytic {analytic:.8f} vs quadrature {quadrature:.8f}")
