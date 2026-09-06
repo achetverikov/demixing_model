@@ -185,3 +185,48 @@ def test_production_loading_does_not_need_the_corpus_or_training_scripts():
     leaked = [name for name in newly_imported
               if "train_wnm" in name or "corpus_io" in name or name == "common"]
     assert not leaked, f"production load imported research modules: {leaked}"
+
+
+# ---------------------------------------------------------------------------
+# Search bounds belong to the surrogate, not to a module constant
+# ---------------------------------------------------------------------------
+
+def test_surface_search_bounds_are_its_documented_training_range():
+    """Substituting these for the old config constants must be a strict no-op.
+
+    ``config.param_grid_low``/``param_range_high`` were 5.0/200.0, so if these
+    differ, the surface backend's search changed when it should not have.
+    """
+    from shared.config import config
+
+    bounds = surrogate.search_bounds(surrogate.SURFACE_DOMAIN)
+    assert bounds["sd_feat"] == (config.param_grid_low, config.param_range_high)
+    assert bounds["sd_spat"] == (config.param_grid_low, config.param_range_high)
+
+
+@pytest.mark.skipif(not INSTALLED_WNM, reason="no packaged WNM artifact installed")
+def test_wnm_search_bounds_open_the_narrow_feature_region():
+    """The coverage that motivates the replacement has to reach the search.
+
+    The mixture was trained down to sd_feat 2.5 but only to sd_spat 5, because
+    sd_spat is 42/d' with d-prime capped at 8.4. Bounds that ignored that
+    difference would either refuse trained feature noise or invite spatial
+    extrapolation.
+    """
+    from shared.prediction import domain_from_meta
+
+    _, path = INSTALLED_WNM[0]
+    bounds = surrogate.search_bounds(domain_from_meta(surrogate.load_surrogate(
+        checkpoint_path=path).meta))
+    assert bounds["sd_feat"] == (2.5, 200.0)
+    assert bounds["sd_spat"] == (5.0, 200.0)
+    assert bounds["sd_feat"][0] < bounds["sd_spat"][0]
+
+
+def test_the_two_feature_sds_share_one_interval():
+    """They are exchangeable; a bound reachable for one but not the other would
+    break the symmetry that component 2 is derived from."""
+    lopsided = {"sd_feat1": (2.5, 198.0), "sd_feat2": (3.0, 200.0),
+                "sd_spat": (5.0, 200.0), "feat_diff": (0.5, 180.0)}
+    bounds = surrogate.search_bounds(lopsided)
+    assert bounds["sd_feat"] == (3.0, 198.0)  # the intersection, not the union

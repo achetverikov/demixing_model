@@ -33,6 +33,7 @@ except ModuleNotFoundError:  # imported as `model_fit_to_data.<module>` from the
     from model_fit_to_data.run_fingerprint import effective_feat_step_schedule
 from shared.config import config
 from shared.mu1_axis import bin_indices, periodic_integral
+from shared import surrogate
 from shared.prediction import legal_warmup_params
 from shared.utils import load_checkpoint, compute_single_density_asymmetry
 
@@ -174,7 +175,7 @@ Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
 
 
 def create_shared_parameter_grid(grid_size: int = 20,
-                                 sd_spat_range: Tuple[float, float] = (config.param_grid_low, config.param_range_high),
+                                 sd_spat_range: Tuple[float, float] = surrogate.SURFACE_DOMAIN['sd_spat'],
                                  sd_motor_range: Tuple[float, float] = (0.1, 50.0),
                                  skip_motor_noise: bool = False,
                                  motor_grid_size: Optional[int] = None) -> jnp.ndarray:
@@ -656,18 +657,27 @@ class GridBasedMultiConditionOptimizer:
         self.predict_batch_256 = predict_batch_256
 
         # Precompile both batch sizes to avoid recompilation overhead
+        # Fitting bounds belong to the surrogate, not to a module constant: this
+        # backend was trained on [5, 200] on every axis, while the mixture that
+        # replaces it reaches 2.5 on the feature SDs. A search must not propose
+        # parameters its own surrogate never saw.
+        bounds = surrogate.search_bounds(surrogate.SURFACE_DOMAIN)
+        self.sd_feat_bounds = bounds["sd_feat"]
+        self.sd_spat_bounds = bounds["sd_spat"]
+        self.surrogate_domain = dict(surrogate.SURFACE_DOMAIN)
+
         print("Precompiling batch prediction functions...")
         # Warm-up rows must be legal, not just the right shape.  These used to be
         # jnp.ones((n, 3)) -- an sd triple of 1 degree, far below the surrogate's
         # supported range.  Compilation only needs shapes, so that cost nothing
         # here, but the same rows double as batch padding, where an out-of-domain
         # value is either a validation failure or a prediction nobody asked for.
+        warmup_sd = (max(self.sd_feat_bounds[0], self.sd_spat_bounds[0]),
+                     min(self.sd_feat_bounds[1], self.sd_spat_bounds[1]))
         dummy_params_64 = legal_warmup_params(
-            64, (config.param_grid_low, config.param_range_high),
-            config.feat_diff_range)[:, :3]  # [sd_feat1, sd_feat2, sd_spat]
+            64, warmup_sd, config.feat_diff_range)[:, :3]  # [sd_feat1, sd_feat2, sd_spat]
         dummy_params_256 = legal_warmup_params(
-            256, (config.param_grid_low, config.param_range_high),
-            config.feat_diff_range)[:, :3]
+            256, warmup_sd, config.feat_diff_range)[:, :3]
 
         # Trigger compilation
         _ = self.predict_batch_64(dummy_params_64)
@@ -1220,7 +1230,7 @@ class GridBasedMultiConditionOptimizer:
         total_nn_evaluations = 0
 
         # Initialize bounds for shared parameters
-        sd_spat_range = (config.param_grid_low, config.param_range_high)
+        sd_spat_range = self.sd_spat_bounds
         # sd_motor is one component of the total response error, so it can never
         # exceed the empirical error SD; sd_motor_max carries that data-informed
         # cap (min-over-conditions error SD). Capping the range and sizing the
@@ -1255,10 +1265,10 @@ class GridBasedMultiConditionOptimizer:
         # The schedule lives in run_fingerprint so the run identity records the
         # steps actually walked rather than a literal that may have been
         # extended; see effective_feat_step_schedule.
-        center = (config.param_grid_low + config.param_range_high) / 2
+        center = (self.sd_feat_bounds[0] + self.sd_feat_bounds[1]) / 2
         feat_step_schedule = jnp.array(
             effective_feat_step_schedule(
-                feat_grid_size, config.param_grid_low, config.param_range_high
+                feat_grid_size, self.sd_feat_bounds[0], self.sd_feat_bounds[1]
             ),
             dtype=jnp.float32,
         )
@@ -1318,7 +1328,9 @@ class GridBasedMultiConditionOptimizer:
                         current_best_params[:, 1]  # sd_feat2
                     ])
 
-                    all_grids = jax.vmap(create_condition_grid, in_axes=(0, None, None))(cond_data, feat_grid_size, current_step)
+                    all_grids = jax.vmap(create_condition_grid, in_axes=(0, None, None, None, None))(
+                        cond_data, feat_grid_size, current_step,
+                        self.sd_feat_bounds[0], self.sd_feat_bounds[1])
                     param_grid = all_grids.reshape(-1, 3)
 
                     nn_params = jnp.column_stack([
@@ -1431,23 +1443,23 @@ class GridBasedMultiConditionOptimizer:
             spat_step = (sd_spat_range[1] - sd_spat_range[0]) / (shared_grid_size - 1)
             if float(sd_spat) <= sd_spat_range[0] + spat_step:
                 print(f"  BOUNDARY: sd_spat={float(sd_spat):.1f} near lower bound {sd_spat_range[0]}")
-            if float(sd_spat) >= config.param_range_high - spat_step:
-                print(f"  BOUNDARY: sd_spat={float(sd_spat):.1f} near upper bound {config.param_range_high}")
+            if float(sd_spat) >= sd_spat_range[1] - spat_step:
+                print(f"  BOUNDARY: sd_spat={float(sd_spat):.1f} near upper bound {sd_spat_range[1]}")
             feat1_best = best_shared_result[:, 3]
             feat2_best = best_shared_result[:, 4]
             current_feat_step = float(feat_step_schedule[-1])  # finest step reached this stage
             for i in range(self.n_conditions):
                 cname = self.condition_names[i]
                 f1, f2 = float(feat1_best[i]), float(feat2_best[i])
-                feat_low = config.param_grid_low
+                feat_low = self.sd_feat_bounds[0]
                 if f1 <= feat_low + current_feat_step:
                     print(f"  BOUNDARY: {cname} sd_feat1={f1:.1f} near lower bound {feat_low}")
-                if f1 >= config.param_range_high - current_feat_step:
-                    print(f"  BOUNDARY: {cname} sd_feat1={f1:.1f} near upper bound {config.param_range_high}")
+                if f1 >= self.sd_feat_bounds[1] - current_feat_step:
+                    print(f"  BOUNDARY: {cname} sd_feat1={f1:.1f} near upper bound {self.sd_feat_bounds[1]}")
                 if f2 <= feat_low + current_feat_step:
                     print(f"  BOUNDARY: {cname} sd_feat2={f2:.1f} near lower bound {feat_low}")
-                if f2 >= config.param_range_high - current_feat_step:
-                    print(f"  BOUNDARY: {cname} sd_feat2={f2:.1f} near upper bound {config.param_range_high}")
+                if f2 >= self.sd_feat_bounds[1] - current_feat_step:
+                    print(f"  BOUNDARY: {cname} sd_feat2={f2:.1f} near upper bound {self.sd_feat_bounds[1]}")
 
             # Update overall best
             if stage_best_loss < best_overall_loss:
@@ -1500,8 +1512,8 @@ class GridBasedMultiConditionOptimizer:
 
             # Update ranges, ensuring they stay within bounds
             sd_spat_range = (
-                max(config.param_grid_low, best_sd_spat - new_spat_half_range),
-                min(config.param_range_high, best_sd_spat + new_spat_half_range)
+                max(self.sd_spat_bounds[0], best_sd_spat - new_spat_half_range),
+                min(self.sd_spat_bounds[1], best_sd_spat + new_spat_half_range)
             )
             sd_motor_range = (
                 max(sd_motor_low, best_sd_motor - new_motor_half_range),
@@ -1589,26 +1601,31 @@ def centered_grid(center, num_points, step_size, lower, upper):
                      jnp.linspace(lower, upper, num_points), shifted)
 
 
-def create_condition_grid(cond_idx_and_params, feat_grid_size, current_step):
+def create_condition_grid(cond_idx_and_params, feat_grid_size, current_step,
+                          feat_low, feat_high):
     """Create a condition-specific parameter grid for feature stds.
 
     Args:
         cond_idx_and_params: Tuple of (condition index, sd_feat1, sd_feat2).
         feat_grid_size: Number of points per feature dimension.
         current_step: Step size for the grid.
+        feat_low, feat_high: the surrogate's feature-SD bounds.
 
     Returns:
         Array of shape (feat_grid_size^2, 3) with condition index and params.
     """
     cond_idx, best_feat1, best_feat2 = cond_idx_and_params
 
-    # Clamp to the grid the surfaces actually cover, matching the coarse stage's
-    # feat_low. Using param_range_low here floored refined sd_feat at 10 while the
-    # coarse sweep could already reach 5, so low-noise fits railed at 10.
+    # Clamp to the surrogate's own feature bounds, the same ones the coarse stage
+    # sweeps. These are passed in rather than read from a module constant because
+    # they differ by family, and this exact site has already produced one railing
+    # bug: it used param_range_low (10) while the coarse sweep reached 5, so
+    # low-noise fits piled up at 10. A constant that is right for one surrogate
+    # reintroduces that bug for the other.
     feat1_vals = centered_grid(best_feat1, feat_grid_size, current_step,
-                               config.param_grid_low, config.param_range_high)
+                               feat_low, feat_high)
     feat2_vals = centered_grid(best_feat2, feat_grid_size, current_step,
-                               config.param_grid_low, config.param_range_high)
+                               feat_low, feat_high)
 
     feat1_grid, feat2_grid = jnp.meshgrid(feat1_vals, feat2_vals, indexing='ij')
     n_points = feat_grid_size * feat_grid_size

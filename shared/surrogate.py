@@ -72,6 +72,41 @@ WNM_DEFAULTS = {
 
 SUPPORTED_SAMPLE_COUNTS = (20, 100)
 
+#: The surface network's training domain, in model degrees.  Its parameter grid
+#: was swept over [5, 200] on all three SDs (see ``pretrained/README.md``), and
+#: unlike the WNM artifacts it carries no metadata, so the fact is recorded here.
+#: It is narrower than the WNM domain on the feature axis: the surface corpus
+#: never went below 5, which is precisely the coverage the replacement adds.
+SURFACE_DOMAIN = {
+    "sd_feat1": (5.0, 200.0),
+    "sd_feat2": (5.0, 200.0),
+    "sd_spat": (5.0, 200.0),
+    "feat_diff": (2.0, 180.0),
+}
+
+
+def search_bounds(domain) -> dict:
+    """Fitting bounds for the two searched axes, from a surrogate's domain.
+
+    A search must not propose parameters its own surrogate was never trained on,
+    and the two families differ: the surface network stops at 5 degrees on every
+    axis, while the mixture reaches 2.5 on the feature SDs but still stops at 5
+    on the spatial one, because ``sd_spat`` is ``42/d'`` and d-prime was capped.
+    Bounds therefore travel with the loaded surrogate rather than living in a
+    module-level constant that is right for whichever family was current when it
+    was written.
+
+    The two feature SDs share one interval: they are exchangeable, and a search
+    that could reach a value for one but not the other would break that symmetry.
+
+    Returns:
+        ``{"sd_feat": (low, high), "sd_spat": (low, high)}``.
+    """
+    feat_low = max(domain["sd_feat1"][0], domain["sd_feat2"][0])
+    feat_high = min(domain["sd_feat1"][1], domain["sd_feat2"][1])
+    return {"sd_feat": (float(feat_low), float(feat_high)),
+            "sd_spat": (float(domain["sd_spat"][0]), float(domain["sd_spat"][1]))}
+
 
 @dataclass(frozen=True)
 class LoadedSurrogate:
