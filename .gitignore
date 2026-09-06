@@ -56,3 +56,6 @@ neural_network_optimization/mirror_aware_training_v2.py
 pretrained/model_epoch1500_8ktrain_20samples_old.pkl
 AGENT_AUDIT_GUIDE.md
 MODEL_PIPELINE_FOR_AGENTS.md
+
+# Prebuilt devcontainer image bundle, rebuilt locally
+.devcontainer/*.zip
