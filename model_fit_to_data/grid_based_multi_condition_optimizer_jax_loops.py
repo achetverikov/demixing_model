@@ -23,15 +23,16 @@ import pickle
 
 try:
     from density_objective import DEGENERATE_TARGET_EPS, check_targets_fittable, degenerate_targets
+    from fitting_targets import build_fitting_targets
     from run_fingerprint import effective_feat_step_schedule
 except ModuleNotFoundError:  # imported as `model_fit_to_data.<module>` from the repo root
     from model_fit_to_data.density_objective import (
         DEGENERATE_TARGET_EPS, check_targets_fittable, degenerate_targets,
     )
+    from model_fit_to_data.fitting_targets import build_fitting_targets
     from model_fit_to_data.run_fingerprint import effective_feat_step_schedule
 from shared.config import config
 from shared.mu1_axis import bin_indices, periodic_integral
-from fitting_targets import build_fitting_targets
 from shared.prediction import legal_warmup_params
 from shared.utils import load_checkpoint, compute_single_density_asymmetry
 

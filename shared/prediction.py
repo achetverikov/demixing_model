@@ -78,7 +78,15 @@ def mirror_params(params):
                      axis=-1)
 
 
-def validate_params(params, *, sd_range, feat_diff_range, name="parameters"):
+#: Fallback domain for an artifact that predates the measured per-parameter one.
+#: Deliberately the production fitting box rather than anything wider: for an
+#: artifact that does not say what it was trained on, the safe assumption is the
+#: interval the fitter already searches, not a guess at the corpus.
+LEGACY_DOMAIN = {"sd_feat1": (5.0, 200.0), "sd_feat2": (5.0, 200.0),
+                 "sd_spat": (5.0, 200.0), "feat_diff": (0.0, 180.0)}
+
+
+def validate_params(params, *, domain, name="parameters"):
     """Check a parameter batch against a surrogate's supported domain.
 
     Called on concrete arrays, outside any compiled kernel: inside ``jit`` the
@@ -86,6 +94,18 @@ def validate_params(params, *, sd_range, feat_diff_range, name="parameters"):
     a host callback.  Raises naming the offending column and its extreme value,
     rather than returning a surrogate's extrapolation as though it were a
     prediction.
+
+    The domain is per parameter, because the corpus's is: ``sd_feat`` reaches
+    down to 2.5 degrees while ``sd_spat`` stops at 5.0, since the latter is
+    ``42/d'`` and d-prime was bounded at 8.4.  One shared interval had to be
+    either the union -- claiming ``sd_spat`` coverage that does not exist -- or
+    the intersection, which is what it was, and which refused roughly a fifth of
+    the feature-noise region the network was actually trained on.
+
+    Args:
+        params: ``(N, 4)`` array ordered as :data:`PARAM_ORDER`.
+        domain: mapping from parameter name to ``(low, high)``.
+        name: what to call the batch in an error message.
     """
     params = np.asarray(params, dtype=np.float64)
     if params.ndim != 2 or params.shape[-1] != 4:
@@ -94,21 +114,35 @@ def validate_params(params, *, sd_range, feat_diff_range, name="parameters"):
         bad = int(np.sum(~np.isfinite(params)))
         raise ValueError(f"{name}: {bad} non-finite entries")
 
-    low, high = sd_range
-    for column in range(3):
+    missing = [key for key in PARAM_ORDER if key not in domain]
+    if missing:
+        raise ValueError(f"{name}: supported domain is missing bounds for {missing}")
+
+    for column, key in enumerate(PARAM_ORDER):
+        low, high = domain[key]
         values = params[:, column]
         if values.min() < low or values.max() > high:
             raise ValueError(
-                f"{name}: {PARAM_ORDER[column]} ranges [{values.min():.4g}, {values.max():.4g}], "
-                f"outside the surrogate's supported [{low:g}, {high:g}]. Predictions there are "
-                "extrapolation, not interpolation.")
+                f"{name}: {key} ranges [{values.min():.6g}, {values.max():.6g}], outside the "
+                f"corpus hull [{low:.6g}, {high:.6g}] this artifact was trained over. "
+                "Predictions there are extrapolation, not interpolation.")
 
-    low, high = feat_diff_range
-    values = params[:, 3]
-    if values.min() < low or values.max() > high:
-        raise ValueError(
-            f"{name}: feat_diff ranges [{values.min():.4g}, {values.max():.4g}], outside the "
-            f"surrogate's supported [{low:g}, {high:g}].")
+
+def domain_from_meta(meta) -> dict:
+    """Read an artifact's per-parameter domain, tolerating the wnm/1 layout."""
+    measured = (meta or {}).get("supported_domain")
+    if measured:
+        return {key: (float(lo), float(hi)) for key, (lo, hi) in measured.items()}
+    sd_range = (meta or {}).get("supported_sd_range")
+    feat_range = (meta or {}).get("supported_feat_diff_range")
+    if sd_range and feat_range:
+        # wnm/1 recorded one interval for all three SDs, taken from the
+        # featurisation constants rather than from the corpus. Honour it as
+        # given: it is what that artifact claims, and widening it here would
+        # invent coverage on the artifact's behalf.
+        return {"sd_feat1": tuple(sd_range), "sd_feat2": tuple(sd_range),
+                "sd_spat": tuple(sd_range), "feat_diff": tuple(feat_range)}
+    return dict(LEGACY_DOMAIN)
 
 
 def legal_warmup_params(n_rows: int, sd_range, feat_diff_range) -> jnp.ndarray:
@@ -192,8 +226,12 @@ class WrappedMixturePredictor(BiasPredictor):
         self.sd_motor = float(sd_motor)
         self.n_wraps = int(n_wraps)
         self.arc_wraps = int(arc_wraps)
-        self.sd_range = tuple(self.meta.get("supported_sd_range", (5.0, 200.0)))
-        self.feat_diff_range = tuple(self.meta.get("supported_feat_diff_range", (0.0, 180.0)))
+        self.domain = domain_from_meta(self.meta)
+        # Kept for callers that only need a coarse box; the authority is
+        # ``self.domain``, which is per parameter.
+        self.sd_range = (min(self.domain[k][0] for k in ("sd_feat1", "sd_feat2", "sd_spat")),
+                         max(self.domain[k][1] for k in ("sd_feat1", "sd_feat2", "sd_spat")))
+        self.feat_diff_range = self.domain["feat_diff"]
 
     # -- identity -----------------------------------------------------------
 
@@ -202,9 +240,20 @@ class WrappedMixturePredictor(BiasPredictor):
                                  artifact=self.artifact, sd_motor=self.sd_motor)
 
     def with_motor_noise(self, sd_motor) -> "WrappedMixturePredictor":
+        # Variances add, so the sign is squared away: -20 and +20 would give
+        # identical densities while the identity recorded -20, and a NaN would
+        # propagate into every downstream number as a plausible-looking absence.
+        sd_motor = float(sd_motor)
+        if not np.isfinite(sd_motor):
+            raise ValueError(f"sd_motor must be finite, got {sd_motor!r}")
+        if sd_motor < 0:
+            raise ValueError(
+                f"sd_motor must be non-negative, got {sd_motor!r}: motor noise enters as a "
+                "variance, so a negative SD is silently identical to its positive twin while "
+                "being recorded as negative.")
         return WrappedMixturePredictor(
             self.model, self.variables, self.n_samples, self.artifact, self.meta,
-            sd_motor=float(sd_motor), n_wraps=self.n_wraps, arc_wraps=self.arc_wraps)
+            sd_motor=sd_motor, n_wraps=self.n_wraps, arc_wraps=self.arc_wraps)
 
     # -- the mixture --------------------------------------------------------
 
@@ -216,9 +265,7 @@ class WrappedMixturePredictor(BiasPredictor):
         """
         params = jnp.asarray(params, dtype=jnp.float32)
         if validate:
-            validate_params(params, sd_range=self.sd_range,
-                            feat_diff_range=self.feat_diff_range,
-                            name=f"{self.artifact} inputs")
+            validate_params(params, domain=self.domain, name=f"{self.artifact} inputs")
         dist = self.model.apply(self.variables, params)
         if self.sd_motor:
             dist = self._wm.add_motor_noise(dist, self.sd_motor)
@@ -301,6 +348,24 @@ class WrappedMixturePredictor(BiasPredictor):
                 "smoothed_asymmetry_curve expects one curve: all rows must share "
                 "(sd_feat1, sd_feat2, sd_spat) and vary only in feat_diff. Smoothing runs "
                 "along the feature axis, so a mixed batch would average unrelated points.")
+
+        # The smoother's sigma is in grid steps and its kernel is symmetric about
+        # each point, so it assumes the rows are the feature axis in order and
+        # evenly spaced. A shuffled or unevenly sampled batch still produces a
+        # smooth-looking curve -- one that averages the wrong neighbours.
+        feat = np.asarray(params[:, 3], dtype=np.float64)
+        if feat.size < 2:
+            raise ValueError("smoothed_asymmetry_curve needs at least two feature points")
+        steps = np.diff(feat)
+        if np.any(steps <= 0):
+            raise ValueError(
+                "feat_diff must be strictly increasing; the smoother averages each point with "
+                f"its neighbours by position, so row order is the feature axis. Got {feat[:5]}...")
+        if not np.allclose(steps, steps[0], rtol=1e-5, atol=1e-6):
+            raise ValueError(
+                "feat_diff must be evenly spaced: the kernel width is expressed in grid steps, "
+                f"so uneven spacing silently changes the smoothing width (steps range "
+                f"[{steps.min():.6g}, {steps.max():.6g}]).")
         return gaussian_curve_smoother(self.signed_arc_asymmetry(params, validate),
                                        smoothing_sigma)
 

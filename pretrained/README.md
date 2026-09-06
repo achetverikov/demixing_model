@@ -32,9 +32,15 @@ checkpoint and is no longer selected automatically.
 The replacement surrogate. Where the surface network emits a 180 x 90 log-density
 surface, these artifacts emit the parameters of a K-component wrapped-normal
 mixture over the component-1 bias, continuous in both the bias and the feature
-difference. They are not load-compatible with `shared/utils.py:load_checkpoint`;
-reach every checkpoint through `shared/surrogate.py:load_surrogate`, which reads
-the family from the file's own content rather than from its name.
+difference. They are not load-compatible with `shared/utils.py:load_checkpoint`,
+so new code should reach a checkpoint through `shared/surrogate.py:load_surrogate`,
+which reads the family from the file's own content rather than from its name.
+
+Several call sites do not yet: the optimizer still calls `load_checkpoint`
+directly, and `create_unified_subject_plots.py`, `plot_pdf_slices.py`,
+`curve_cache.py`, `surface_simulator.py` and `postprocess_fitted_likelihoods.py`
+each resolve a checkpoint their own way. Two of those resolutions can select a
+different model than the fit used, and are listed under Known gaps below.
 
 | File | K | Hidden | min_scale | Sim samples / item | Selected step | Corpus | NLL |
 |---|---:|---|---:|---:|---:|---|---:|
@@ -58,13 +64,59 @@ reported as a held-out score. Held-out accuracy is measured separately, on the
 degrees, with `d' = 42 / sd_spat`. The model predicts component 1; component 2
 comes from swapping `sd_feat1` and `sd_feat2`, not from a sign flip. Bias is
 positive for attraction toward the other item, density is per model degree, and
-the period is 360. Supported domain: SD in [5, 200], feature difference in
-[0, 180]. Each artifact carries all of this in its own `meta` dict -- read it
-from there rather than from this file.
+the period is 360. Each artifact carries all of this in its own `meta` dict --
+read it from there rather than from this file.
+
+**Supported domain** (`meta["supported_domain"]`, schema `wnm/2`):
+
+| Parameter | Declared | Corpus hull |
+|---|---|---|
+| `sd_feat1`, `sd_feat2` | [2.5, 200] | [2.500, 198.11] / [2.535, 199.95] |
+| `sd_spat` | [5, 200] | [5.0018, 200.0] |
+| `feat_diff` | [0.5, 180] | [0.5, 180.0] |
+
+Per parameter, because the corpus is: `sd_feat` reaches 2.5 degrees while
+`sd_spat` stops at 5, since `sd_spat = 42/d'` and d-prime was capped at 8.4. One
+shared interval would have to be either the union, claiming `sd_spat` coverage
+that does not exist, or the intersection -- which is what an earlier version was,
+and which refused roughly a sixth of the feature-noise region the network was
+actually trained on.
+
+The declared box rounds the measured hull outward to the design's round numbers,
+accepting a sliver of extrapolation (largest 1.89 degrees, at `sd_feat1`'s top).
+`meta["corpus_hull"]` records what the corpus reaches and
+`meta["declared_domain_overhang"]` the accepted extrapolation at each end, so
+neither has to be taken on trust. Note that `sd_feat` extends *below* the
+production fitting floor of 5: that wider narrow-density coverage is what
+motivates this surrogate, and the fitting bounds have not been changed to use it.
 
 **Regenerating one**: `continuous_density/package_wnm_artifact.py` packages a research fit
-from a training stage's `run_cache/`. It copies weights and verifies the
-packaged artifact reproduces the research checkpoint exactly before writing.
+from a training stage's `run_cache/`. It copies weights, writes to a temporary
+path, checks that the reloaded artifact reproduces the research checkpoint
+exactly and accepts its own advertised domain, and only then renames it into
+place.
+
+## Known gaps in checkpoint selection
+
+Found by audit on 2026-09-06, recorded here because each one silently produces
+numbers from a model other than the one the caller asked for. None is introduced
+by the WNM work; all predate it.
+
+- `create_unified_subject_plots.py` defaults to
+  `model_epoch1500_10ktrain_{n}samples.pkl`, while `fit_model_to_data.py`
+  defaults to `model_epoch1425_10ktrain_20samples.pkl`. A 20-sample plotting run
+  without an explicit `--checkpoint-path` therefore recomputes curves, moments
+  and SDs from a different surrogate than the fit used.
+- `postprocess_fitted_likelihoods.py:infer_checkpoint_path` picks the checkpoint
+  by string-matching `20samples`/`100samples` in the results path, so a renamed
+  results directory rescores under the wrong observer model.
+- `surface_simulator.py` passes an explicit checkpoint straight through while
+  labelling its output with the requested `n_samples`, so a mismatched pair
+  produces one observer's curves under the other's label.
+- `SURFACE_CHECKPOINT_REGISTRY` identifies historical surface checkpoints by
+  filename. Those files carry no metadata, so this is a recorded fact about
+  specific files rather than a parsing rule -- but a different file placed at a
+  registered name is accepted as the registered model.
 
 ## Notes for developers
 

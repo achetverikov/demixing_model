@@ -21,10 +21,13 @@ Usage (from the repo root)::
         --corpus-stage /path/to/results/continuous_density_4.1p \\
         --out pretrained/wnm_k12_20samples.pkl
 
-The packaged file is verified against the research weights before it is written:
-both are evaluated on a fixed parameter panel and every mixture parameter must
-agree bit for bit.  Packaging is a copy, so anything less than exact agreement
-means the architecture was reconstructed wrongly.
+The packaged file is verified before it reaches its destination: it is written to
+a temporary path, loaded back through the production loader, and evaluated on a
+fixed parameter panel that must reproduce the research weights bit for bit and
+that must pass the domain validation the artifact itself advertises.  Only then
+is it renamed into place.  Packaging is a copy, so anything less than exact
+agreement means the architecture was reconstructed wrongly -- and a failed
+packaging must not leave a half-trusted artifact where production will find it.
 """
 from __future__ import annotations
 
@@ -42,21 +45,44 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from continuous_density import wrapped_mixture_model as wm  # noqa: E402
+from shared.prediction import domain_from_meta, validate_params  # noqa: E402
 
 #: Bumped whenever the artifact's fields or their meaning change.  Consumers
 #: compare against it rather than guessing from which keys happen to be present.
-ARTIFACT_SCHEMA = "wnm/1"
+#: wnm/2 replaced the single supported_sd_range + supported_feat_diff_range
+#: pair with a per-parameter supported_domain measured from the corpus.
+ARTIFACT_SCHEMA = "wnm/2"
+
+#: Parameter names in the order the corpus stores them in ``auxiliary``.
+AUXILIARY_ORDER = ("feat_diff", "sd_feat1", "sd_feat2", "dprime")
+
+#: The domain the artifact declares as usable, as opposed to the exact hull the
+#: corpus happens to reach.  The two differ by a fraction of a degree at three
+#: corners -- the corpus stops at sd_feat1 198.11 and sd_spat 5.0018 -- and the
+#: declared bounds round outward to the design's round numbers, accepting that
+#: sliver of extrapolation deliberately (user decision, 2026-09-06).  Rounding
+#: outward is safe here only because it is a sliver: the overhang is recorded per
+#: parameter in the artifact, so it can be checked rather than assumed.
+DECLARED_DOMAIN = {
+    "sd_feat1": (2.5, 200.0),
+    "sd_feat2": (2.5, 200.0),
+    "sd_spat": (5.0, 200.0),
+    "feat_diff": (0.5, 180.0),
+}
 
 #: A fixed panel spanning the supported domain: narrow and broad feature noise in
-#: both orders, low and high d-prime, and feature differences at both ends.  Used
-#: only to prove the packaged artifact reproduces the research weights.
+#: both orders, low and high d-prime, feature differences at both ends, and every
+#: corner of the SD box.  It proves the packaged artifact reproduces the research
+#: weights, and -- because it is pushed through the production predictor -- that
+#: the domain the artifact advertises actually accepts its own boundary.
 VERIFICATION_PANEL = np.array([
     [10.0, 10.0, 10.0, 2.0],
     [10.0, 120.0, 10.0, 30.0],
     [120.0, 10.0, 10.0, 30.0],
-    [200.0, 200.0, 200.0, 90.0],
-    [5.0, 200.0, 5.0, 179.0],
-    [60.0, 60.0, 30.0, 180.0],
+    [60.0, 60.0, 30.0, 90.0],
+    [5.0, 190.0, 5.5, 179.0],
+    [2.5, 2.5, 5.0, 0.5],       # the declared low corner, sliver of extrapolation included
+    [200.0, 200.0, 200.0, 180.0],  # and the declared high corner
 ], dtype=np.float32)
 
 
@@ -66,6 +92,70 @@ def file_digest(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def corpus_domain(stage: Path) -> dict:
+    """Measure the parameter hull the corpus actually covers.
+
+    The domain an artifact advertises has to come from the data it was trained
+    on, not from the featurisation constants. Those constants bracket ``[5, 200]``
+    because that is the interval they rescale to ``[-1, 1]``; the corpus reaches
+    ``sd_feat`` down to 2.5, so reading the domain off them understated the
+    trained region by a factor of two at the low end -- refusing predictions in
+    the very region that motivates this surrogate -- while overstating it at
+    ``feat_diff = 0``, which the corpus never visits.
+
+    Read from every shard's ``auxiliary`` array, including any inherited block, so
+    a stage that extends an earlier corpus reports the whole design rather than
+    the part it simulated itself.
+    """
+    shards = sorted((stage / "artifacts" / "histogram_shards").glob("*.npz"))
+    shards += sorted((stage / "artifacts").glob("existing_*_histograms.npz"))
+    if not shards:
+        raise SystemExit(f"{stage.name}: no corpus shards found under artifacts/")
+
+    low = np.full(4, np.inf)
+    high = np.full(4, -np.inf)
+    n_cells = 0
+    for shard in shards:
+        auxiliary = np.load(shard)["auxiliary"]
+        low = np.minimum(low, auxiliary.min(axis=0))
+        high = np.maximum(high, auxiliary.max(axis=0))
+        n_cells += len(auxiliary)
+
+    hull = {name: [float(low[i]), float(high[i])]
+            for i, name in enumerate(AUXILIARY_ORDER)}
+    # The model takes sd_spat, not d-prime, and the map inverts the interval.
+    hull["sd_spat"] = [42.0 / hull["dprime"][1], 42.0 / hull["dprime"][0]]
+    hull.pop("dprime")
+
+    # Declared bounds must not meaningfully understate the hull: that would
+    # refuse trained parameters, which is how this was wrong in the first place.
+    # The tolerance is for representation noise only -- sd_spat's hull top is
+    # 42/0.21 = 200.0000062, so declaring 200.0 "loses" six microdegrees.
+    UNDERSTATEMENT_TOLERANCE = 1e-3
+    declared = {key: [float(lo), float(hi)] for key, (lo, hi) in DECLARED_DOMAIN.items()}
+    overhang = {}
+    for key, (lo, hi) in declared.items():
+        hull_lo, hull_hi = hull[key]
+        lost = max(lo - hull_lo, hull_hi - hi, 0.0)
+        if lost > UNDERSTATEMENT_TOLERANCE:
+            raise SystemExit(
+                f"declared domain for {key} is [{lo}, {hi}] but the corpus reaches "
+                f"[{hull_lo:.6g}, {hull_hi:.6g}]: declaring {lost:.6g} degrees less than was "
+                "trained refuses predictions the network can actually make.")
+        # Positive means the declaration extends past the corpus at that end.
+        overhang[key] = [round(hull_lo - lo, 6), round(hi - hull_hi, 6)]
+
+    return {"supported_domain": declared,
+            "corpus_hull": hull,
+            "declared_domain_overhang": overhang,
+            "supported_domain_note": (
+                "supported_domain is the declared usable box; corpus_hull is what the "
+                "corpus actually reaches. declared_domain_overhang gives [low, high] "
+                "extrapolation accepted at each end, in model degrees."),
+            "supported_domain_source": f"{len(shards)} corpus shards, {n_cells} cells",
+            "corpus_n_cells_total": n_cells}
 
 
 def corpus_provenance(stage: Path, n_samples: int) -> dict:
@@ -158,10 +248,13 @@ def build_meta(fit: dict, fit_path: Path, stage: Path, n_samples: int,
         "spatial_separation_degrees": 42.0,
         "dprime_relation": "dprime = 42 / sd_spat",
         "component_convention": "predicts component 1; component 2 by swapping sd_feat1/sd_feat2",
-        "supported_sd_range": [float(np.exp(wm.SD_LOG_LO)), float(np.exp(wm.SD_LOG_HI))],
-        "supported_feat_diff_range": [wm.FEAT_DIFF_LO, wm.FEAT_DIFF_HI],
+        # The supported domain is measured from the corpus by corpus_domain()
+        # and merged in below. It is deliberately not derived from the
+        # featurisation constants, which describe an input rescaling rather than
+        # what the network was shown.
     }
     meta.update(corpus_provenance(stage, n_samples))
+    meta.update(corpus_domain(stage))
     return meta
 
 
@@ -198,6 +291,24 @@ def main():
         if key not in fit:
             raise SystemExit(f"{args.fit} is missing {key!r}; this is not a research WNM fit")
 
+    # The two observer models share an architecture, so an n20 fit packaged
+    # against the n100 stage would load, run, and be labelled n100 -- weights
+    # from one observer wearing the other's provenance. The run checkpoint the
+    # fit was selected from lives in the training stage's cache, so require the
+    # fit to point back into a cache whose name carries the requested count.
+    run_checkpoint = str(fit.get("checkpoint", ""))
+    expected_cache = f"wnm_full_n{args.n_samples}"
+    if run_checkpoint and expected_cache not in run_checkpoint:
+        raise SystemExit(
+            f"{args.fit.name} was selected from {run_checkpoint}, which is not an "
+            f"n_samples={args.n_samples} training cache ({expected_cache}). Packaging it as "
+            f"n_samples={args.n_samples} would attach one observer model's provenance to "
+            "another's weights; both counts share an architecture, so nothing downstream "
+            "would notice.")
+    if not run_checkpoint:
+        print("  NOTE: the fit records no run checkpoint, so its observer model could not be "
+              "cross-checked against --n-samples.")
+
     config = json.loads((args.corpus_stage / "config" / "experiment.json").read_text())
     model = wm.ConditionalWrappedMixture(
         n_components=config["n_components"],
@@ -211,16 +322,31 @@ def main():
 
     meta = build_meta(fit, args.fit, args.corpus_stage, args.n_samples,
                       all_data=not args.held_out)
-    wm.save_model(args.out, fit["variables"], model, meta)
 
-    loaded_model, loaded_variables, loaded_meta = wm.load_model(args.out)
-    packaged = predictions(loaded_model, loaded_variables, VERIFICATION_PANEL)
-    for key, expected in reference.items():
-        if not np.array_equal(packaged[key], expected):
-            raise SystemExit(
-                f"packaged artifact does not reproduce the research weights: {key} differs by "
-                f"up to {np.max(np.abs(packaged[key] - expected)):.3e} on the verification "
-                "panel. Packaging copies weights, so any difference is a reconstruction bug.")
+    # Write, verify, then rename. A verification failure must not leave a
+    # half-trusted artifact at the destination for production to pick up.
+    staged = args.out.with_name(args.out.name + ".packaging")
+    wm.save_model(staged, fit["variables"], model, meta)
+    try:
+        loaded_model, loaded_variables, loaded_meta = wm.load_model(staged)
+        packaged = predictions(loaded_model, loaded_variables, VERIFICATION_PANEL)
+        for key, expected in reference.items():
+            if not np.array_equal(packaged[key], expected):
+                raise SystemExit(
+                    f"packaged artifact does not reproduce the research weights: {key} differs "
+                    f"by up to {np.max(np.abs(packaged[key] - expected)):.3e} on the "
+                    "verification panel. Packaging copies weights, so any difference is a "
+                    "reconstruction bug.")
+
+        # The artifact must accept its own advertised domain, boundary included.
+        # Recording a domain the predictor then rejects would refuse legal fits at
+        # exactly the extremes the production bounds allow.
+        validate_params(VERIFICATION_PANEL, domain=domain_from_meta(loaded_meta),
+                        name=f"{args.out.name} verification panel")
+
+        staged.replace(args.out)
+    finally:
+        staged.unlink(missing_ok=True)
 
     print(f"wrote {args.out}")
     print(f"  K={loaded_model.n_components} hidden={tuple(loaded_model.hidden_dims)} "

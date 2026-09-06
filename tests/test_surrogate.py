@@ -117,7 +117,7 @@ def test_installed_artifact_declares_its_own_identity(n_samples, path):
     assert loaded.n_samples == n_samples
 
     meta = loaded.meta
-    assert meta["artifact_schema"] == "wnm/1"
+    assert meta["artifact_schema"] == "wnm/2"
     assert meta["parameter_order"] == ["sd_feat1", "sd_feat2", "sd_spat", "feat_diff"]
     assert meta["period_degrees"] == 360.0
     assert meta["spatial_separation_degrees"] == 42.0

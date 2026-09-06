@@ -28,8 +28,9 @@ from shared import surrogate  # noqa: E402
 from shared.mu1_axis import mu1_grid, mu1_cell_width  # noqa: E402
 from shared.prediction import (  # noqa: E402
     PARAM_ORDER, SPATIAL_SEPARATION, SurfacePredictor, WrappedMixturePredictor,
-    dprime_from_sd_spat, gaussian_curve_smoother, legal_warmup_params, mirror_params,
-    predictor_from_surrogate, sd_spat_from_dprime, validate_params)
+    LEGACY_DOMAIN, domain_from_meta, dprime_from_sd_spat, gaussian_curve_smoother,
+    legal_warmup_params, mirror_params, predictor_from_surrogate, sd_spat_from_dprime,
+    validate_params)
 from shared.utils import compute_single_density_asymmetry  # noqa: E402
 
 ARTIFACT = surrogate.WNM_DEFAULTS[20]
@@ -38,6 +39,9 @@ needs_artifact = pytest.mark.skipif(not ARTIFACT.exists(),
 
 # Narrow, broad, asymmetric in both orders, low and high d-prime, both ends of
 # the feature axis.
+# Spans the declared domain: sd_feat down to 2.5 (well below the production
+# fitting floor of 5, and the region that motivates this surrogate), sd_spat only
+# to 5, and both feature-noise orders.
 PARAMS = jnp.asarray([
     [10.0, 10.0, 10.0, 2.0],
     [10.0, 120.0, 10.0, 30.0],
@@ -102,17 +106,16 @@ def test_component_two_is_a_swap_not_a_sign_flip(predictor):
 
 def test_out_of_domain_parameters_raise_and_name_the_column():
     with pytest.raises(ValueError, match="sd_feat2"):
-        validate_params(np.array([[10.0, 400.0, 10.0, 30.0]]),
-                        sd_range=(5.0, 200.0), feat_diff_range=(0.0, 180.0))
+        validate_params(np.array([[10.0, 400.0, 10.0, 30.0]]), domain=LEGACY_DOMAIN)
     with pytest.raises(ValueError, match="feat_diff"):
-        validate_params(np.array([[10.0, 10.0, 10.0, 300.0]]),
-                        sd_range=(5.0, 200.0), feat_diff_range=(0.0, 180.0))
+        validate_params(np.array([[10.0, 10.0, 10.0, 300.0]]), domain=LEGACY_DOMAIN)
     with pytest.raises(ValueError, match="non-finite"):
-        validate_params(np.array([[10.0, np.nan, 10.0, 30.0]]),
-                        sd_range=(5.0, 200.0), feat_diff_range=(0.0, 180.0))
+        validate_params(np.array([[10.0, np.nan, 10.0, 30.0]]), domain=LEGACY_DOMAIN)
     with pytest.raises(ValueError, match=r"shape"):
-        validate_params(np.array([[10.0, 10.0, 10.0]]),
-                        sd_range=(5.0, 200.0), feat_diff_range=(0.0, 180.0))
+        validate_params(np.array([[10.0, 10.0, 10.0]]), domain=LEGACY_DOMAIN)
+    with pytest.raises(ValueError, match="missing bounds"):
+        validate_params(np.array([[10.0, 10.0, 10.0, 30.0]]),
+                        domain={"sd_feat1": (5.0, 200.0)})
 
 
 def test_warmup_rows_are_inside_the_domain():
@@ -124,12 +127,12 @@ def test_warmup_rows_are_inside_the_domain():
     """
     rows = legal_warmup_params(7, (5.0, 200.0), (0.0, 180.0))
     assert rows.shape == (7, 4)
-    validate_params(rows, sd_range=(5.0, 200.0), feat_diff_range=(0.0, 180.0))
+    validate_params(rows, domain=LEGACY_DOMAIN)
 
 
 @needs_artifact
 def test_predictor_refuses_out_of_domain_inputs(predictor):
-    with pytest.raises(ValueError, match="supported"):
+    with pytest.raises(ValueError, match="corpus hull"):
         predictor.distribution(jnp.asarray([[1.0, 1.0, 1.0, 30.0]], jnp.float32))
 
 
@@ -353,3 +356,106 @@ def test_analytic_asymmetry_equals_dense_quadrature(sigma):
 
     assert abs(analytic - quadrature) < 1e-4, (
         f"sigma={sigma}: analytic {analytic:.8f} vs quadrature {quadrature:.8f}")
+
+
+# ---------------------------------------------------------------------------
+# Regressions from the 2026-09-06 audit
+# ---------------------------------------------------------------------------
+
+@needs_artifact
+def test_the_domain_is_derived_from_the_corpus_not_the_featurisation(predictor):
+    """The featurisation constants bracket [5, 200] because that is what they
+    rescale to [-1, 1] -- an input-scaling choice, not a statement about what the
+    network was shown. Reading the domain off them understated the trained
+    feature-noise region by a factor of two (16% of the corpus's sd_feat values
+    sit below 5) while overstating it at feat_diff = 0, which the corpus never
+    visits.
+    """
+    domain = predictor.domain
+    assert set(domain) == set(PARAM_ORDER)
+    assert domain["sd_feat1"] == (2.5, 200.0)
+    assert domain["sd_feat2"] == (2.5, 200.0)
+    # sd_spat is 42/d' with d' capped at 8.4, so it does not reach below 5 --
+    # which is why one shared interval for all three SDs could not be right.
+    assert domain["sd_spat"] == (5.0, 200.0)
+    assert domain["feat_diff"] == (0.5, 180.0)
+
+    predictor.distribution(jnp.asarray([[2.5, 2.5, 5.0, 0.5],
+                                        [200.0, 200.0, 200.0, 180.0]], jnp.float32))
+
+
+@needs_artifact
+def test_the_declared_domain_never_understates_the_corpus(predictor):
+    """Declaring less than was trained refuses predictions the network can make.
+
+    The declared box rounds the corpus hull outward to the design's round
+    numbers, accepting a sliver of extrapolation (largest: 1.89 degrees at
+    sd_feat1's top). It must never round inward.
+    """
+    hull = predictor.meta["corpus_hull"]
+    for key, (lo, hi) in predictor.domain.items():
+        hull_lo, hull_hi = hull[key]
+        assert lo <= hull_lo + 1e-3, f"{key} low bound excludes trained parameters"
+        assert hi >= hull_hi - 1e-3, f"{key} high bound excludes trained parameters"
+
+    # And the accepted extrapolation is recorded rather than left implicit.
+    overhang = predictor.meta["declared_domain_overhang"]
+    assert max(max(v) for v in overhang.values()) < 2.0
+
+
+@needs_artifact
+def test_untrained_regions_are_still_refused(predictor):
+    """A declared domain is not a licence to extrapolate arbitrarily."""
+    with pytest.raises(ValueError, match="feat_diff"):
+        predictor.distribution(jnp.asarray([[10.0, 10.0, 10.0, 0.0]], jnp.float32))
+    with pytest.raises(ValueError, match="sd_feat1"):
+        predictor.distribution(jnp.asarray([[2.0, 10.0, 10.0, 30.0]], jnp.float32))
+    with pytest.raises(ValueError, match="sd_spat"):
+        predictor.distribution(jnp.asarray([[10.0, 10.0, 4.0, 30.0]], jnp.float32))
+
+
+def test_a_wnm1_artifact_keeps_the_domain_it_claims():
+    """Old artifacts are honoured as written, not widened on their behalf."""
+    legacy = domain_from_meta({"supported_sd_range": [5.0, 200.0],
+                               "supported_feat_diff_range": [0.0, 180.0]})
+    assert legacy["sd_feat1"] == (5.0, 200.0)
+    assert legacy["feat_diff"] == (0.0, 180.0)
+    assert domain_from_meta({}) == LEGACY_DOMAIN
+
+
+@needs_artifact
+@pytest.mark.parametrize("bad", [-20.0, -1e-9, float("nan"), float("inf")])
+def test_motor_noise_rejects_negative_and_non_finite(predictor, bad):
+    """Variance addition squares the SD, so -20 is silently identical to +20
+    while the identity records -20; a NaN would spread through every downstream
+    number as a plausible-looking absence.
+    """
+    with pytest.raises(ValueError):
+        predictor.with_motor_noise(bad)
+
+
+@needs_artifact
+def test_zero_motor_noise_is_still_allowed(predictor):
+    assert predictor.with_motor_noise(0.0).identity().as_dict()["surrogate_sd_motor"] == 0.0
+
+
+@needs_artifact
+def test_smoothing_refuses_a_shuffled_or_unevenly_spaced_feature_axis(predictor):
+    """The kernel is symmetric about each row and its width is in grid steps, so
+    the rows must be the feature axis, in order, evenly spaced. Either violation
+    still yields a smooth-looking curve -- one that averaged the wrong points.
+    """
+    def rows(feat):
+        feat = np.asarray(feat, dtype=np.float64)
+        return jnp.asarray(np.stack([np.full(len(feat), 30.0), np.full(len(feat), 60.0),
+                                     np.full(len(feat), 20.0), feat], axis=-1), jnp.float32)
+
+    with pytest.raises(ValueError, match="evenly spaced"):
+        predictor.smoothed_asymmetry_curve(rows([2.0, 4.0, 10.0, 12.0]), 10.0)
+    with pytest.raises(ValueError, match="strictly increasing"):
+        predictor.smoothed_asymmetry_curve(rows([2.0, 8.0, 4.0, 10.0]), 10.0)
+    with pytest.raises(ValueError, match="at least two"):
+        predictor.smoothed_asymmetry_curve(rows([2.0]), 10.0)
+
+    # The well-formed axis still works.
+    predictor.smoothed_asymmetry_curve(rows(np.arange(2.0, 182.0, 2.0)), 10.0)
