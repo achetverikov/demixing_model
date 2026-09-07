@@ -8,12 +8,13 @@ attribute its failures (audit R1--R6). Plotting/browser integration, downstream
 rollout and regeneration, default promotion, and surface-NN retirement are
 deferred until those recovery gates are met. A recovery runner and initial n=20
 density panels now exist. The first actual-DM n=100 single-condition panel is
-frozen and generated. Its 120 development datasets have been fitted with the
-deployed surface NN and with the development-selected 32-start WNM likelihood
-search; the 60 held-out datasets remain sealed. Objective-specific WNM search
-and recovery work continues for bias-weighted CRPS, density, and smoothed
-expectation. Statements below that no recovery runner or data were found
-describe the 2026-09-06 baseline.
+frozen and generated. Its 120 development datasets were fitted with the deployed
+surface NN and with the development-selected 32-start WNM likelihood search;
+that frozen search was then confirmed once on all 60 held-out datasets. WNM
+improved held-out common-grid likelihood and parameter recovery over the surface
+baseline. Objective-specific WNM search and recovery work continues for
+bias-weighted CRPS, density, and smoothed expectation. Statements below that no
+recovery runner or data were found describe the 2026-09-06 baseline.
 
 Prepared from the current working tree of the inner `demixing_model` repository
 (HEAD `12f5206`, with existing uncommitted changes), the 4.1q artifacts, and the

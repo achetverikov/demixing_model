@@ -63,8 +63,9 @@ browser work, rollout, regeneration, and removal of the surface NN are deferred.
 - The first actual-DM data panel is frozen and generated: n=100, single
   condition, no motor noise, with uniformly allocated dissimilarities and nested
   180/450/900-trial datasets. The deployed surface baseline and the selected WNM
-  likelihood search have fitted all 120 development datasets. Common recovery,
-  likelihood, mean-bias, bias-SD, and asymmetry summaries are saved with the run.
+  likelihood search fitted all 120 development datasets; the frozen WNM search
+  was then confirmed once on all 60 held-out datasets. Common recovery,
+  likelihood, mean-bias, bias-SD, and asymmetry summaries are saved with the runs.
 
 ### Partial or not yet completed
 
@@ -75,10 +76,9 @@ browser work, rollout, regeneration, and removal of the surface NN are deferred.
 - The direct prediction command identifies WNM artifacts but still constructs
   the surface-only optimizer, so it does not yet provide a working WNM prediction
   path.
-- On the actual-DM n=100 panel, likelihood development search and paired surface
-  comparison are complete. The 60 likelihood held-out datasets remain sealed.
-  Bias-weighted CRPS, density, smoothed expectation, and representative real-data
-  comparisons remain.
+- On the actual-DM n=100 panel, likelihood search selection and paired
+  development/held-out surface comparisons are complete. Bias-weighted CRPS,
+  density, smoothed expectation, and representative real-data comparisons remain.
 - Unified subject plots and PDF slices explicitly reject WNM. This is acceptable
   during the recovery stage and is deferred below.
 - `surface_browser`, demos, external fit scripts, the comparison pipeline, model
@@ -288,7 +288,7 @@ likelihood search for the focused held-out confirmation, not the other three
 objectives. Detailed traces and thresholds are recorded in the external recovery
 artifact.
 
-### R3. Complete WNM closed-loop recovery — likelihood development complete
+### R3. Complete WNM closed-loop recovery — likelihood complete
 
 - Run likelihood and bias-weighted-CRPS recovery first; these are the strongest
   parameter-recovery tests.
@@ -303,13 +303,18 @@ artifact.
   do not generalize its `sd_feat` result to WNM likelihood or distributional
   recovery.
 
-The actual-DM likelihood development fits now provide the first result: 72.5% of
+The actual-DM likelihood development fits provide the first result: 72.5% of
 datasets recovered all three parameters within a factor of 1.5, with median
 per-dataset joint log-RMSE 0.150. Broad/weak cases remained hardest. This is a
 finite-sample recovery result under an independently checked search; it does not
 replace the pending BWCRPS and curve-objective analyses.
 
-### R4. Run paired recovery from the actual DM observer — likelihood development complete
+On the held-out tuples, 70.0% recovered all parameters within a factor of 1.5,
+with median per-dataset joint log-RMSE 0.140. Recovery rose from 25% at 180 trials
+to 90% at 450 and 95% at 900, confirming that the smallest datasets are the
+limiting condition for this strict criterion.
+
+### R4. Run paired recovery from the actual DM observer — likelihood complete
 
 Generate the main synthetic panel with the actual DM observer simulator, not WNM
 or the surface NN. Fit every dataset with both:
@@ -335,8 +340,13 @@ For the 120 likelihood development datasets, WNM beat the deployed surface
 pipeline on common-grid NLL in 78.3% of pairs. Like-for-like global joint
 log-RMSE was 0.410 for WNM versus 0.453 for surface; median per-dataset values
 were 0.150 versus 0.189. Bias-SD and asymmetry curve summaries favored WNM;
-mean-bias CCC favored WNM while its median RMSE was slightly higher. The 60
-held-out `_2` datasets remain to be run once with the frozen likelihood search.
+mean-bias CCC favored WNM while its median RMSE was slightly higher.
+
+The one-time 60-dataset held-out comparison confirmed the main result. WNM beat
+surface on common-grid NLL in 70.0% of pairs; global joint log-RMSE was 0.391
+versus 0.587, median per-dataset joint log-RMSE was 0.140 versus 0.315, and
+factor-of-1.5 recovery was 70.0% versus 43.3%. Curve metrics remained mixed,
+especially for nearly flat targets, rather than showing uniform dominance.
 
 ### R5. Run paired representative real-data fits
 

@@ -11,8 +11,8 @@ Ordered by when the plan needs them settled.
 
 ## 1. Objective-specific WNM search and start budgets (active in recovery R2)
 
-**Status: the focused single-condition likelihood search is selected; the other
-retained objectives are still open.** The held-out likelihood confirmation uses
+**Status: the focused single-condition likelihood search is selected and
+confirmed; the other retained objectives are still open.** The held-out run used
 serial SciPy L-BFGS-B with 32 deterministic log-space Latin-hypercube starts,
 seed 0, artifact bounds, 500 iterations, `ftol=1e-9`, `gtol=1e-6`, and JAX
 float32. The generic continuous optimizer's default of 8 starts remains a
@@ -26,6 +26,9 @@ the expanded panel because the zoom depended on lattice alignment. The complete
 120-dataset development run then finished with at least 24 converged starts per
 dataset. Detailed protocol and results are stored under
 `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`.
+On held-out data WNM beat the surface pipeline on common-grid NLL in 70.0% of
+pairs and improved global joint log-RMSE from 0.587 to 0.391. This closes the
+likelihood decision for the focused panel without selecting a universal search.
 
 `continuous_optimizer.minimize_continuous` defaults to a placeholder `n_starts`.
 The budget materially decides the answer:
