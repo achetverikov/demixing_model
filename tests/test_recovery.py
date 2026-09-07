@@ -25,6 +25,7 @@ from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
+import pandas as pd
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -531,7 +532,8 @@ def test_running_cases_in_parallel_gives_the_same_numbers(tmp_path):
                 assert value == other[column], (one["case"], column)
 
 
-def test_the_start_sweep_reads_truths_in_the_optimizers_layout():
+def test_the_start_sweep_uses_the_worst_cases_and_optimizer_truth_layout(
+        tmp_path, monkeypatch):
     """Condition-major, and parsed rather than sorted.
 
     The optimizer's layout is [feat1_c0, feat2_c0, feat1_c1, feat2_c1, sd_spat].
@@ -540,21 +542,43 @@ def test_the_start_sweep_reads_truths_in_the_optimizers_layout():
     SDs drawn from two different conditions. Every loss stays finite and the
     summary looks plausible, so nothing downstream would have caught it; the
     only reason it surfaced was disagreeing with an earlier ad-hoc run.
+
+    Exercise the runner itself: the first regression test reconstructed the
+    parser in test code and merely checked that this function existed, which
+    could not catch either the production ordering or selection error.
     """
-    import re as _re
     import run_recovery_panel as panel
 
-    columns = ["case", "true_sd_feat1_c0", "true_sd_feat2_c0",
-               "true_sd_feat1_c1", "true_sd_feat2_c1", "true_sd_spat"]
-    pattern = _re.compile(r"^true_sd_feat(\d+)_c(\d+)$")
-    parsed = sorted((int(m.group(2)), int(m.group(1)), c)
-                    for c in columns if (m := pattern.match(c)))
-    order = [c for _, _, c in parsed] + ["true_sd_spat"]
+    rows = pd.DataFrame({
+        "case": ["moderate", "worst", "below", "second"],
+        "log_ratio_sd_feat1_c0": [1.1, 4.0, 0.5, -3.0],
+        "log_ratio_sd_feat2_c1": [0.2, 0.1, 0.3, 0.4],
+        "true_sd_feat1_c0": [11.0, 14.0, 10.5, 13.0],
+        "true_sd_feat2_c0": [21.0, 24.0, 20.5, 23.0],
+        "true_sd_feat1_c1": [31.0, 34.0, 30.5, 33.0],
+        "true_sd_feat2_c1": [41.0, 44.0, 40.5, 43.0],
+        "true_sd_spat": [51.0, 54.0, 50.5, 53.0],
+    })
+    source = tmp_path / "rows.csv"
+    rows.to_csv(source, index=False)
 
-    assert order == ["true_sd_feat1_c0", "true_sd_feat2_c0",
-                     "true_sd_feat1_c1", "true_sd_feat2_c1", "true_sd_spat"]
-    # The layout this must agree with, from the optimizer itself.
-    from continuous_optimizer import condition_parameter_layout
-    assert [name for name in condition_parameter_layout(2, fit_motor=False)] == \
-        [c[len("true_"):] for c in order]
-    assert panel.run_start_sweep is not None
+    class Fit:
+        loss = 0.0
+        starts = []
+
+    truths = []
+
+    def fake_fit(predictor, feat_grid, truth, n_starts, seed):
+        truths.append(truth)
+        fit = Fit()
+        fit.parameters = np.asarray(truth)
+        return fit, lambda parameters: 0.0
+
+    monkeypatch.setattr(panel, "_noise_free_fit", fake_fit)
+
+    result = panel.run_start_sweep(
+        None, None, source, [1], seed=0, worst_above=1.0, limit=2)
+
+    assert list(result["case"]) == ["worst", "second"]
+    assert truths == [[14.0, 24.0, 34.0, 44.0, 54.0],
+                      [13.0, 23.0, 33.0, 43.0, 53.0]]

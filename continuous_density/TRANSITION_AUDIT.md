@@ -2,17 +2,18 @@
 
 ## Purpose and evidence
 
-This memo records a read-only audit of `TRANSITION_PLAN.md`, the current inner
-`demixing_model` tree at `142a4af`, and the transition commits made on
-2026-09-06--07. It also records the corrections agreed in the subsequent
-discussion and replaces the audit's initial ordering of the remaining work. It
-does not replace the detailed transition plan or claim production clearance.
+This memo records an audit of `TRANSITION_PLAN.md` and the inner
+`demixing_model` transition through `f47f3af`, followed by the corrections made
+in the subsequent discussion. It replaces the audit's initial ordering of the
+remaining work. It does not replace the detailed transition plan or claim
+production clearance.
 
 The audit used the repository guidance in `AGENTS.md`, `CLAUDE.md`, and
-`bias_model_comparison/analysis/CODING_GUIDE.md`. Tests and GPU jobs were not
-rerun for this audit; statements about test totals and discovered defects come
-from the commit record. Claims about current support were checked against the
-current source.
+`bias_model_comparison/analysis/CODING_GUIDE.md`. The original audit did not
+rerun tests or GPU jobs; statements about its test totals and discovered defects
+came from the commit record. Claims about current support were checked against
+source. The 2026-09-07 update fixed and reran the density start-sweep selection
+and its targeted recovery tests.
 
 ## Executive summary
 
@@ -26,10 +27,12 @@ The transition has built much of the low-level WNM machinery, but implementation
 has spread across loaders, prediction operations, every historical objective,
 optimization, provenance, caches, plotting estimators, and recovery infrastructure
 before the key recovery comparisons are complete. From the first transition
-commit (`bd8a0f1`) through `142a4af`, 26 commits changed 49 files, adding 9,517
-and deleting 1,159 lines; 4,171 inserted lines are under `tests/`. Seven explicit
-audit-fix commits enumerate at least 43 defects, with three more fixes recorded
-in the latest recovery commit. Several defects changed fitted or reported
+commit (`bd8a0f1`) through the last implementation commit covered by this update
+(`25448c3`), 27 commits changed 49 files, adding 9,710 and deleting 1,159 lines;
+4,200 inserted lines are under `tests/`. The next commit, `f47f3af`, added 1,479
+lines by bringing the four transition documents into version control and is not
+counted as implementation growth. At least 49 defects are explicitly recorded
+across the audit/fix commits, several of which changed fitted or reported
 numbers.
 
 The immediate work should therefore be recovery and the minimum search,
@@ -53,7 +56,8 @@ browser work, rollout, regeneration, and removal of the surface NN are deferred.
 - WNM scoring exists for every objective currently written by the fitting
   command.
 - Likelihood postprocessing can resolve and rescore a WNM fit.
-- Initial n=20 WNM closed-loop density recovery and random-range panels have run.
+- Initial n=20 WNM closed-loop density recovery, random-range panels, and a
+  noise-free start-count sweep over hard range-panel cases have run.
 
 ### Partial or not yet completed
 
@@ -113,9 +117,13 @@ Recent fixes include scoring on the wrong feature grid, accepting failed optimiz
 starts as winners, silently fitting motor-enabled runs at zero motor noise, an
 unreachable public WNM rescoring branch, a reduction mismatch larger than the
 reproduction tolerance, a 37-degree surface-path change, an ineffective float64
-fix, and inverted explicit-zero motor semantics. The audits caught these, but the
-pattern shows that features were being layered before a small set of canonical
-entry points was frozen and exercised.
+fix, inverted explicit-zero motor semantics, condition-minor truth-column ordering
+in the first port of the start sweep, and its subsequent selection of the first 40
+thresholded rows rather than the claimed worst 40. The first regression test also
+reimplemented the column parser instead of executing the runner, so it could not
+protect the production path. The audits caught these, but the pattern shows that
+features were being layered before a small set of canonical entry points was
+frozen and exercised.
 
 Batch the recovery-enabling fixes, freeze their code and settings, and then run
 the paired analyses. Avoid alternating large new layers with audit repairs while
@@ -125,10 +133,15 @@ the benchmark itself is changing.
 
 `pretrained/README.md` first says several consumers still resolve checkpoints
 independently and retain known gaps, then later says the same identity defects are
-fixed. The transition plan describes both training corpora as living under 4.1p,
-whereas the packaged n=100 artifact records 4.1o. Recent commits also corrected
-three earlier implementation claims. Status prose should be updated only at
-frozen milestones and should be derived from executing call sites where possible.
+fixed. Recent commits also corrected three earlier implementation claims. Commit
+`f47f3af` fixed a separate provenance failure: earlier commit messages claimed to
+carry transition-document changes that were outside the repository and therefore
+untracked. The plan and findings are now tracked beside the code for the active
+transition, with generated CSV/JSON artifacts remaining under `results/`. Status
+prose should be updated only at frozen milestones and should be derived from
+executing call sites where possible. The detailed result narrative remains
+temporary tracked transition material and should return to the result artifacts
+when the transition closes, as required by `AGENTS.md`.
 
 ## Corrections to the initial audit
 
@@ -146,9 +159,17 @@ baseline and should be run with its established fitting strategy.
 
 The current density result concerns the combined WNM + empirical density target +
 continuous-search pipeline. Increasing from 16 to 64 starts did not materially
-improve recovery, but multistart alone is not a global-search oracle. Hierarchical,
-cached exhaustive, or other affordable reference searches are still needed before
-attributing the failure to the objective or target.
+improve empirical-target recovery. A separate noise-free sweep shows that this
+does not mean the search is adequate: even large multistart budgets miss known
+optima on some hard cases. The empirical fits nevertheless achieve losses below
+the loss at truth, proving that the realized empirical target can prefer a
+non-truth parameter vector even if a still-better basin remains undiscovered.
+Hierarchical, cached exhaustive, or other affordable reference searches remain
+necessary to quantify the optimization gap and choose a practical search.
+
+On the corrected 40 hardest density cases, 16, 64, and 256 starts missed the
+known noise-free optimum in 30, 18, and 7 cases, at median costs of 2.2, 7.1,
+and 27.2 seconds per fit. No tested multistart count is a global-search oracle.
 
 Recovery must separate:
 

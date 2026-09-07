@@ -134,14 +134,17 @@ generating vector, one objective.
 
 ## Consequences worth carrying forward
 
-- **The start budget matters for finding the optimum, but not for recovery.**
+- **The start budget matters for finding the optimum, but does not explain the
+  observed density-recovery failure.**
   On the noise-free problem 2 of 16 starts failed to converge and the spread
   across converged starts was 1.99; on the empirical replicates the spread was
   1.84–1.96. The search is decided by a small number of good starts in every
   panel run. But the range panel below shows that raising 16 to 64 starts does
-  not improve *recovery* against an empirical target at all — it converges more
-  reliably to an optimum that is not at the truth. Open decision 1 should be
-  settled on cost, not on recovery.
+  not materially improve *recovery* against an empirical target — it converges
+  more reliably to an optimum that is not at the truth. That does not validate
+  the continuous search: the hard-case sweep below shows a separate optimization
+  problem. The production choice must compare optimization gap and cost, by
+  objective, including hierarchical/cached references.
 - **Next diagnostic**, to separate the two surviving explanations: fit an
   empirical target built from a very large sample against the model curve
   directly, and run replicates at each trial count rather than one. That
@@ -223,27 +226,28 @@ loss of exactly 0:
 
 | starts | median worst \|log ratio\| | p90 | within 1% | missed the known optimum | median s/fit |
 |---:|---:|---:|---:|---:|---:|
-| 16 | 0.7691 | 3.316 | 38% | 25/40 | 2.1 |
-| 64 | 0.0018 | 1.713 | 55% | 17/40 | 6.7 |
-| 256 | 0.0001 | 0.022 | 90% | 4/40 | 25.5 |
+| 16 | 1.4779 | 2.837 | 25% | 30/40 | 2.2 |
+| 64 | 0.0030 | 2.415 | 52.5% | 18/40 | 7.1 |
+| 256 | 0.0003 | 0.514 | 82.5% | 7/40 | 27.2 |
 
 Read together, these two tables are the point. The search genuinely is
-start-starved -- at 16 starts it misses a known global optimum in nearly two
-thirds of hard cases -- and fixing that does essentially nothing for recovery,
-because the empirical target's optimum is not at the truth. **The noise-free
-sweep bounds the search; the empirical panels bound the target. Only the second
-bounds what a fitted parameter means**, and an earlier reading of this panel
-that called the start count the dominant problem was generalising from the
-first to the second.
+start-starved -- at 16 starts it misses a known global optimum in three quarters
+of hard cases, and even 256 starts misses 7 of 40 -- and improving that
+does essentially nothing for recovery, because the empirical target's optimum
+is not at the truth. **The noise-free sweep bounds the search; the empirical
+panels bound the target. Only the second bounds what a fitted parameter means**,
+and an earlier reading of this panel that called the start count the dominant
+problem was generalising from the first to the second.
 
-Artifact: `results/continuous_density_4.1q/recovery/start_sweep/`. The sweep was first run from an ad-hoc script
-whose numbers could not be regenerated; porting it into the runner exposed a bug
-in the port -- truth columns sorted alphabetically are condition-*minor*
-(`feat1_c0, feat1_c1, feat2_c0, ...`), which refits each case against a
-generating vector pairing SDs from two different conditions, with every loss
-finite and the summary plausible. The corrected panel reproduces the original
-script exactly. Pinned by
-`test_the_start_sweep_reads_truths_in_the_optimizers_layout`.
+Artifact: `results/continuous_density_4.1q/recovery/start_sweep/`. The first
+runner implementation had two silent selection/construction defects. Alphabetic
+truth-column order is condition-*minor* (`feat1_c0, feat1_c1, feat2_c0, ...`),
+so it paired feature SDs from different conditions. After that was fixed, the
+runner still kept source-row order and took the first 40 rows over the threshold,
+not the 40 worst rows stated here. Both defects leave every loss finite and a
+plausible summary. The artifact has been regenerated after ranking by the source
+panel's worst absolute feature-SD log ratio. The production call site is pinned by
+`test_the_start_sweep_uses_the_worst_cases_and_optimizer_truth_layout`.
 
 **It is not the shared-`sd_spat` coupling.** The single-condition design has
 three free parameters and no cross-condition constraint, and recovers `sd_feat`

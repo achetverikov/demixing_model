@@ -1,5 +1,15 @@
 **K12 WNM transition plan — 2026-09-06**
 
+**Current execution status (updated 2026-09-07).** This document preserves the
+full transition design prepared against `12f5206`; it is not a live checklist.
+`TRANSITION_AUDIT.md` records the revised execution order. Work is currently
+limited to recovery and the search, prediction, and fitting support required to
+attribute its failures (audit R1--R6). Plotting/browser integration, downstream
+rollout and regeneration, default promotion, and surface-NN retirement are
+deferred until those recovery gates are met. A recovery runner and initial n=20
+density panels now exist; statements below that none were found describe the
+2026-09-06 baseline.
+
 Prepared from the current working tree of the inner `demixing_model` repository
 (HEAD `12f5206`, with existing uncommitted changes), the 4.1q artifacts, and the
 external batch pipeline. This is a proposed implementation plan, not a record of
@@ -28,13 +38,15 @@ and become a standing empirical reference artifact, which is a change of role, n
 retirement.
 
 Two artifacts are therefore in play, and this plan is careful to name them apart.
-The **training corpus** is the 4,400-trajectory, 148,076-cell histogram set at
-`results/continuous_density_4.1p/artifacts/histogram_shards`, per observer sample
-count, that trained the current K12 model -- not the 4.1q benchmark, which is a
-separate, deliberately held-out 197-trajectory set (`design_benchmark.py` raises if
-the two overlap). Both are 720-bin histograms written by scripts of the same name.
-The corpus is a new standing artifact and needs the storage, provenance and
-regeneration story the averaged surfaces already have.
+The **training corpora** are the 4,400-trajectory, 148,076-cell histogram sets that
+trained the current K12 models: n=20 is recorded under
+`results/continuous_density_4.1p/artifacts/histogram_shards`, while the packaged
+n=100 artifact records `continuous_density_4.1o`. They are not the 4.1q benchmark,
+which is a separate, deliberately held-out 197-trajectory set
+(`design_benchmark.py` raises if the two overlap). Both are 720-bin histograms
+written by scripts of the same name. The corpora are new standing artifacts and
+need the storage, provenance and regeneration story the averaged surfaces already
+have.
 
 `surface_browser/` gains on-demand K12 evaluation alongside the stored surfaces
 rather than instead of them: K12 is continuous in feature difference and analytic in
@@ -115,7 +127,7 @@ future audit reads it first.
 |---|---|
 | S1 trial simulation (generative model + EM), S2 bias readout | Unchanged and still required. It produces both the averaged surfaces and the K12 training corpus, and the recovery panel in step 5 generates from it. |
 | S3 KDE surface aggregation, S4 surface parameter grid | Retained, with a changed role: they no longer feed a surrogate, and instead produce the averaged surfaces as a standing empirical reference and as the source for mu2. `shared/averaging.py`, the averaging and pull scripts, the `averaged_surfaces_dir` machinery, the `cloud/` bundling and release, the `DEMIXING_ARTIFACT_ROOT` surface release and the `averaged_surfaces_smoke_pipeline/` fixtures all stay. Say in their documentation that they are no longer a step in the live fitting path, so the KDE aggregation stops being read as one. |
-| Training corpus | New standing artifact alongside the averaged surfaces: the `4.1p` histogram shards, per observer sample count, that train K12. It needs the storage, provenance and regeneration story the averaged surfaces already have -- where it lives, how it is rebuilt, and what identity ties a K12 artifact to the corpus that produced it. |
+| Training corpus | New standing artifacts alongside the averaged surfaces: the n=20 `4.1p` and n=100 `4.1o` histogram corpora that trained the packaged K12 models. They need the storage, provenance and regeneration story the averaged surfaces already have -- where they live, how they are rebuilt, and what identity ties each K12 artifact to its corpus. |
 | `surface_browser/` | Gains on-demand K12 evaluation alongside the stored surfaces, not instead of them, so a K12 prediction can be plotted against the simulated surface at the same parameters. Parameter entry becomes continuous for the K12 view while the stored-file lattice selection in `core/data_manager.py`, `core/surface_selector.py`, `components/sidebar.py` and `main_app.py` keeps working for the surface view. |
 | mu2 curves (`surface_simulator.py`, the `use_nn_surfaces=False` branch, the R wrapper's mu2 columns) | Unchanged. K12 models mu1 only; mu2 keeps its averaged-surface path, so there is no gap and no interface change. `bias_model_comparison/plots/plot_CSH2026_predictions.R` uses that branch and needs no migration; only its `_nn` twin, which loads a checkpoint, does. |
 | S5 surface NN: `neural_network_optimization/`, `pretrained/model_epoch*.pkl`, `shared/utils.py:load_checkpoint` and its legacy mu1-axis handling, `tests/test_nn_circular_loss.py`, the surface-specific parts of `tests/test_mu1_circular_axis.py` | Removed at step 7. The mu1-axis guards protect the NN's 180-row surface grid; check each against the averaged-surface path before deleting it, since that path keeps the same grid and may rely on the same guard. |
@@ -398,9 +410,13 @@ approximations and gradients; agreement of empirical targets does not establish 
    `DEMIXING_MODEL_CONSOLIDATED_AUDIT.md` identifies missing recovery oracles for
    estimator asymmetries; `BWCRPS_VALIDATION.md`, section 4, specifies recovery for
    the alternative models and is useful design context, not completed DM evidence.
-   No DM recovery runner or result set was found in the current source/results
-   search. These historical notes are pointers, not evidence that their other
-   old bug/status claims remain current. DM `TODO.md`, item 3, now tracks this work.
+   At plan preparation, no DM recovery runner or result set was found in the
+   source/results search. That baseline is now superseded: the runner lives in
+   `model_fit_to_data/run_recovery_panel.py`, findings in
+   `continuous_density/RECOVERY_FINDINGS.md`, and generated rows/summaries under
+   `results/continuous_density_4.1q/recovery/`. These historical notes are
+   pointers, not evidence that their other old bug/status claims remain current.
+   DM `TODO.md`, item 3, tracks this work.
 
    **Separate three questions in the benchmark.**
 
@@ -441,29 +457,28 @@ approximations and gradients; agreement of empirical targets does not establish 
    datasets and give it the same bounds and target construction. Do not initialize
    main fits at the truth; truth-start runs are separately labeled diagnostics.
 
-   Density/CCC is the primary production recovery arm. Include expectation,
-   smoothed expectation, likelihood, and CRPS variants on a prespecified subset
-   to test their distinct estimator contracts and any proposed search dispatch.
-   Legacy density needs replay parity, not a full new recovery campaign. Keep all
-   methods' loss scales distinct. In comparisons of search, use the same K12
-   evaluator on both sides; in comparisons of surrogate, include at least one
-   shared search and the same objective/observation scoring convention. Otherwise
-   a new-surrogate/new-optimizer win cannot be attributed to either change.
+   Cover the four objectives retained by `bias_model_comparison`: `likelihood`,
+   `bias_weighted_crps`, `density`, and `smoothed_exp`. Check optimization quality
+   independently for each because their landscapes differ; the winning search need
+   not be universal. Treat likelihood as the primary parameter-recovery objective
+   and bias-weighted CRPS as the secondary distributional objective. Test the two
+   curve objectives too, but judge them primarily by curve and held-out predictive
+   recovery rather than expecting strong parameter identification. Raw `expectation`
+   is superseded in the comparison analysis, and legacy density needs replay parity,
+   not a full recovery campaign. Keep all methods' loss scales distinct.
 
-   Include float64 as an explicit axis. The repo runs JAX at its default float32,
-   so the continuous search computes values and gradients there and widens only at
-   the optimizer boundary, which floors convergence at roughly 1e-8 relative --
-   recovery of a known optimum on a synthetic objective lands at 1.5e-7, the
-   arithmetic limit rather than a search failure. Whether that floor costs anything
-   scientifically is a question only recovery answers: a parameter whose RMSE is
-   dominated by finite-trial variation will not notice, while a weakly identified
-   one on a flat ridge might. Run at least one arm twice, identical but for
-   `JAX_ENABLE_X64=1`, and report it separately from the search comparison rather
-   than folded into it. Note that x64 is a global flag, so adopting it also changes
-   the surface backend's arithmetic: either its parity fixtures are re-verified
-   under x64 or adoption waits for step 7. And a parameter that only becomes
-   recoverable at double precision is weakly identified, which is a finding about
-   the objective's conditioning to report, not a detail to absorb silently.
+   In comparisons of search, reevaluate every candidate through the same K12 scorer.
+   In comparisons of deployed pipelines, fit the paired data with K12 plus its
+   objective-selected search and with the surface NN plus its existing production
+   search, then compare common downstream scores. The surface arm is a legacy
+   baseline, not a second development target.
+
+   Keep float64 out of the fixed matrix unless a key likelihood or BWCRPS search
+   comparison shows a material precision-sensitive solution. In that case run a
+   targeted matched x64 diagnostic and report it separately. JAX's x64 flag is
+   global, so adopting it for the surface backend would require re-verifying that
+   backend's arithmetic; otherwise defer global adoption until the surface backend
+   is retired.
 
    Record per replicate: generating and recovered `sd_feat1`, `sd_feat2`, shared
    `sd_spat` (plus derived d-prime), shared `sd_motor`, condition contrasts, signed

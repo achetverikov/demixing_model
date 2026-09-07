@@ -1,18 +1,19 @@
 # Open decisions — K12 transition
 
-Questions that need the project owner rather than an implementer, recorded here
-instead of interrupting the work. Nothing below blocks the remaining
-implementation; each is a choice about what a result should *mean*, and each is
-reached in the plan at a named step.
+Unresolved choices and evidence thresholds, recorded here instead of burying them
+in implementation notes. Items 1 and 3 affect the active recovery comparisons;
+item 2 is conditional on those results. Items 4--6 are deferred and do not block
+the recovery work.
 
 Ordered by when the plan needs them settled.
 
 ---
 
-## 1. The gradient start budget (needed by step 5; deferred by decision)
+## 1. Objective-specific WNM search and start budgets (active in recovery R2)
 
-**Status: already decided — defer to the recovery panel** (2026-09-06). Recorded
-here because the evidence for its importance kept growing after the decision.
+**Status: no production search or start count has been selected.** The generic
+continuous optimizer's default of 8 starts remains a placeholder, not a validated
+configuration.
 
 `continuous_optimizer.minimize_continuous` defaults to a placeholder `n_starts`.
 The budget materially decides the answer:
@@ -23,12 +24,29 @@ The budget materially decides the answer:
   converged: spread 0.81 against a winning loss of 0.435
 - same subject, 8 starts: spread 0.99, two coordinates railed at the low bound
 
-So on real data three of four starts land in worse basins. The budget is chosen
-on the recovery panel's development groups and frozen before held-out scoring;
-until then no WNM fit's parameters should be reported as though the budget
-behind them had been justified.
+So on real data three of four starts land in worse basins. The completed density
+panels add two results that must not be conflated: moving from 16 to 64 starts
+barely changes empirical-target parameter recovery, while the noise-free
+hard-case sweep shows that continuous search still misses a known optimum. The
+former says the observed density-recovery failure is not explained by starts;
+the latter says the optimizer is not yet adequate.
 
-## 2. float64 for the continuous search (needed by step 5)
+On the corrected 40 hardest `range_n10000` density cases, refitted against a
+noise-free target, 16, 64, and 256 starts missed the known optimum in 30, 18,
+and 7 cases respectively. Median time per fit rose from 2.2 to 7.1 to 27.2
+seconds. Even the largest tested budget is therefore not a reference solution,
+and the generic 8-start default is below every measured arm.
+
+There should be no universal budget chosen from density alone. On development
+groups, compare each retained objective through a common WNM scorer against an
+appropriate hierarchical, cached, dense, or profiled reference, then freeze the
+simplest search that meets predeclared optimization-gap, reliability, and runtime
+criteria. Likelihood and bias-weighted CRPS are the priority parameter-recovery
+cases; curve-search recovery is still tested but is expected to be weaker. The
+surface NN keeps its deployed search and is compared as a legacy pipeline; it does
+not need matching WNM search implementations.
+
+## 2. float64 for the continuous search (conditional during recovery R2)
 
 Recorded in `TODO.md` item 3. The repo runs JAX at float32, which floors
 convergence near 1e-8 relative; recovery of a known optimum lands at 1.5e-7.
@@ -36,8 +54,10 @@ Whether that costs anything scientifically is only answerable by the recovery
 panel, and adopting x64 would change the surface backend's arithmetic too, so it
 cannot be switched on unilaterally.
 
-**Decision needed if the x64 arm shows an effect**: whether to re-verify the
-surface parity fixtures under x64, or wait until that backend is retired.
+**Decision needed only if a key likelihood or BWCRPS comparison shows a
+precision-sensitive solution**: whether to run and potentially adopt a targeted
+x64 configuration, and if adoption precedes NN retirement, whether to re-verify
+the surface parity fixtures under x64. Otherwise this stays deferred.
 
 ## 3. Fitting bounds versus the corpus hull (needed before any production WNM fit)
 
@@ -79,11 +99,12 @@ discarded at accumulation time, so any corpus re-run made before the change
 produces another mu2-less corpus. If a re-run happens for another reason,
 retaining column 22 costs almost nothing then.
 
-## 5. Plot outputs for a mixture fit (step 4c, in progress)
+## 5. Plot outputs for a mixture fit (deferred until the recovery gate)
 
 `create_unified_subject_plots` and `plot_pdf_slices` recompute curves, moments
 and SDs through the surface optimizer. They now refuse a mixture artifact rather
-than crashing, and 4c routes them through the shared prediction layer.
+than crashing; step 4c is intended to route them through the shared prediction
+layer after recovery.
 
 **Status**: the pooled-SD estimator is shared and the surface path is verified
 bit-identical, including at the clamp. The mixture reaches the same estimator
@@ -91,8 +112,10 @@ analytically; the two agree to about 9e-05 degrees on the golden fixture, the
 residual being the 2-degree grid's approximation error rather than the analytic
 value's. Recorded here in case a reviewer expects one implementation.
 
-**Still open**: neither plotting entry point can yet *run* on a mixture fit.
-Both refuse a WNM artifact rather than crashing.
+**Still open, but intentionally deferred**: neither plotting entry point can yet
+*run* on a mixture fit. Both refuse a WNM artifact rather than crashing. Direct
+prediction needed to score recovery remains in scope; presentation wiring does
+not.
 
 The curve computations a mixture plot needs now exist:
 `shared.prediction.mixture_plot_curves` produces all four curve families (bias,

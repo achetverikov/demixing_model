@@ -174,7 +174,7 @@ def run_start_sweep(predictor, feat_grid, source_rows, start_counts, *, seed,
     frame = pd.read_csv(source_rows)
     ratio_columns = [c for c in frame.columns if c.startswith("log_ratio_sd_feat")]
     frame["worst"] = frame[ratio_columns].abs().max(axis=1)
-    selected = frame[frame.worst > worst_above].head(limit)
+    selected = frame[frame.worst > worst_above].nlargest(limit, "worst")
     if selected.empty:
         raise ValueError(
             f"no rows in {source_rows} have a worst |log ratio| above {worst_above}; "
