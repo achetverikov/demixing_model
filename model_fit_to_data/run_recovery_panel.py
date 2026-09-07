@@ -88,6 +88,36 @@ def _case(n_trials):
                           sd_spat=TRUTH_SD_SPAT, n_trials_per_condition=n_trials)
 
 
+def random_cases(n_cases, n_conditions, n_trials, bounds, rng, sd_motor=0.0):
+    """Generating vectors drawn across the whole searchable range.
+
+    Log-uniform, not uniform: the bounds span nearly two decades and these are
+    multiplicative scales, so a uniform draw would put four fifths of the cases
+    above 40 degrees and leave the narrow corner -- the regime the mixture
+    surrogate exists to represent -- almost unsampled.
+
+    Drawn strictly inside the bounds by a small margin. A truth sitting exactly
+    on a bound cannot be recovered from the wrong side, so its error would
+    measure the bound rather than the estimator.
+    """
+    margin = 1.02
+    low_feat, high_feat = bounds["sd_feat"]
+    low_spat, high_spat = bounds["sd_spat"]
+
+    def draw(low, high, size=None):
+        return np.exp(rng.uniform(np.log(low * margin), np.log(high / margin), size))
+
+    cases = []
+    for index in range(n_cases):
+        feature_sds = [(float(draw(low_feat, high_feat)), float(draw(low_feat, high_feat)))
+                       for _ in range(n_conditions)]
+        cases.append(R.RecoveryCase(
+            name=f"rand{index:04d}", condition_feature_sds=feature_sds,
+            sd_spat=float(draw(low_spat, high_spat)), sd_motor=sd_motor,
+            n_trials_per_condition=n_trials))
+    return cases
+
+
 def run_noise_free(predictor, feat_grid, *, objective, n_starts, seed):
     """Fit the model's own curve at the truth, with no target construction at all.
 
@@ -140,7 +170,13 @@ def run_noise_free(predictor, feat_grid, *, objective, n_starts, seed):
 
 
 def run_replicates(predictor, feat_grid, d_circ, cases, *, objective, n_starts, seed,
-                   n_replicates):
+                   n_replicates, on_result=None):
+    """Every replicate of every case, calling ``on_result`` as each one lands.
+
+    The callback exists so a long panel writes as it goes. A random panel over
+    the full range is hours of fits, and CLAUDE.md section 11 is explicit that an
+    expensive stage must not be thrown away by a cheap failure after it.
+    """
     results = []
     for case in cases:
         for replicate in range(n_replicates):
@@ -158,7 +194,27 @@ def run_replicates(predictor, feat_grid, d_circ, cases, *, objective, n_starts, 
                   f"{np.max(np.abs(np.log(outcome.recovered / outcome.truth))):.3f}, "
                   f"{outcome.runtime_seconds:.0f}s", flush=True)
             results.append(outcome)
+            if on_result is not None:
+                on_result(outcome)
     return results
+
+
+def _incremental_writer(path: Path):
+    """Append each replicate's row to the CSV as it finishes.
+
+    Written through a temporary file and renamed, so an interrupted run leaves a
+    complete CSV of the replicates that did finish rather than a half-written
+    line that pandas would read as a short row.
+    """
+    rows = []
+
+    def write(outcome):
+        rows.append(outcome.row())
+        temporary = path.with_suffix(".csv.partial")
+        pd.DataFrame(rows).to_csv(temporary, index=False)
+        temporary.replace(path)
+
+    return write
 
 
 def worst_parameter(results):
@@ -184,7 +240,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--panel", required=True,
-                        choices=("noise_free", "empirical", "sample_size"))
+                        choices=("noise_free", "empirical", "sample_size", "random"))
+    parser.add_argument("--n-cases", type=int, default=200,
+                        help="random panel: generating vectors drawn across the range")
+    parser.add_argument("--n-conditions", type=int, default=2,
+                        help="random panel: conditions per case, sharing one sd_spat")
+    parser.add_argument("--sd-motor", type=float, default=0.0,
+                        help="random panel: motor SD to generate at and hold fixed in the fit")
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--objective", default="density")
     parser.add_argument("--n-samples", type=int, default=20)
@@ -219,38 +281,58 @@ def main(argv=None):
             predictor, feat_grid, d_circ, [_case(args.n_trials)],
             objective=args.objective, n_starts=args.n_starts, seed=args.seed,
             n_replicates=args.n_replicates)
-    else:
+    elif args.panel == "sample_size":
         results = run_replicates(
             predictor, feat_grid, d_circ, [_case(n) for n in args.trial_counts],
             objective=args.objective, n_starts=args.n_starts, seed=args.seed,
             n_replicates=args.n_replicates)
+    else:
+        cases = random_cases(
+            args.n_cases, args.n_conditions, args.n_trials,
+            surrogate.search_bounds(predictor.domain),
+            np.random.default_rng(args.seed), sd_motor=args.sd_motor)
+        args.out.mkdir(parents=True, exist_ok=True)
+        results = run_replicates(
+            predictor, feat_grid, d_circ, cases, objective=args.objective,
+            n_starts=args.n_starts, seed=args.seed, n_replicates=args.n_replicates,
+            on_result=_incremental_writer(args.out / f"{args.panel}_rows.csv"))
 
     args.out.mkdir(parents=True, exist_ok=True)
     rows = pd.DataFrame([result.row() for result in results])
     rows_path = args.out / f"{args.panel}_rows.csv"
     rows.to_csv(rows_path, index=False)
 
-    # Summaries are per case: pooling across trial counts would average away the
-    # thing the sample-size panel exists to measure.
-    by_case = {}
-    for case_name in dict.fromkeys(result.case for result in results):
-        by_case[case_name] = R.summarise([r for r in results if r.case == case_name])
-
-    summary = {
-        "panel": args.panel,
-        "settings": {
-            "objective": args.objective, "checkpoint": str(checkpoint),
-            "checkpoint_sha256": surrogate.file_digest(checkpoint),
-            "n_samples": args.n_samples, "n_starts": args.n_starts, "seed": args.seed,
-            "n_replicates": args.n_replicates,
-            "truth_conditions": TRUTH_CONDITIONS, "truth_sd_spat": TRUTH_SD_SPAT,
-            "emp_density_weights_sd": EMP_DENSITY_WEIGHTS_SD,
-            "trial_counts": (args.trial_counts if args.panel == "sample_size"
-                             else [args.n_trials]),
-        },
-        "by_case": by_case,
-        "worst_parameter": worst_parameter(results),
+    settings = {
+        "objective": args.objective, "checkpoint": str(checkpoint),
+        "checkpoint_sha256": surrogate.file_digest(checkpoint),
+        "n_samples": args.n_samples, "n_starts": args.n_starts, "seed": args.seed,
+        "n_replicates": args.n_replicates,
+        "emp_density_weights_sd": EMP_DENSITY_WEIGHTS_SD,
+        "trial_counts": (args.trial_counts if args.panel == "sample_size"
+                         else [args.n_trials]),
     }
+    summary = {"panel": args.panel, "settings": settings}
+
+    if args.panel == "random":
+        # Every case has its own truth, so a per-case summary would be one
+        # replicate against itself. The range summary is the point of this panel.
+        settings.update(n_cases=args.n_cases, n_conditions=args.n_conditions,
+                        sd_motor=args.sd_motor,
+                        search_bounds={axis: list(pair) for axis, pair
+                                       in surrogate.search_bounds(predictor.domain).items()})
+        summary["range_summary"] = R.range_summary(results, drop_railed=True)
+        # Reported both ways so the effect of excluding railed fits is visible
+        # rather than being a judgement buried in the helper.
+        summary["range_summary_including_railed"] = R.range_summary(results,
+                                                                    drop_railed=False)
+    else:
+        # Summaries are per case: pooling across trial counts would average away
+        # the thing the sample-size panel exists to measure.
+        settings.update(truth_conditions=TRUTH_CONDITIONS, truth_sd_spat=TRUTH_SD_SPAT)
+        summary["by_case"] = {
+            case_name: R.summarise([r for r in results if r.case == case_name])
+            for case_name in dict.fromkeys(result.case for result in results)}
+        summary["worst_parameter"] = worst_parameter(results)
     summary_path = args.out / f"{args.panel}_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, default=float) + "\n")
     print(f"wrote {rows_path} and {summary_path}")

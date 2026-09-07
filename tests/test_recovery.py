@@ -234,9 +234,13 @@ def test_a_failed_loss_evaluation_raises_rather_than_reporting_a_tie():
         loss_spread=0.0, n_starts=4, n_converged=4, at_bound=(), runtime_seconds=1.0)
     with pytest.raises(ValueError, match="not a tie"):
         bad.diagnosis
-def test_the_summary_reports_bias_and_spread_but_not_correlation():
-    """Correlation between fitted and true parameters is high whenever the design
-    spans a range, regardless of whether any single estimate is any good."""
+def test_the_fixed_truth_summary_reports_bias_and_spread_but_not_correlation():
+    """For a fixed generating vector, correlation is meaningless: every replicate
+    sits at the same truth, so it measures scatter against a constant.
+
+    Correlation belongs to the range panel instead, where the truths are drawn
+    across the parameter space and "does the estimate track the parameter" is the
+    actual question. That is `range_summary`, tested below."""
     results = [
         R.RecoveryResult(case="c", replicate=index, truth=np.array([10.0]),
                          recovered=np.array([10.0 * np.exp(0.1)]), names=("a",),
@@ -383,3 +387,88 @@ def test_the_worst_parameter_travels_with_its_name():
                                     result("large", [11.0, 3.0])])
     assert record["small_r0"]["parameter"] == "a"
     assert record["large_r0"]["parameter"] == "b"
+
+
+# ---------------------------------------------------------------------------
+# The range panel
+# ---------------------------------------------------------------------------
+
+def _range_result(case, truth, recovered, at_bound=()):
+    return R.RecoveryResult(
+        case=case, replicate=0, truth=np.asarray(truth, dtype=float),
+        recovered=np.asarray(recovered, dtype=float),
+        names=("sd_feat1_c0", "sd_feat2_c0", "sd_spat"), loss_at_truth=1.0,
+        loss_at_fit=0.9, loss_spread=0.0, n_starts=4, n_converged=4,
+        at_bound=at_bound, runtime_seconds=1.0)
+
+
+def test_the_range_summary_pools_by_parameter_family():
+    """`sd_feat1_c0` and `sd_feat2_c7` are the same quantity in different slots;
+    a correlation computed per slot would be a dozen tiny samples instead of one
+    usable one."""
+    rng = np.random.default_rng(0)
+    results = []
+    for index in range(30):
+        truth = np.exp(rng.uniform(np.log(3), np.log(180), 3))
+        results.append(_range_result(f"r{index}", truth, truth * 1.05))
+
+    summary = R.range_summary(results)
+    assert set(summary) >= {"sd_feat", "sd_spat"}
+    assert summary["sd_feat"]["n"] == 60      # two slots per replicate
+    assert summary["sd_spat"]["n"] == 30
+
+
+def test_slope_catches_compression_that_correlation_hides():
+    """The reason correlation is not reported alone. An estimator that returns
+    the square root of the truth tracks it almost perfectly by correlation while
+    being badly wrong, and only the slope says so."""
+    rng = np.random.default_rng(1)
+    results = []
+    for index in range(40):
+        truth = np.exp(rng.uniform(np.log(3), np.log(180), 3))
+        # Compressed toward the middle of the range: a slope of 0.5 in logs.
+        results.append(_range_result(f"r{index}", truth, np.sqrt(truth * 20.0)))
+
+    summary = R.range_summary(results)
+    assert summary["sd_feat"]["pearson_r_log"] > 0.99
+    assert summary["sd_feat"]["slope_log"] == pytest.approx(0.5, abs=0.02)
+    assert summary["sd_feat"]["rmse_log_ratio"] > 0.3
+
+
+def test_railed_parameters_are_counted_and_excluded_by_default():
+    """A fit sitting on a bound reports the bound's position, not an estimate.
+    Averaging those in measures where the bounds were put."""
+    results = [_range_result("a", [10.0, 20.0, 30.0], [10.5, 2.5, 31.0],
+                             at_bound=("sd_feat2_c0@low",)),
+               _range_result("b", [15.0, 25.0, 35.0], [15.5, 26.0, 36.0])]
+
+    kept = R.range_summary(results, drop_railed=False)
+    dropped = R.range_summary(results, drop_railed=True)
+
+    assert dropped["sd_feat"]["n"] == 3 and kept["sd_feat"]["n"] == 4
+    assert dropped["sd_feat"]["n_railed"] == 1
+    assert dropped["sd_feat"]["railed_fraction"] == pytest.approx(0.25)
+    # The railed value is far from its truth, so keeping it inflates the error.
+    assert kept["sd_feat"]["rmse_log_ratio"] > dropped["sd_feat"]["rmse_log_ratio"]
+
+
+def test_random_cases_span_the_range_and_stay_inside_the_bounds():
+    """Log-uniform, because the bounds span two decades on a multiplicative
+    scale: a uniform draw would leave the narrow corner -- the regime the mixture
+    exists to represent -- almost unsampled."""
+    import run_recovery_panel as panel
+
+    bounds = {"sd_feat": (2.5, 200.0), "sd_spat": (5.0, 200.0)}
+    cases = panel.random_cases(400, 2, 500, bounds, np.random.default_rng(0))
+
+    feats = np.array([sd for case in cases for pair in case.condition_feature_sds
+                      for sd in pair])
+    spats = np.array([case.sd_spat for case in cases])
+
+    assert np.all(feats > 2.5) and np.all(feats < 200.0)
+    assert np.all(spats > 5.0) and np.all(spats < 200.0)
+    # Both decades populated, which a uniform draw would not manage.
+    assert (feats < 10).mean() > 0.15, "narrow corner undersampled"
+    assert (feats > 100).mean() > 0.10
+    # Each case has its own truth, and conditions differ within a case.
+    assert len({case.sd_spat for case in cases}) == len(cases)

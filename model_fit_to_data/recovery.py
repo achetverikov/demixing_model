@@ -317,3 +317,98 @@ def summarise(results: Sequence[RecoveryResult]) -> Dict[str, object]:
         summary[f"{name}_median_log_ratio"] = float(np.median(log_ratios))
         summary[f"{name}_rmse_log_ratio"] = float(np.sqrt(np.mean(log_ratios ** 2)))
     return summary
+
+
+def parameter_family(name: str) -> str:
+    """``sd_feat1_c3`` -> ``sd_feat``. The family is what a range panel pools over."""
+    if name.startswith("sd_feat"):
+        return "sd_feat"
+    if name.startswith("sd_spat"):
+        return "sd_spat"
+    if name.startswith("sd_motor"):
+        return "sd_motor"
+    return name
+
+
+def range_summary(results: Sequence[RecoveryResult],
+                  drop_railed: bool = True) -> Dict[str, object]:
+    """True-versus-recovered agreement for a panel that spans the parameter range.
+
+    `summarise` deliberately omits correlation, and for a fixed generating vector
+    that is right: with every replicate at the same truth, correlation measures
+    the scatter of the estimate against a constant and means nothing. This
+    function is for the opposite design -- truths drawn across the whole range --
+    where correlation is exactly the question: does the recovered parameter track
+    the one that generated the data, over the range the model will be used on?
+
+    Reported per parameter family, on the log scale, because these are
+    multiplicative scales and a correlation dominated by the two-decade spread of
+    the design is not the same claim as one that survives on log residuals.
+
+    Three numbers are given together on purpose, because correlation alone is
+    flattering:
+
+    * ``pearson_r_log`` -- how well the recovered value tracks the true one.
+      Inflated by the width of the design: sample a wider range and it rises
+      without the estimator improving.
+    * ``slope_log`` -- the regression of recovered on true, both logged. 1.0 is
+      faithful; below 1 is compression toward the middle of the range, which a
+      high correlation hides completely.
+    * ``rmse_log_ratio`` -- the actual error, in units the design width cannot
+      inflate.
+
+    Args:
+        drop_railed: exclude parameters whose fit sits on a search bound. A
+            railed value is the bound's position, not an estimate, so including
+            it measures where the bounds are. The count is reported either way.
+    """
+    if not results:
+        raise ValueError("no replicates to summarise")
+
+    from scipy import stats
+
+    pairs: Dict[str, List[tuple]] = {}
+    railed: Dict[str, int] = {}
+    for result in results:
+        bound_names = {name.split("@")[0] for name in result.at_bound}
+        for name, true_value, fitted in zip(result.names, result.truth, result.recovered):
+            family = parameter_family(name)
+            pairs.setdefault(family, [])
+            railed.setdefault(family, 0)
+            if name in bound_names:
+                railed[family] += 1
+                if drop_railed:
+                    continue
+            pairs[family].append((float(true_value), float(fitted)))
+
+    summary: Dict[str, object] = {
+        "n_replicates": len(results),
+        "drop_railed": bool(drop_railed),
+        "diagnoses": {diagnosis: sum(r.diagnosis == diagnosis for r in results)
+                      for diagnosis in ("search_failed",
+                                        "objective_prefers_other_parameters",
+                                        "loss_tied_with_truth")},
+    }
+    for family, observations in pairs.items():
+        record: Dict[str, object] = {
+            "n": len(observations),
+            "n_railed": railed[family],
+            "railed_fraction": railed[family] / max(1, railed[family] + len(observations)),
+        }
+        if len(observations) >= 3:
+            true_values = np.array([pair[0] for pair in observations])
+            fitted = np.array([pair[1] for pair in observations])
+            log_true, log_fit = np.log(true_values), np.log(fitted)
+            regression = stats.linregress(log_true, log_fit)
+            record.update({
+                "pearson_r_log": float(stats.pearsonr(log_true, log_fit)[0]),
+                "spearman_r": float(stats.spearmanr(true_values, fitted)[0]),
+                "pearson_r_raw": float(stats.pearsonr(true_values, fitted)[0]),
+                "slope_log": float(regression.slope),
+                "intercept_log": float(regression.intercept),
+                "median_log_ratio": float(np.median(log_fit - log_true)),
+                "rmse_log_ratio": float(np.sqrt(np.mean((log_fit - log_true) ** 2))),
+                "true_range": [float(true_values.min()), float(true_values.max())],
+            })
+        summary[family] = record
+    return summary
