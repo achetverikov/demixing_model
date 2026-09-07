@@ -13,7 +13,9 @@ The audit used the repository guidance in `AGENTS.md`, `CLAUDE.md`, and
 rerun tests or GPU jobs; statements about its test totals and discovered defects
 came from the commit record. Claims about current support were checked against
 source. The 2026-09-07 update fixed and reran the density start-sweep selection
-and its targeted recovery tests.
+and its targeted recovery tests. A later update records the completed
+single-condition development likelihood comparison; its detailed protocol and
+generated results remain under `$DEMIXING_ARTIFACT_ROOT`.
 
 ## Executive summary
 
@@ -60,20 +62,23 @@ browser work, rollout, regeneration, and removal of the surface NN are deferred.
   noise-free start-count sweep over hard range-panel cases have run.
 - The first actual-DM data panel is frozen and generated: n=100, single
   condition, no motor noise, with uniformly allocated dissimilarities and nested
-  180/450/900-trial datasets. No fits to this panel have run yet.
+  180/450/900-trial datasets. The deployed surface baseline and the selected WNM
+  likelihood search have fitted all 120 development datasets. Common recovery,
+  likelihood, mean-bias, bias-SD, and asymmetry summaries are saved with the run.
 
 ### Partial or not yet completed
 
-- WNM cannot yet use the hierarchical or cached exhaustive search paths. The
-  public fitter currently couples WNM to `--search continuous` and the surface NN
-  to the lattice searches.
+- The likelihood benchmark can evaluate WNM with an independent batched
+  hierarchy and with continuous search, but the public fitter still couples WNM
+  to `--search continuous`; objective-specific hierarchy/cache integration
+  remains for the other retained objectives where the comparison requires it.
 - The direct prediction command identifies WNM artifacts but still constructs
   the surface-only optimizer, so it does not yet provide a working WNM prediction
   path.
-- Only the earlier WNM-generated, n=20 density campaign has been fitted. The new
-  actual-DM n=100 panel still needs objective-specific WNM search comparisons,
-  held-out WNM and surface-NN fits, and common predictive scoring. Likelihood,
-  bias-weighted CRPS, smoothed expectation, and full real-data comparisons remain.
+- On the actual-DM n=100 panel, likelihood development search and paired surface
+  comparison are complete. The 60 likelihood held-out datasets remain sealed.
+  Bias-weighted CRPS, density, smoothed expectation, and representative real-data
+  comparisons remain.
 - Unified subject plots and PDF slices explicitly reject WNM. This is acceptable
   during the recovery stage and is deferred below.
 - `surface_browser`, demos, external fit scripts, the comparison pipeline, model
@@ -258,7 +263,7 @@ part of R2 and must be fixed before inspecting the held-out fits. n=20,
 multi-condition, and motor-noise extensions are deferred until this focused
 panel works.
 
-### R2. Establish optimization quality separately by objective
+### R2. Establish optimization quality separately by objective — likelihood selected
 
 All candidate solutions for an objective must be reevaluated through one common
 WNM scorer. Record best loss, gaps to the best available reference, boundary hits,
@@ -274,7 +279,16 @@ convergence, start variability, evaluator calls, wall time, and peak memory.
 The goal is not to declare one universal optimizer. Freeze the simplest reliable
 strategy separately for each objective.
 
-### R3. Complete WNM closed-loop recovery
+For likelihood, the development comparison selected serial 32-start SciPy
+L-BFGS-B with deterministic log-space Latin-hypercube starts. Sixteen starts had
+material misses; 64 changed only sub-threshold gaps at nearly twice the CPU time.
+The initially promising hierarchical-plus-polish search failed on an expanded
+panel because its zoom was sensitive to lattice alignment. This settles the
+likelihood search for the focused held-out confirmation, not the other three
+objectives. Detailed traces and thresholds are recorded in the external recovery
+artifact.
+
+### R3. Complete WNM closed-loop recovery — likelihood development complete
 
 - Run likelihood and bias-weighted-CRPS recovery first; these are the strongest
   parameter-recovery tests.
@@ -289,7 +303,13 @@ strategy separately for each objective.
   do not generalize its `sd_feat` result to WNM likelihood or distributional
   recovery.
 
-### R4. Run paired recovery from the actual DM observer
+The actual-DM likelihood development fits now provide the first result: 72.5% of
+datasets recovered all three parameters within a factor of 1.5, with median
+per-dataset joint log-RMSE 0.150. Broad/weak cases remained hardest. This is a
+finite-sample recovery result under an independently checked search; it does not
+replace the pending BWCRPS and curve-objective analyses.
+
+### R4. Run paired recovery from the actual DM observer — likelihood development complete
 
 Generate the main synthetic panel with the actual DM observer simulator, not WNM
 or the surface NN. Fit every dataset with both:
@@ -310,6 +330,13 @@ cost. Do not compare only each model's native training loss.
 The first pass is limited to the frozen n=100 single-condition panel from R1.
 Broader condition structures and motor recovery are not prerequisites for this
 first comparison.
+
+For the 120 likelihood development datasets, WNM beat the deployed surface
+pipeline on common-grid NLL in 78.3% of pairs. Like-for-like global joint
+log-RMSE was 0.410 for WNM versus 0.453 for surface; median per-dataset values
+were 0.150 versus 0.189. Bias-SD and asymmetry curve summaries favored WNM;
+mean-bias CCC favored WNM while its median RMSE was slightly higher. The 60
+held-out `_2` datasets remain to be run once with the frozen likelihood search.
 
 ### R5. Run paired representative real-data fits
 

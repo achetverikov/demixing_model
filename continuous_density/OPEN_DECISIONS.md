@@ -11,9 +11,21 @@ Ordered by when the plan needs them settled.
 
 ## 1. Objective-specific WNM search and start budgets (active in recovery R2)
 
-**Status: no production search or start count has been selected.** The generic
-continuous optimizer's default of 8 starts remains a placeholder, not a validated
-configuration.
+**Status: the focused single-condition likelihood search is selected; the other
+retained objectives are still open.** The held-out likelihood confirmation uses
+serial SciPy L-BFGS-B with 32 deterministic log-space Latin-hypercube starts,
+seed 0, artifact bounds, 500 iterations, `ftol=1e-9`, `gtol=1e-6`, and JAX
+float32. The generic continuous optimizer's default of 8 starts remains a
+placeholder and has not become a universal production default.
+
+On the likelihood development budget panel, 16 starts had two material misses,
+32 reached the 0.001-NLL gate on every dataset, and 64 only reduced
+sub-threshold gaps while nearly doubling median CPU time. A log-hierarchical
+search with gradient polishing looked strong on the first pilot but failed on
+the expanded panel because the zoom depended on lattice alignment. The complete
+120-dataset development run then finished with at least 24 converged starts per
+dataset. Detailed protocol and results are stored under
+`$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`.
 
 `continuous_optimizer.minimize_continuous` defaults to a placeholder `n_starts`.
 The budget materially decides the answer:

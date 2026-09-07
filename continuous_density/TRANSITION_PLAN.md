@@ -7,9 +7,13 @@ limited to recovery and the search, prediction, and fitting support required to
 attribute its failures (audit R1--R6). Plotting/browser integration, downstream
 rollout and regeneration, default promotion, and surface-NN retirement are
 deferred until those recovery gates are met. A recovery runner and initial n=20
-density panels now exist. The first actual-DM n=100 single-condition dataset panel
-is also frozen and generated, but has not been fitted. Statements below that no
-recovery runner or data were found describe the 2026-09-06 baseline.
+density panels now exist. The first actual-DM n=100 single-condition panel is
+frozen and generated. Its 120 development datasets have been fitted with the
+deployed surface NN and with the development-selected 32-start WNM likelihood
+search; the 60 held-out datasets remain sealed. Objective-specific WNM search
+and recovery work continues for bias-weighted CRPS, density, and smoothed
+expectation. Statements below that no recovery runner or data were found
+describe the 2026-09-06 baseline.
 
 Prepared from the current working tree of the inner `demixing_model` repository
 (HEAD `12f5206`, with existing uncommitted changes), the 4.1q artifacts, and the
@@ -513,7 +517,8 @@ approximations and gradients; agreement of empirical targets does not establish 
    versus many subjects. A reused cache may beat repeated continuous fits even if
    its first build is costly. Report lattice spacing/discretization separately from
    optimization failures. The choice is empirical: retain hierarchical/cached
-   search, use gradients, or choose a simple hybrid based on the held-out tradeoff.
+   search, use gradients, or choose a simple hybrid based on the development
+   tradeoff, then confirm the frozen choice once on held-out cases.
    Predeclare acceptable recovery/predictive errors and runtime budgets before the
    final panel; do not force a gradient win into the acceptance criteria.
 
@@ -536,7 +541,7 @@ approximations and gradients; agreement of empirical targets does not establish 
    | Packaging | Production-loaded weights reproduce the selected research checkpoint to numerical tolerance on fixed inputs. |
    | Mathematical contract | Normalization, circular periodicity, mirrored item mapping, and analytic motor convolution agree with independent numerical checks, including narrow and broad densities. |
    | Shared scoring | Live, cache, fitted cross-objective scores, exported curves, and likelihood rescoring agree at identical parameters within declared numerical tolerances. |
-   | Search quality | Compare hierarchical, cached exhaustive, multistart gradient, and grid-seeded polish on identical WNM problems; select a stable accuracy/cost tradeoff on held-out recovery cases. Record loss gaps to the lattice reference and start-to-start variability; historical surface-search fixtures remain unchanged. |
+   | Search quality | Compare hierarchical, cached exhaustive, multistart gradient, and grid-seeded polish on identical WNM development problems; select and freeze a stable accuracy/cost tradeoff before held-out confirmation. Record loss gaps to the best available common-rescored candidate and start-to-start variability; historical surface-search fixtures remain unchanged. |
    | Estimator integration | Smoothed WNM curves reproduce direct analytic prediction followed by the existing smoothing operation; pooled SD and report-order scores preserve their estimator definitions. |
    | Accuracy retained | Re-evaluate the final packaged checkpoints on 4.1q, separately by band and random/hard group. Recover the recorded raw-curve advantage and check fitting-smoothed curves too. Name the surface baseline per sample count before running: three different NN checkpoints are currently in play -- 4.1q compared against `pretrained/model_epoch1425_10ktrain_20samples.pkl` (also `fit_model_to_data.py`'s default) at n=20 and `results/neural_net_checkpoints_100samples_circular_4.1p/model_epoch_1500.pkl` at n=100, while the external pipeline deploys `model_epoch1500_10ktrain_{20,100}samples.pkl`. Retirement is judged against what production actually runs. |
    | Full density | Score these exact checkpoints against the surface comparators on independent references, including ungated broad cases. Start with existing benchmark histograms and a consistent bin-probability comparison; use selected fresh raw/high-precision references only if a material discrepancy remains unresolved. |
