@@ -95,3 +95,32 @@ def test_trial_counts_are_nested_within_each_dissimilarity(tmp_path):
     assert np.array_equal(small[small[:, 0] == 2, 1], [0, 1])
     assert np.array_equal(medium[medium[:, 0] == 2, 1], np.arange(5))
     assert np.array_equal(large[large[:, 0] == 2, 1], np.arange(10))
+
+
+def test_surface_baseline_uses_the_public_deployed_searches(tmp_path, monkeypatch):
+    panel.main(["--out", str(tmp_path)])
+    design, _ = panel.design_rows()
+    for seed in panel.RESPONSE_SEEDS:
+        bias = np.full((len(design), panel.RESPONSES_PER_DIFFERENCE, 2),
+                       seed, dtype=np.float32)
+        np.savez(tmp_path / f"observer_seed_{seed}.npz", design=design, bias=bias)
+
+    calls = []
+    monkeypatch.setattr(panel.subprocess, "run",
+                        lambda command, **kwargs: calls.append((command, kwargs)))
+    panel.main(["--out", str(tmp_path), "--surface-baseline",
+                "--curve-cache-root", str(tmp_path / "caches")])
+
+    frame = panel.pd.read_csv(tmp_path / "surface_baseline_input.csv")
+    assert len(frame) == 91800
+    assert frame["subject"].nunique() == 180
+    assert frame.groupby("subject").size().value_counts().to_dict() == {
+        180: 60, 450: 60, 900: 60}
+    assert len(calls) == 2
+    assert calls[0][0][calls[0][0].index("--search") + 1] == "hierarchical"
+    assert calls[1][0][calls[1][0].index("--search") + 1] == "exhaustive"
+    assert all(method in calls[0][0]
+               for method in ("likelihood", "bias_weighted_crps", "smoothed_exp"))
+    assert "density" in calls[1][0]
+    baseline = json.loads((tmp_path / "surface_baseline_manifest.json").read_text())
+    assert baseline["methods"] == list(panel.BASELINE_METHODS)

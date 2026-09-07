@@ -16,13 +16,14 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from shared import surrogate
-from continuous_density import sim_interface
+from continuous_density.design import SIM_SPAT_DIFF
 
 
 FEATURE_DIFFERENCES = np.arange(2.0, 181.0, 2.0, dtype=np.float32)
@@ -33,12 +34,22 @@ GLOBAL_ORIENTATION = 0.0
 RESPONSES_PER_DIFFERENCE = 10
 RESPONSE_COMPONENT = 0
 CODE_PATHS = (
-    Path(__file__),
     ROOT / "continuous_density/generate_training_data.py",
     ROOT / "continuous_density/sim_interface.py",
     ROOT / "surface_computation/jax_fit_main.py",
     ROOT / "surface_computation/jax_fit_functions.py",
 )
+BASELINE_CODE_PATHS = (
+    Path(__file__),
+    ROOT / "model_fit_to_data/fit_model_to_data.py",
+    ROOT / "model_fit_to_data/grid_based_multi_condition_optimizer_jax_loops.py",
+    ROOT / "model_fit_to_data/curve_cache.py",
+    ROOT / "model_fit_to_data/exhaustive_density.py",
+    ROOT / "model_fit_to_data/fitting_targets.py",
+    ROOT / "model_fit_to_data/run_fingerprint.py",
+    ROOT / "shared/utils.py",
+)
+BASELINE_METHODS = ("likelihood", "bias_weighted_crps", "smoothed_exp", "density")
 
 # One held-out tuple per regime; all other tuples are search-development cases.
 CASES = (
@@ -95,7 +106,7 @@ def protocol():
         "response_component": RESPONSE_COMPONENT,
         "stimulus_geometry": {
             "feature_centres": "[-feature_difference / 2, +feature_difference / 2]",
-            "spatial_difference_degrees": sim_interface.SPAT_DIFF,
+            "spatial_difference_degrees": SIM_SPAT_DIFF,
         },
         "simulator": {
             "function": "jax_fit_main.simulate_dual_component_bias_distribution",
@@ -151,11 +162,119 @@ def load_dataset(raw_path: Path, case_name: str, trial_count: int) -> np.ndarray
     ], axis=-1).astype(np.float32)
 
 
+def _expected_manifest():
+    manifest = protocol()
+    manifest["design_file"] = "single_condition_design.npz"
+    manifest["raw_files"] = {
+        str(seed): f"observer_seed_{seed}.npz" for seed in RESPONSE_SEEDS}
+    return manifest
+
+
+def prepare_surface_baseline(output_dir: Path):
+    """Write the common public-fitter input and its frozen baseline identity."""
+    manifest_path = output_dir / "protocol.json"
+    if json.loads(manifest_path.read_text()) != _expected_manifest():
+        raise ValueError(f"generated data do not match the current protocol: {manifest_path}")
+
+    frames = []
+    raw_digests = {}
+    for seed in RESPONSE_SEEDS:
+        raw_path = output_dir / f"observer_seed_{seed}.npz"
+        raw_digests[str(seed)] = surrogate.file_digest(raw_path)
+        for case_name, regime, split, sd_feat1, sd_feat2, sd_spat in CASES:
+            for trial_count in TRIAL_COUNTS:
+                data = load_dataset(raw_path, case_name, trial_count)
+                frames.append(pd.DataFrame({
+                    "expName": "single_condition_n100",
+                    "subject": f"{case_name}_seed{seed}_n{trial_count}",
+                    "condition": "c0",
+                    "abs_td_dist": data[:, 0],
+                    "bias_to_distr_corr": data[:, 1],
+                    "is_outlier": 0,
+                    "case": case_name,
+                    "regime": regime,
+                    "split": split,
+                    "response_seed": seed,
+                    "n_trials": trial_count,
+                    "true_sd_feat1": sd_feat1,
+                    "true_sd_feat2": sd_feat2,
+                    "true_sd_spat": sd_spat,
+                }))
+    frame = pd.concat(frames, ignore_index=True)
+    input_path = output_dir / "surface_baseline_input.csv"
+    temporary = input_path.with_suffix(".csv.partial")
+    frame.to_csv(temporary, index=False)
+    if input_path.exists():
+        if surrogate.file_digest(temporary) != surrogate.file_digest(input_path):
+            raise ValueError(f"existing baseline input does not match: {input_path}")
+        temporary.unlink()
+    else:
+        temporary.rename(input_path)
+
+    baseline = {
+        "protocol": "single_condition_surface_baseline_v1",
+        "source_protocol_sha256": surrogate.file_digest(manifest_path),
+        "raw_file_sha256": raw_digests,
+        "input_file": input_path.name,
+        "input_sha256": surrogate.file_digest(input_path),
+        "n_rows": len(frame),
+        "n_subjects": frame["subject"].nunique(),
+        "checkpoint": protocol()["fit_artifacts"]["surface_nn"],
+        "methods": list(BASELINE_METHODS),
+        "search": {
+            "density": "exhaustive_1_degree_curve_cache",
+            "likelihood": "deployed_hierarchical",
+            "bias_weighted_crps": "deployed_hierarchical",
+            "smoothed_exp": "deployed_hierarchical",
+        },
+        "circ_space": 360,
+        "skip_motor_noise": True,
+        "code_sha256": {
+            str(path.relative_to(ROOT)): surrogate.file_digest(path)
+            for path in BASELINE_CODE_PATHS
+        },
+        "held_out_policy": "fit now; do not inspect until WNM search settings are frozen",
+    }
+    baseline_path = output_dir / "surface_baseline_manifest.json"
+    if baseline_path.exists() and json.loads(baseline_path.read_text()) != baseline:
+        raise ValueError(
+            f"existing baseline manifest does not match current inputs: {baseline_path}")
+    baseline_path.write_text(json.dumps(baseline, indent=2) + "\n")
+    return input_path, baseline_path
+
+
+def surface_baseline_commands(output_dir: Path, curve_cache_root: Path):
+    """Public fitter commands implementing the currently deployed surface policy."""
+    input_path = output_dir / "surface_baseline_input.csv"
+    checkpoint = ROOT / "pretrained/model_epoch1500_10ktrain_100samples.pkl"
+    common = [
+        sys.executable, "model_fit_to_data/fit_model_to_data.py",
+        "--data-path", str(input_path), "--checkpoint-path", str(checkpoint),
+        "--circ-space", "360",
+    ]
+    return [
+        common + [
+            "--output-dir", str(output_dir / "surface_hierarchical"),
+            "--include-methods", "likelihood", "bias_weighted_crps", "smoothed_exp",
+            "--search", "hierarchical",
+        ],
+        common + [
+            "--output-dir", str(output_dir / "surface_density_exhaustive"),
+            "--include-methods", "density", "--search", "exhaustive",
+            "--curve-cache", str(curve_cache_root), "--curve-cache-step", "1.0",
+        ],
+    ]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--generate", action="store_true",
                         help="run the existing resumable DM simulator after freezing")
+    parser.add_argument("--surface-baseline", action="store_true",
+                        help="prepare the public-fitter input and run the deployed surface fit")
+    parser.add_argument("--curve-cache-root", type=Path,
+                        help="required with --surface-baseline for deployed density search")
     args = parser.parse_args(argv)
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -169,10 +288,7 @@ def main(argv=None):
     else:
         np.savez(design_path, design=design, strata=labels)
 
-    manifest = protocol()
-    manifest["design_file"] = design_path.name
-    manifest["raw_files"] = {
-        str(seed): f"observer_seed_{seed}.npz" for seed in RESPONSE_SEEDS}
+    manifest = _expected_manifest()
     manifest_path = args.out / "protocol.json"
     if manifest_path.exists() and json.loads(manifest_path.read_text()) != manifest:
         raise ValueError(
@@ -195,10 +311,17 @@ def main(argv=None):
     if args.generate:
         for command in commands:
             subprocess.run(command, cwd=ROOT, check=True)
-    else:
+    elif not args.surface_baseline:
         print("generate each response seed with:")
         for command in commands:
             print("  " + " ".join(command))
+    if args.surface_baseline:
+        if args.curve_cache_root is None:
+            parser.error("--surface-baseline requires --curve-cache-root")
+        input_path, baseline_path = prepare_surface_baseline(args.out)
+        print(f"wrote {input_path} and {baseline_path}")
+        for command in surface_baseline_commands(args.out, args.curve_cache_root):
+            subprocess.run(command, cwd=ROOT, check=True)
     return 0
 
 
