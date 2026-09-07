@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -266,6 +267,14 @@ def surface_baseline_commands(output_dir: Path, curve_cache_root: Path):
     ]
 
 
+def surface_baseline_environment():
+    """The import path used by the deployed external fitting pipeline."""
+    paths = [str(ROOT), str(ROOT / "neural_network_optimization")]
+    if os.environ.get("PYTHONPATH"):
+        paths.append(os.environ["PYTHONPATH"])
+    return {**os.environ, "PYTHONPATH": os.pathsep.join(paths)}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True, type=Path)
@@ -321,7 +330,8 @@ def main(argv=None):
         input_path, baseline_path = prepare_surface_baseline(args.out)
         print(f"wrote {input_path} and {baseline_path}")
         for command in surface_baseline_commands(args.out, args.curve_cache_root):
-            subprocess.run(command, cwd=ROOT, check=True)
+            subprocess.run(command, cwd=ROOT, check=True,
+                           env=surface_baseline_environment())
     return 0
 
 

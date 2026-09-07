@@ -122,5 +122,9 @@ def test_surface_baseline_uses_the_public_deployed_searches(tmp_path, monkeypatc
     assert all(method in calls[0][0]
                for method in ("likelihood", "bias_weighted_crps", "smoothed_exp"))
     assert "density" in calls[1][0]
+    assert all(call[1]["cwd"] == panel.ROOT and call[1]["check"] for call in calls)
+    assert all(call[1]["env"]["PYTHONPATH"].split(panel.os.pathsep)[:2] == [
+        str(panel.ROOT), str(panel.ROOT / "neural_network_optimization")]
+        for call in calls)
     baseline = json.loads((tmp_path / "surface_baseline_manifest.json").read_text())
     assert baseline["methods"] == list(panel.BASELINE_METHODS)
