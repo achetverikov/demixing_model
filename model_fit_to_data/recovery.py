@@ -1,0 +1,263 @@
+"""Parameter recovery: does minimising an objective return the parameters that
+generated the data?
+
+The forward checks this transition already has -- CCC and MAE of predicted curves
+at known parameters -- test the *forward* map. Recovery tests the inverse one, and
+they can disagree completely: an objective can reproduce a curve beautifully while
+the parameters behind it are unidentified, because several parameter sets produce
+nearly the same curve. Only recovery distinguishes "the model fits" from "the
+model's parameters mean something".
+
+Three questions the transition plan insists on separating, because a single
+number conflates them:
+
+* **Search** -- with the same surrogate, target and data, does the method find a
+  good solution reliably, and at what cost?
+* **Surrogate** -- with a common search, does the mixture recover better than the
+  network?
+* **Target/identifiability** -- does minimising this objective recover the
+  generating parameters *at all*, even with a good surrogate and search?
+
+This module runs the closed-loop panel: responses drawn from the mixture itself,
+fitted back with the mixture. That is deliberately the weaker of the two panels
+the plan requires, and it is worth being explicit about what it cannot show. A
+model fitting its own samples has no surrogate error, so this panel cannot say
+whether the mixture approximates the observer well; it can only expose wiring
+faults, gradient faults, and unidentifiability that is intrinsic to the objective.
+The main panel generates from the actual simulator and is a separate, expensive
+stage.
+
+Recovery failures come in three flavours and the record distinguishes them:
+
+* the search never found the basin (visible as loss at the fit worse than loss at
+  the truth);
+* the search found a better loss than the truth, so the objective genuinely
+  prefers other parameters -- an identifiability finding, not a search failure;
+* the search found the same loss at different parameters -- a flat direction.
+"""
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Sequence
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+
+
+@dataclass
+class RecoveryCase:
+    """One generating configuration, fixed before anything is run."""
+
+    name: str
+    #: ``[(sd_feat1, sd_feat2), ...]`` -- one pair per condition.
+    condition_feature_sds: Sequence[tuple]
+    sd_spat: float
+    sd_motor: float = 0.0
+    n_trials_per_condition: int = 400
+    #: Feature differences the design visits; ``None`` samples them uniformly.
+    feat_diff_values: Optional[Sequence[float]] = None
+
+    @property
+    def n_conditions(self) -> int:
+        return len(self.condition_feature_sds)
+
+    def truth_vector(self, fit_motor: bool = False) -> np.ndarray:
+        """The generating parameters in the optimizer's own layout."""
+        values: List[float] = []
+        for sd_feat1, sd_feat2 in self.condition_feature_sds:
+            values.extend([float(sd_feat1), float(sd_feat2)])
+        values.append(float(self.sd_spat))
+        if fit_motor:
+            values.append(float(self.sd_motor))
+        return np.asarray(values, dtype=np.float64)
+
+
+@dataclass
+class RecoveryResult:
+    """What one replicate produced, including the parts that say it failed."""
+
+    case: str
+    replicate: int
+    truth: np.ndarray
+    recovered: np.ndarray
+    names: tuple
+    loss_at_truth: float
+    loss_at_fit: float
+    loss_spread: float
+    n_starts: int
+    n_converged: int
+    at_bound: tuple
+    runtime_seconds: float
+    start_losses: List[float] = field(default_factory=list)
+
+    @property
+    def diagnosis(self) -> str:
+        """Which of the three failure modes this replicate shows.
+
+        The distinction matters more than the error magnitude: a search failure
+        is fixed by more starts, an identifiability failure is not fixed by
+        anything and constrains what the parameter can be said to mean.
+        """
+        if self.loss_at_fit > self.loss_at_truth + 1e-9:
+            return "search_failed"          # never reached the generating basin
+        if self.loss_at_fit < self.loss_at_truth - 1e-9:
+            return "objective_prefers_other_parameters"
+        return "loss_tied_with_truth"       # flat direction, or exact recovery
+
+    def errors(self) -> Dict[str, float]:
+        """Signed and log-ratio error per parameter.
+
+        Log ratio because these are multiplicative scales: being 5 degrees out at
+        200 is not the error that being 5 degrees out at 5 is.
+        """
+        record: Dict[str, float] = {}
+        for name, true_value, fitted in zip(self.names, self.truth, self.recovered):
+            record[f"signed_error_{name}"] = float(fitted - true_value)
+            record[f"log_ratio_{name}"] = float(np.log(fitted / true_value))
+        return record
+
+    def row(self) -> Dict[str, object]:
+        """Flat record, one per replicate."""
+        record: Dict[str, object] = {
+            "case": self.case, "replicate": self.replicate,
+            "loss_at_truth": self.loss_at_truth, "loss_at_fit": self.loss_at_fit,
+            "loss_gap": self.loss_at_fit - self.loss_at_truth,
+            "diagnosis": self.diagnosis, "loss_spread": self.loss_spread,
+            "n_starts": self.n_starts, "n_converged": self.n_converged,
+            "at_bound": ",".join(self.at_bound), "runtime_seconds": self.runtime_seconds,
+        }
+        for name, true_value, fitted in zip(self.names, self.truth, self.recovered):
+            record[f"true_{name}"] = float(true_value)
+            record[f"fit_{name}"] = float(fitted)
+        record.update(self.errors())
+        return record
+
+
+def sample_mixture_responses(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff,
+                             rng, sd_motor: float = 0.0) -> np.ndarray:
+    """Draw one bias per trial from the mixture at each trial's feature difference.
+
+    Sampling from the model that will be fitted is what makes this the *closed
+    loop* panel: it removes surrogate error entirely, so anything that fails here
+    is wiring, gradients, or the objective itself.
+    """
+    feat_diff = np.asarray(feat_diff, dtype=np.float64)
+    rows = jnp.stack([
+        jnp.full(feat_diff.shape, float(sd_feat1), jnp.float32),
+        jnp.full(feat_diff.shape, float(sd_feat2), jnp.float32),
+        jnp.full(feat_diff.shape, float(sd_spat), jnp.float32),
+        jnp.asarray(feat_diff, jnp.float32)], axis=-1)
+
+    distribution = predictor.distribution(rows, validate=False,
+                                          sd_motor=sd_motor or None)
+    weights = np.asarray(jnp.exp(distribution["log_pi"]), dtype=np.float64)
+    means = np.asarray(distribution["mu"], dtype=np.float64)
+    sigmas = np.asarray(distribution["sigma"], dtype=np.float64)
+
+    # One component per trial, then a normal about its mean, then wrapped. The
+    # wrap is what makes it a *wrapped* normal rather than a truncated one.
+    cumulative = np.cumsum(weights, axis=-1)
+    picks = (rng.random((len(feat_diff), 1)) < cumulative).argmax(axis=-1)
+    rows_index = np.arange(len(feat_diff))
+    draws = rng.normal(means[rows_index, picks], sigmas[rows_index, picks])
+    return ((draws + 180.0) % 360.0) - 180.0
+
+
+def generate_case_data(predictor, case: RecoveryCase, rng) -> Dict[str, np.ndarray]:
+    """``{condition: (n_trials, 2)}`` of ``[feat_diff, bias]`` in model degrees."""
+    datasets: Dict[str, np.ndarray] = {}
+    for index, (sd_feat1, sd_feat2) in enumerate(case.condition_feature_sds):
+        if case.feat_diff_values is None:
+            feat_diff = rng.uniform(2.0, 178.0, case.n_trials_per_condition)
+        else:
+            feat_diff = rng.choice(np.asarray(case.feat_diff_values, dtype=np.float64),
+                                   case.n_trials_per_condition)
+        bias = sample_mixture_responses(predictor, sd_feat1, sd_feat2, case.sd_spat,
+                                        feat_diff, rng, case.sd_motor)
+        datasets[f"c{index}"] = np.stack([feat_diff, bias], axis=-1).astype(np.float32)
+    return datasets
+
+
+def run_replicate(predictor, case: RecoveryCase, replicate: int, *, objective: str,
+                  build_targets, fit_continuous, score_all_conditions,
+                  curve_losses, energy_score, d_circ_matrix, feat_diff_grid,
+                  emp_density_weights_sd: float, n_starts: int, seed: int,
+                  fit_motor: bool = False) -> RecoveryResult:
+    """Generate, fit without revealing the truth, and score both.
+
+    The objective is evaluated *at the generating parameters* as well as at the
+    fit. Without that, a failure cannot be attributed: a large parameter error
+    with a worse-than-truth loss is a search failure, the same error with a
+    better-than-truth loss is the objective preferring other parameters, and
+    those call for opposite responses.
+    """
+    rng = np.random.default_rng([seed, replicate])
+    datasets = generate_case_data(predictor, case, rng)
+    targets = build_targets(datasets)
+
+    trials = [(jnp.asarray(values[:, 0]), jnp.asarray(values[:, 1]))
+              for values in datasets.values()]
+
+    started = time.time()
+    fit = fit_continuous(
+        predictor, targets, list(datasets), objective=objective,
+        curve_losses=curve_losses, energy_score=energy_score,
+        d_circ_matrix=d_circ_matrix, feat_diff_grid=feat_diff_grid,
+        emp_density_weights_sd=emp_density_weights_sd, condition_trials=trials,
+        fit_motor=fit_motor, n_starts=n_starts, seed=seed, verbosity=0)
+    runtime = time.time() - started
+
+    truth = case.truth_vector(fit_motor=fit_motor)
+    loss_at_truth = float(score_all_conditions(
+        objective, predictor, targets, jnp.asarray(truth), curve_losses=curve_losses,
+        energy_score=energy_score, d_circ_matrix=d_circ_matrix,
+        feat_diff_grid=feat_diff_grid, emp_density_weights_sd=emp_density_weights_sd,
+        condition_trials=trials, fit_motor=fit_motor))
+
+    recovered = np.array(
+        [fit["condition_results"][name][key]
+         for name in datasets for key in ("sd_feat1", "sd_feat2")]
+        + [fit["shared_params"]["sd_spat"]]
+        + ([fit["shared_params"]["sd_motor"]] if fit_motor else []))
+
+    names = tuple(
+        [f"{key}_c{index}" for index in range(case.n_conditions)
+         for key in ("sd_feat1", "sd_feat2")]
+        + ["sd_spat"] + (["sd_motor"] if fit_motor else []))
+
+    return RecoveryResult(
+        case=case.name, replicate=replicate, truth=truth, recovered=recovered,
+        names=names, loss_at_truth=loss_at_truth, loss_at_fit=float(fit["best_loss"]),
+        loss_spread=float(fit["loss_spread"]), n_starts=int(fit["n_starts"]),
+        n_converged=int(fit["n_converged"]), at_bound=tuple(fit["at_bound"]),
+        runtime_seconds=runtime, start_losses=list(fit["start_losses"]))
+
+
+def summarise(results: Sequence[RecoveryResult]) -> Dict[str, object]:
+    """Per-parameter bias and RMSE, and the failure mix.
+
+    Correlation between fitted and true parameters is deliberately not reported:
+    it is high whenever the design spans a wide range, regardless of whether any
+    individual estimate is any good.
+    """
+    if not results:
+        raise ValueError("no replicates to summarise")
+
+    names = results[0].names
+    summary: Dict[str, object] = {
+        "n_replicates": len(results),
+        "diagnoses": {diagnosis: sum(r.diagnosis == diagnosis for r in results)
+                      for diagnosis in ("search_failed",
+                                        "objective_prefers_other_parameters",
+                                        "loss_tied_with_truth")},
+        "n_with_boundary_hits": sum(1 for r in results if r.at_bound),
+        "median_runtime_seconds": float(np.median([r.runtime_seconds for r in results])),
+    }
+    for index, name in enumerate(names):
+        log_ratios = np.array([np.log(r.recovered[index] / r.truth[index])
+                               for r in results])
+        summary[f"{name}_median_log_ratio"] = float(np.median(log_ratios))
+        summary[f"{name}_rmse_log_ratio"] = float(np.sqrt(np.mean(log_ratios ** 2)))
+    return summary
