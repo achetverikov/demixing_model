@@ -31,9 +31,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import multiprocessing
+import os
 import sys
 import time
 from pathlib import Path
+from typing import Dict
 
 import jax.numpy as jnp
 import numpy as np
@@ -170,6 +173,96 @@ def run_noise_free(predictor, feat_grid, *, objective, n_starts, seed):
     return [result]
 
 
+#: Set once per worker process, so the surrogate is loaded and the grids built
+#: once rather than per case.
+_WORKER: Dict[str, object] = {}
+
+
+def _die_with_parent():
+    """Ask the kernel to kill this worker when its parent dies.
+
+    Without this the pool outlives a killed run. `ProcessPoolExecutor` children
+    are spawned, so their command line is `spawn_main` and a `pkill` aimed at the
+    script's name misses them entirely: an interrupted panel left 22 workers
+    holding about a gigabyte each for over an hour, which exhausted swap and then
+    surfaced as unrelated `OSError: Cannot allocate memory` failures in the test
+    suite. Linux-only, and best-effort -- a platform without PR_SET_PDEATHSIG
+    just keeps the old behaviour.
+    """
+    try:
+        import ctypes
+        PR_SET_PDEATHSIG = 1
+        ctypes.CDLL("libc.so.6").prctl(PR_SET_PDEATHSIG, 9, 0, 0, 0)
+    except Exception:  # pragma: no cover - platform dependent
+        pass
+
+
+def _init_worker(checkpoint, objective, n_starts, seed, emp_density_weights_sd):
+    """Load the surrogate once in each worker.
+
+    The cases are independent fits, so running them in separate processes gives
+    the same answers as running them in a loop: each fit is a deterministic
+    scipy L-BFGS-B search over data generated from its own case and seed, and
+    nothing crosses between them. What parallelism must not change is the
+    numbers, and here it cannot.
+    """
+    _die_with_parent()
+    feat_grid, d_circ = _grids()
+    _WORKER.update(
+        predictor=predictor_from_surrogate(
+            surrogate.load_surrogate(checkpoint_path=Path(checkpoint))),
+        feat_grid=feat_grid, d_circ=d_circ, objective=objective,
+        n_starts=n_starts, seed=seed,
+        emp_density_weights_sd=emp_density_weights_sd)
+
+
+def _run_one(payload):
+    """One replicate, in a worker. Returns the result for the parent to collect."""
+    case, replicate = payload
+    return R.run_replicate(
+        _WORKER["predictor"], case, replicate, objective=_WORKER["objective"],
+        build_targets=lambda datasets: _build_targets(
+            datasets, _WORKER["feat_grid"], _WORKER["d_circ"]),
+        fit_continuous=fit_continuous, score_all_conditions=S.score_all_conditions,
+        curve_losses=_compute_curve_losses, energy_score=bwcrps_energy_score,
+        d_circ_matrix=_WORKER["d_circ"], feat_diff_grid=_WORKER["feat_grid"],
+        emp_density_weights_sd=_WORKER["emp_density_weights_sd"],
+        n_starts=_WORKER["n_starts"], seed=_WORKER["seed"])
+
+
+def run_replicates_parallel(checkpoint, cases, *, objective, n_starts, seed,
+                            n_replicates, n_workers, on_result=None):
+    """The same panel, one process per case.
+
+    This search is many small sequential L-BFGS-B steps driving a tiny JAX graph
+    from Python, so it is dispatch-latency bound: measured at roughly 5ms per
+    evaluation with the GPU at 0-7% utilisation. It does not want a bigger
+    device, it wants more of them running independently, which is what this does.
+
+    Results are collected as they finish and sorted by case before writing, so
+    the artifact does not depend on completion order.
+    """
+    from concurrent.futures import ProcessPoolExecutor
+
+    context = multiprocessing.get_context("spawn")
+    work = [(case, replicate) for case in cases for replicate in range(n_replicates)]
+    results = []
+    with ProcessPoolExecutor(
+            max_workers=n_workers, mp_context=context, initializer=_init_worker,
+            initargs=(str(checkpoint), objective, n_starts, seed,
+                      EMP_DENSITY_WEIGHTS_SD)) as pool:
+        for outcome in pool.map(_run_one, work, chunksize=1):
+            print(f"{outcome.case} replicate {outcome.replicate}: {outcome.diagnosis}, "
+                  f"worst |log ratio| "
+                  f"{np.max(np.abs(np.log(outcome.recovered / outcome.truth))):.3f}, "
+                  f"{outcome.runtime_seconds:.0f}s", flush=True)
+            results.append(outcome)
+            if on_result is not None:
+                on_result(outcome)
+    results.sort(key=lambda outcome: (outcome.case, outcome.replicate))
+    return results
+
+
 def run_replicates(predictor, feat_grid, d_circ, cases, *, objective, n_starts, seed,
                    n_replicates, on_result=None):
     """Every replicate of every case, calling ``on_result`` as each one lands.
@@ -200,8 +293,34 @@ def run_replicates(predictor, feat_grid, d_circ, cases, *, objective, n_starts, 
     return results
 
 
+def _replace_atomically(temporary: Path, path: Path, attempts: int = 5):
+    """Rename over ``path``, working around a v9fs quirk.
+
+    The results tree is a 9p mount (WSL), where ``os.replace`` over an existing
+    file intermittently raises ``PermissionError`` even though both paths are
+    writable -- it killed a four-cell panel 134 fits into the third cell. Retry
+    briefly, then unlink the target first, which the same filesystem does allow.
+
+    The unlink path is not atomic: for an instant no complete file exists. That
+    is a strictly better failure than the alternative -- a partially written CSV
+    that pandas reads as a short row -- because the absence is obvious and the
+    truncation is not. The rows are all still in memory and the next write
+    restores the file.
+    """
+    for attempt in range(attempts):
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                break
+            time.sleep(0.2 * (attempt + 1))
+    path.unlink(missing_ok=True)
+    temporary.rename(path)
+
+
 def _incremental_writer(path: Path):
-    """Append each replicate's row to the CSV as it finishes.
+    """Rewrite the CSV of everything finished so far, as each replicate lands.
 
     Written through a temporary file and renamed, so an interrupted run leaves a
     complete CSV of the replicates that did finish rather than a half-written
@@ -213,7 +332,7 @@ def _incremental_writer(path: Path):
         rows.append(outcome.row())
         temporary = path.with_suffix(".csv.partial")
         pd.DataFrame(rows).to_csv(temporary, index=False)
-        temporary.replace(path)
+        _replace_atomically(temporary, path)
 
     return write
 
@@ -248,6 +367,10 @@ def main(argv=None):
                         help="random panel: conditions per case, sharing one sd_spat")
     parser.add_argument("--sd-motor", type=float, default=0.0,
                         help="random panel: motor SD to generate at and hold fixed in the fit")
+    parser.add_argument("--n-workers", type=int, default=1,
+                        help="random panel: run this many cases in parallel processes. "
+                             "The cases are independent deterministic fits, so this "
+                             "changes the wall time and not the numbers.")
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--objective", default="density")
     parser.add_argument("--n-samples", type=int, default=20)
@@ -265,6 +388,14 @@ def main(argv=None):
                         default=[400, 2000, 10000],
                         help="trials per condition for the sample-size panel")
     args = parser.parse_args(argv)
+
+    if args.n_workers > 1:
+        # Each worker is a single-threaded JAX-on-CPU process. Without this they
+        # each try to use every core and the pool spends its time contending.
+        os.environ.setdefault("JAX_PLATFORMS", "cpu")
+        os.environ.setdefault(
+            "XLA_FLAGS", "--xla_cpu_multi_thread_eigen=false "
+                         "intra_op_parallelism_threads=1")
 
     checkpoint = args.checkpoint or surrogate.WNM_DEFAULTS[args.n_samples]
     if not checkpoint.exists():
@@ -293,10 +424,17 @@ def main(argv=None):
             surrogate.search_bounds(predictor.domain),
             np.random.default_rng(args.seed), sd_motor=args.sd_motor)
         args.out.mkdir(parents=True, exist_ok=True)
-        results = run_replicates(
-            predictor, feat_grid, d_circ, cases, objective=args.objective,
-            n_starts=args.n_starts, seed=args.seed, n_replicates=args.n_replicates,
-            on_result=_incremental_writer(args.out / f"{args.panel}_rows.csv"))
+        writer = _incremental_writer(args.out / f"{args.panel}_rows.csv")
+        if args.n_workers > 1:
+            results = run_replicates_parallel(
+                checkpoint, cases, objective=args.objective, n_starts=args.n_starts,
+                seed=args.seed, n_replicates=args.n_replicates,
+                n_workers=args.n_workers, on_result=writer)
+        else:
+            results = run_replicates(
+                predictor, feat_grid, d_circ, cases, objective=args.objective,
+                n_starts=args.n_starts, seed=args.seed,
+                n_replicates=args.n_replicates, on_result=writer)
 
     args.out.mkdir(parents=True, exist_ok=True)
     rows = pd.DataFrame([result.row() for result in results])

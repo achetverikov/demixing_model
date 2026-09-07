@@ -498,3 +498,34 @@ def test_the_same_seed_gives_the_same_truths_at_every_trial_count():
     # against: the shared prefix is the same but the correlation is over a
     # different sample.
     assert len(truths(25, 100)) != len(truths(50, 100))
+
+
+def test_running_cases_in_parallel_gives_the_same_numbers(tmp_path):
+    """Parallelism here must be a wall-clock change and nothing else.
+
+    Each case is an independent deterministic L-BFGS-B search over data seeded
+    from its own case, so nothing crosses between workers -- but that is the kind
+    of claim that is easy to assert and easy to have wrong, and a panel whose
+    numbers depended on the worker count would be worthless. Checked on the
+    fitted parameters and both losses, not just the diagnosis.
+    """
+    import run_recovery_panel as panel
+
+    common = ["--panel", "random", "--n-cases", "4", "--n-replicates", "1",
+              "--n-trials", "300", "--n-starts", "3", "--seed", "0"]
+    serial, parallel = tmp_path / "serial", tmp_path / "parallel"
+    assert panel.main(common + ["--out", str(serial)]) == 0
+    assert panel.main(common + ["--out", str(parallel), "--n-workers", "4"]) == 0
+
+    def rows(directory):
+        return sorted(csv.DictReader((directory / "random_rows.csv").open()),
+                      key=lambda row: row["case"])
+
+    left, right = rows(serial), rows(parallel)
+    assert len(left) == len(right) == 4
+    for one, other in zip(left, right):
+        assert one["case"] == other["case"]
+        for column, value in one.items():
+            if column.startswith(("fit_", "true_", "log_ratio_")) or column in (
+                    "loss_at_fit", "loss_at_truth", "diagnosis"):
+                assert value == other[column], (one["case"], column)
