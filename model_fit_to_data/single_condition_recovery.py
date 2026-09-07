@@ -184,7 +184,7 @@ def main(argv=None):
     commands = []
     for seed in RESPONSE_SEEDS:
         commands.append([
-            sys.executable, "continuous_density/generate_training_data.py",
+            sys.executable, "-m", "continuous_density.generate_training_data",
             "--design-file", str(design_path),
             "--n-simulations", str(RESPONSES_PER_DIFFERENCE),
             "--n-samples", str(N_SAMPLES), "--seed", str(seed),

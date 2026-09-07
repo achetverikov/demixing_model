@@ -73,6 +73,8 @@ def test_the_generation_entry_point_runs_all_five_frozen_seeds(
     assert len(calls) == 5
     assert [call[0][call[0].index("--seed") + 1] for call in calls] == [
         "0", "1", "2", "3", "4"]
+    assert all(call[0][1:3] == ["-m", "continuous_density.generate_training_data"]
+               for call in calls)
     assert all(call[1] == {"cwd": panel.ROOT, "check": True} for call in calls)
 
 
