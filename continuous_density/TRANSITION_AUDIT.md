@@ -58,6 +58,9 @@ browser work, rollout, regeneration, and removal of the surface NN are deferred.
 - Likelihood postprocessing can resolve and rescore a WNM fit.
 - Initial n=20 WNM closed-loop density recovery, random-range panels, and a
   noise-free start-count sweep over hard range-panel cases have run.
+- The first actual-DM data panel is frozen and generated: n=100, single
+  condition, no motor noise, with uniformly allocated dissimilarities and nested
+  180/450/900-trial datasets. No fits to this panel have run yet.
 
 ### Partial or not yet completed
 
@@ -67,9 +70,10 @@ browser work, rollout, regeneration, and removal of the surface NN are deferred.
 - The direct prediction command identifies WNM artifacts but still constructs
   the surface-only optimizer, so it does not yet provide a working WNM prediction
   path.
-- Only a WNM-generated, n=20, density-objective recovery campaign has been run.
-  The actual DM observer, n=100, likelihood, bias-weighted CRPS, smoothed
-  expectation, paired surface-NN baseline, and full real-data comparisons remain.
+- Only the earlier WNM-generated, n=20 density campaign has been fitted. The new
+  actual-DM n=100 panel still needs objective-specific WNM search comparisons,
+  held-out WNM and surface-NN fits, and common predictive scoring. Likelihood,
+  bias-weighted CRPS, smoothed expectation, and full real-data comparisons remain.
 - Unified subject plots and PDF slices explicitly reject WNM. This is acceptable
   during the recovery stage and is deferred below.
 - `surface_browser`, demos, external fit scripts, the comparison pipeline, model
@@ -235,18 +239,24 @@ whether a WNM failure is merely an optimization failure.
 Only code required to execute and interpret the following analyses is on the
 current critical path.
 
-### R1. Freeze the paired recovery design
+### R1. Freeze the first paired recovery data design — completed
 
-- Use both observer sample counts, n=20 and n=100.
-- Use matched truth vectors, simulated datasets, response seeds, and trial counts
-  across every search and surrogate arm.
-- Include single- and multi-condition designs, asymmetric feature noise in both
-  orders, low and high spatial d-prime, narrow and broad responses, and motor-off
-  and motor-on cases where the objective identifies motor noise.
-- Separate development cases used to choose search settings from held-out cases
-  used to report performance.
-- Predeclare the shared evaluation metrics and practical optimization-gap and
-  runtime criteria before inspecting held-out results.
+- Start with n=100, one condition, and no motor noise.
+- Use 12 fixed truth tuples: three each in narrow, ordinary asymmetric, reversed
+  asymmetric, and broad/weak regimes. Eight are development tuples and one from
+  each regime is held out.
+- At every tuple, allocate trials uniformly over feature differences 2:2:180,
+  with global orientation fixed at zero. Generate five response seeds and nested
+  180/450/900-trial datasets (2/5/10 responses per dissimilarity).
+- Reuse the identical generated datasets across search and surrogate arms.
+- The exact protocol, simulator/code hashes, checkpoint hashes, design, and raw
+  responses are under
+  `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`.
+
+Shared evaluation metrics and practical optimization-gap/runtime criteria are
+part of R2 and must be fixed before inspecting the held-out fits. n=20,
+multi-condition, and motor-noise extensions are deferred until this focused
+panel works.
 
 ### R2. Establish optimization quality separately by objective
 
@@ -296,6 +306,10 @@ Evaluate both surrogate pipelines against independent DM references using common
 quantities: parameter errors, bias/asymmetry/spread errors by dissimilarity band,
 shared density loss, shared BWCRPS, common likelihood-mass scores, and operational
 cost. Do not compare only each model's native training loss.
+
+The first pass is limited to the frozen n=100 single-condition panel from R1.
+Broader condition structures and motor recovery are not prerequisites for this
+first comparison.
 
 ### R5. Run paired representative real-data fits
 

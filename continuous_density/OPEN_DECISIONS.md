@@ -176,6 +176,9 @@ do not produce.
   regenerated on K12.
 - **Declared domain**: `sd_feat [2.5, 200]`, `sd_spat [5, 200]`,
   `feat_diff [0.5, 180]`.
+- **First actual-DM recovery data design**: n=100, single condition, zero motor
+  noise, 12 fixed truth tuples, five response seeds, and nested 180/450/900 trials
+  uniformly allocated over 2:2:180 dissimilarity. Broader panels wait for this one.
 - **`n_samples` is the parameter**: exactly two production artifacts at a time,
   one per observer model, selected through `shared.surrogate`; other checkpoints
   remain reachable by name.

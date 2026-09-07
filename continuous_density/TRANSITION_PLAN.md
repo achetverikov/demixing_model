@@ -7,8 +7,9 @@ limited to recovery and the search, prediction, and fitting support required to
 attribute its failures (audit R1--R6). Plotting/browser integration, downstream
 rollout and regeneration, default promotion, and surface-NN retirement are
 deferred until those recovery gates are met. A recovery runner and initial n=20
-density panels now exist; statements below that none were found describe the
-2026-09-06 baseline.
+density panels now exist. The first actual-DM n=100 single-condition dataset panel
+is also frozen and generated, but has not been fitted. Statements below that no
+recovery runner or data were found describe the 2026-09-06 baseline.
 
 Prepared from the current working tree of the inner `demixing_model` repository
 (HEAD `12f5206`, with existing uncommitted changes), the 4.1q artifacts, and the
@@ -437,25 +438,23 @@ approximations and gradients; agreement of empirical targets does not establish 
    data-to-model angle conventions. Reuse the actual simulator and result-handling
    helpers; do not copy BBZ's different generative model or create a second EM code.
 
-   Proposed fixed starting design: 12 generating groups (4 single-condition,
-   4 multi-condition without motor noise, 4 multi-condition with shared motor
-   noise), both observer sample counts, 2 behavioral trial-count levels (100 and
-   500 per condition), and 5 independent response seeds: 240 synthetic group
-   datasets. Freeze actual parameter vectors and condition counts before running.
-   Cover interior and boundary values, asymmetric feature noise in both orders,
-   high/low d-prime, concentrated/broad responses, and realistic discrete as well
-   as continuous dissimilarity designs. Respect trial-count imbalance in selected
-   multi-condition cases. Observer n=20/100 and behavioral trials=100/500 are
-   different experimental axes. If production datasets need other trial counts,
-   settle that before simulation rather than changing the panel after results.
+   Start with a focused n=100 single-condition panel. It contains 12 fixed truth
+   tuples: three each in narrow, ordinary asymmetric, reversed asymmetric, and
+   broad/weak regimes. Eight tuples are for search development and one from each
+   regime is held out. Motor noise is zero and global orientation is fixed at zero.
+   Trials are uniform over feature differences 2:2:180 at nested totals of 180,
+   450, and 900 (2, 5, and 10 responses per dissimilarity), with five independent
+   response seeds. The actual-DM simulator data have been generated once and are
+   reused unchanged across all searches and both surrogate pipelines. The exact
+   protocol and generated data live under
+   `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`.
 
-   Partition generating groups into development and held-out groups, stratified
-   by single/multi-condition and motor status. Use development groups for starts,
-   step sizes, stopping tolerances and numerical score settings; keep response
-   replicates and optimizer-start seeds separate. Freeze the selected settings
-   before scoring held-out groups. Pair every optimizer on identical synthetic
-   datasets and give it the same bounds and target construction. Do not initialize
-   main fits at the truth; truth-start runs are separately labeled diagnostics.
+   Use the development tuples for starts, step sizes, stopping tolerances and
+   numerical score settings; keep response seeds and optimizer-start seeds
+   separate. Freeze selected settings before scoring the held-out tuples. Do not
+   initialize main fits at the truth; truth-start runs are separately labeled
+   diagnostics. Expand to n=20, multi-condition, motor-noise, or alternative
+   stimulus schedules only after this first panel works.
 
    Cover the four objectives retained by `bias_model_comparison`: `likelihood`,
    `bias_weighted_crps`, `density`, and `smoothed_exp`. Check optimization quality
