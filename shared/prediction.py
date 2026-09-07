@@ -407,12 +407,17 @@ class WrappedMixturePredictor(BiasPredictor):
             validate_params(params, domain=self.domain, name=f"{self.artifact} inputs")
         dist = self.model.apply(self.variables, params)
         effective = self.sd_motor if sd_motor is None else sd_motor
-        if sd_motor is None:
-            # A concrete zero means "no motor noise" and is skipped entirely, so
-            # the no-motor case stays bit-identical to a predictor built without
-            # one rather than being convolved with a zero-width kernel.
-            if not self.sd_motor:
-                return dist
+        # A *concrete* zero means "no motor noise" and is skipped entirely, so the
+        # no-motor case stays bit-identical to a predictor built without one
+        # rather than being convolved with a zero-width kernel. This holds for an
+        # explicit override as much as for the predictor's own SD: a caller that
+        # passes 0.0 is asking for no motor noise, and previously that request was
+        # honoured only when the predictor happened to store zero too, so
+        # `sd_motor=0.0` against a motor-carrying predictor silently kept the
+        # predictor's noise. A traced SD cannot be inspected and goes through the
+        # convolution, which is what lets the search fit the motor SD.
+        if isinstance(effective, (int, float, np.floating, np.integer)) and not effective:
+            return dist
         return self._wm.add_motor_noise(dist, effective)
 
     def component_distribution(self, params, component: int, validate: bool = True):
@@ -685,7 +690,15 @@ def mixture_plot_curves(predictor, params_by_row, feat_grid, bin_weights=None,
         bin_weights: ``(n_rows, n_bins, n_feat)`` for the pooled SD panel, or
             ``None`` to skip it.
         sd_motor_by_row: per-row motor SD, or ``None`` for no motor noise. Motor
-            noise is per fitted row because it is a fitted parameter.
+            noise is per fitted row because it is a fitted parameter. These
+            override the predictor's own stored SD, zero included -- a row of 0
+            means no motor noise even when the predictor carries some.
+        emp_density_weights_sd, density_smoothing_sigma: **must be the settings
+            the fit ran under**, not this function's defaults. The asymmetry
+            curve is smoothed here exactly as the density objective smooths its
+            target, so a fit run at one sigma and plotted at another shows a
+            curve the fit never optimised, with nothing in the plot to say so.
+            The caller holds the fit record; this function cannot check it.
 
     Returns:
         ``{"bias", "asymmetry", "sd"}`` each ``(n_rows, n_feat)``, plus
@@ -696,6 +709,11 @@ def mixture_plot_curves(predictor, params_by_row, feat_grid, bin_weights=None,
     n_rows = len(params_by_row)
     motors = (np.zeros(n_rows) if sd_motor_by_row is None
               else np.asarray(sd_motor_by_row, dtype=np.float64))
+    if not np.all(np.isfinite(motors)) or np.any(motors < 0):
+        raise ValueError(
+            f"motor SDs must be finite and non-negative, got {list(motors)}: motor noise "
+            "enters as a variance, so a negative SD draws exactly its positive twin's curve "
+            "while the plot's record says otherwise.")
     if len(motors) != n_rows:
         raise ValueError(
             f"{len(motors)} motor SDs for {n_rows} parameter rows; they are paired "
@@ -714,9 +732,14 @@ def mixture_plot_curves(predictor, params_by_row, feat_grid, bin_weights=None,
             jnp.full(feat_grid.shape, float(sd_feat2), jnp.float32),
             jnp.full(feat_grid.shape, float(sd_spat), jnp.float32),
             feat_grid], axis=-1)
-        motor = float(motors[index]) or None
+        motor = float(motors[index])
 
-        mean, _ = predictor.mean_and_resultant(rows, validate=False, sd_motor=motor)
+        # Validated once per row, then skipped for the three calls that follow on
+        # the identical array. Without this the whole helper ran unvalidated: a
+        # negative sd_feat returned a NaN curve and a mis-ordered feature grid
+        # returned plausible numbers, both of which a plot renders without
+        # complaint. The four families share `rows`, so one check covers them.
+        mean, _ = predictor.mean_and_resultant(rows, validate=True, sd_motor=motor)
         bias.append(np.asarray(mean))
         asymmetry.append(np.asarray(gaussian_curve_smoother(
             predictor.signed_arc_asymmetry(rows, validate=False, sd_motor=motor), smoothing)))

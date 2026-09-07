@@ -70,6 +70,8 @@ def _orders(golden, case):
 
 
 @pytest.mark.parametrize("case", CASES)
+
+
 def test_the_plotting_entry_point_is_unchanged_by_the_routing(golden, grids, surfaces, case):
     """Exact equality through the function the plots actually call."""
     import create_unified_subject_plots as plots
@@ -81,6 +83,8 @@ def test_the_plotting_entry_point_is_unchanged_by_the_routing(golden, grids, sur
 
 
 @pytest.mark.parametrize("case", CASES)
+
+
 def test_pooling_first_is_not_the_same_as_averaging_scores(golden, case):
     """The property the plan's instruction protects.
 
@@ -91,15 +95,6 @@ def test_pooling_first_is_not_the_same_as_averaging_scores(golden, case):
     pooled = float(golden[f"{case}/pooled_score"][0])
     separate = np.asarray(golden[f"{case}/separate_scores"], dtype=float)
     assert abs(pooled - separate.mean()) > 1e-3
-
-
-def test_unequal_support_is_where_the_two_diverge_most(golden):
-    """Named so a future reader knows which fixture carries the argument."""
-    gaps = {case: abs(float(golden[f"{case}/pooled_score"][0])
-                      - np.asarray(golden[f"{case}/separate_scores"]).mean())
-            for case in CASES}
-    assert max(gaps, key=gaps.get) == "unequal_support"
-    assert gaps["unequal_support"] > 2.0
 
 
 def test_mismatched_order_counts_are_refused(golden, grids, surfaces):

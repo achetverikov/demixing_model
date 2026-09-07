@@ -8,10 +8,18 @@ only "the parameters were 12% out" is not useful.
 
 The load-bearing test here is the noise-free one. Fitting the model's own curve
 at the generating parameters removes sampling noise, the KDE, and the empirical
-feature weighting; if recovery is exact there, then any error against a real
-empirical target came from the target's construction rather than from the
-objective being unidentifiable or the search being weak.
+feature weighting, so it isolates the objective and the search from the target's
+construction at that one point.
+
+It is worth being precise about what that buys, because the first write-up of
+this panel was not. Exact recovery there shows the objective's optimum sits at
+the truth *for this generating vector* and that the best of many starts finds it.
+It does not make every later error attributable to the target's construction:
+finite-trial sampling variation and a residual search gap both survive it, and
+separating those needs replicates and a start budget, not this test.
 """
+import csv
+import json
 import sys
 from pathlib import Path
 
@@ -141,11 +149,16 @@ def test_a_noise_free_target_recovers_the_generating_parameters(predictor, grids
     """The reference point for every other recovery number.
 
     Fitting the model's own smoothed curve at the truth removes sampling noise,
-    the KDE and the empirical feature weighting. Recovery is exact here -- to
-    about 1e-4 in log ratio -- which establishes that the density objective is
-    identifiable and the search finds its optimum. Any error against a real
-    empirical target is therefore attributable to that target's construction,
-    not to the objective or the search.
+    the KDE and the empirical feature weighting. Recovery is exact here, to
+    about 1.5e-4 in log ratio at worst.
+
+    What that licenses is narrow, and the tolerance is set to the achieved
+    precision so a regression to 0.5% cannot pass quietly. It shows that *at this
+    one generating vector* the objective has its optimum at the truth and the
+    best of 16 starts reaches it. It does not show the objective is identifiable
+    across the parameter space -- one interior point cannot -- and it does not
+    show the search is reliable: most starts stop elsewhere, which is why
+    ``loss_spread`` is recorded. See RECOVERY_FINDINGS.md.
     """
     feat_grid, _ = grids
     truth = [15.0, 45.0, 60.0, 20.0, 25.0]
@@ -172,7 +185,7 @@ def test_a_noise_free_target_recovers_the_generating_parameters(predictor, grids
                               n_starts=16, seed=0)
 
     for true_value, fitted in zip(truth, fit.parameters):
-        assert abs(np.log(fitted / true_value)) < 5e-3, (truth, fit.parameters)
+        assert abs(np.log(fitted / true_value)) < 5e-4, (truth, fit.parameters)
 
 
 def test_the_diagnosis_distinguishes_the_three_failure_modes():
@@ -188,21 +201,39 @@ def test_the_diagnosis_distinguishes_the_three_failure_modes():
     assert result(0.4, 0.4).diagnosis == "loss_tied_with_truth"
 
 
-def test_errors_are_reported_as_log_ratios_as_well_as_signed():
-    """These are multiplicative scales: 5 degrees out at 200 is not the error
-    that 5 degrees out at 5 is."""
-    outcome = R.RecoveryResult(
-        case="c", replicate=0, truth=np.array([10.0, 100.0]),
-        recovered=np.array([20.0, 200.0]), names=("a", "b"), loss_at_truth=1.0,
-        loss_at_fit=1.0, loss_spread=0.0, n_starts=4, n_converged=4, at_bound=(),
-        runtime_seconds=1.0)
-    errors = outcome.errors()
+def test_float32_rounding_is_a_tie_and_not_a_scientific_claim():
+    """The losses are float32. One ULP near a loss of 1 is ~1.2e-7, so a fixed
+    1e-9 band turned rounding into two opposite conclusions -- "the search
+    failed" on one side, "the objective prefers other parameters" on the other.
+    """
+    def result(loss_at_fit, loss_at_truth):
+        return R.RecoveryResult(
+            case="c", replicate=0, truth=np.array([10.0]), recovered=np.array([10.0]),
+            names=("sd_feat1_c0",), loss_at_truth=loss_at_truth, loss_at_fit=loss_at_fit,
+            loss_spread=0.0, n_starts=4, n_converged=4, at_bound=(), runtime_seconds=1.0)
 
-    assert errors["signed_error_a"] == 10.0 and errors["signed_error_b"] == 100.0
-    # The same relative error, reported as the same number.
-    assert errors["log_ratio_a"] == pytest.approx(errors["log_ratio_b"])
+    truth = np.float32(1.0)
+    for gap in (np.float32(1.19e-7), np.float32(-1.19e-7), np.float32(-2.4e-7)):
+        assert result(float(truth + gap), float(truth)).diagnosis == "loss_tied_with_truth"
+
+    # Still sensitive to a difference that means something.
+    assert result(1.001, 1.0).diagnosis == "search_failed"
+    assert result(1.0, 1.001).diagnosis == "objective_prefers_other_parameters"
+
+    # The band scales, so a loss of 1e4 is not diagnosed on its own rounding.
+    assert result(10000.0 + 0.002, 10000.0).diagnosis == "loss_tied_with_truth"
 
 
+def test_a_failed_loss_evaluation_raises_rather_than_reporting_a_tie():
+    """Every comparison against NaN is false, so an unguarded chain falls
+    through to the tie branch and a failed evaluation is recorded as agreement
+    with the truth."""
+    bad = R.RecoveryResult(
+        case="c", replicate=3, truth=np.array([10.0]), recovered=np.array([12.0]),
+        names=("sd_feat1_c0",), loss_at_truth=float("nan"), loss_at_fit=0.4,
+        loss_spread=0.0, n_starts=4, n_converged=4, at_bound=(), runtime_seconds=1.0)
+    with pytest.raises(ValueError, match="not a tie"):
+        bad.diagnosis
 def test_the_summary_reports_bias_and_spread_but_not_correlation():
     """Correlation between fitted and true parameters is high whenever the design
     spans a range, regardless of whether any single estimate is any good."""
@@ -218,16 +249,63 @@ def test_the_summary_reports_bias_and_spread_but_not_correlation():
     assert summary["a_median_log_ratio"] == pytest.approx(0.1, rel=1e-6)
     assert summary["a_rmse_log_ratio"] == pytest.approx(0.1, rel=1e-6)
     assert not any("correl" in key for key in summary)
+def test_a_negative_motor_sd_is_refused_rather_than_squared_away(predictor):
+    """Motor noise enters as a variance, so -30 draws exactly what +30 draws
+    while the case record says -30."""
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="non-negative"):
+        R.sample_mixture_responses(predictor, 20.0, 40.0, 25.0, np.full(8, 40.0), rng,
+                                   sd_motor=-30.0)
 
 
-def test_summarising_nothing_raises():
-    with pytest.raises(ValueError, match="no replicates"):
-        R.summarise([])
+def test_a_zero_motor_override_beats_the_predictors_own_noise(predictor):
+    """`0.0` means no motor noise even when the predictor carries some. Collapsing
+    it to "unspecified" would have made the request silently mean its opposite."""
+    noisy = predictor.with_motor_noise(30.0)
+    feat_diff = np.full(20000, 40.0)
+
+    plain = R.sample_mixture_responses(predictor, 20.0, 40.0, 25.0, feat_diff,
+                                       np.random.default_rng(0))
+    overridden = R.sample_mixture_responses(noisy, 20.0, 40.0, 25.0, feat_diff,
+                                            np.random.default_rng(0), sd_motor=0.0)
+    np.testing.assert_array_equal(plain, overridden)
 
 
-# ---------------------------------------------------------------------------
-# End to end, small
-# ---------------------------------------------------------------------------
+def test_a_case_with_motor_noise_is_fitted_at_that_motor_noise(predictor, grids):
+    """The loop is only closed if the motor SD the data was drawn at reaches the
+    fit. Generating with motor noise and fitting without it measures that
+    mismatch, not recovery, and every diagnosis below inherits the error."""
+    feat_grid, d_circ = grids
+    case = R.RecoveryCase(name="motor", condition_feature_sds=[(20.0, 45.0)],
+                          sd_spat=25.0, sd_motor=20.0, n_trials_per_condition=200)
+
+    outcome = R.run_replicate(
+        predictor, case, 0, objective="density",
+        build_targets=_targets_builder(grids), fit_continuous=fit_continuous,
+        score_all_conditions=S.score_all_conditions, curve_losses=_compute_curve_losses,
+        energy_score=bwcrps_energy_score, d_circ_matrix=d_circ, feat_diff_grid=feat_grid,
+        emp_density_weights_sd=20.0, n_starts=2, seed=0)
+
+    # The claim under test is the wiring, not the quality of the recovery: the
+    # loss reported at the truth must be the loss of the motor-carrying model.
+    # Rebuild both and check which one the replicate reported.
+    datasets = R.generate_case_data(predictor, case, np.random.default_rng([0, 0]))
+    targets = _targets_builder(grids)(datasets)
+    trials = [(jnp.asarray(v[:, 0]), jnp.asarray(v[:, 1])) for v in datasets.values()]
+
+    def loss_through(model):
+        return float(S.score_all_conditions(
+            "density", model, targets, jnp.asarray(case.truth_vector()),
+            curve_losses=_compute_curve_losses, energy_score=bwcrps_energy_score,
+            d_circ_matrix=d_circ, feat_diff_grid=feat_grid,
+            emp_density_weights_sd=20.0, condition_trials=trials, fit_motor=False))
+
+    with_motor = loss_through(predictor.with_motor_noise(case.sd_motor))
+    without_motor = loss_through(predictor)
+
+    assert with_motor != without_motor, "the fixture cannot distinguish the two models"
+    assert outcome.loss_at_truth == pytest.approx(with_motor, rel=1e-6)
+
 
 def test_a_replicate_runs_and_records_what_it_needs(predictor, grids):
     feat_grid, d_circ = grids
@@ -251,3 +329,57 @@ def test_a_replicate_runs_and_records_what_it_needs(predictor, grids):
     for column in ("case", "replicate", "loss_at_truth", "loss_at_fit", "loss_gap",
                    "diagnosis", "true_sd_spat", "fit_sd_spat", "log_ratio_sd_spat"):
         assert column in row
+
+
+# ---------------------------------------------------------------------------
+# The protocol
+# ---------------------------------------------------------------------------
+
+def test_the_panel_runner_writes_rows_and_reproducible_settings(tmp_path):
+    """The runner exists because the first panel was run interactively and only
+    its conclusions were kept: the truth vector, seed and start count had to be
+    reverse-engineered afterwards, and the write-up could not be regenerated.
+
+    So what this pins is that a run leaves behind enough to repeat it -- the
+    settings block, the checkpoint digest, and a row per replicate -- not the
+    values, which are the artifact's business.
+    """
+    import run_recovery_panel as panel
+
+    out = tmp_path / "recovery"
+    assert panel.main(["--panel", "noise_free", "--out", str(out), "--n-starts", "2"]) == 0
+
+    rows = list(csv.DictReader((out / "noise_free_rows.csv").open()))
+    assert len(rows) == 1
+    for column in ("case", "diagnosis", "loss_at_truth", "loss_at_fit", "start_losses",
+                   "true_sd_spat", "fit_sd_spat"):
+        assert column in rows[0], column
+
+    summary = json.loads((out / "noise_free_summary.json").read_text())
+    settings = summary["settings"]
+    assert settings["n_starts"] == 2
+    assert settings["truth_conditions"] == [list(pair) for pair in panel.TRUTH_CONDITIONS]
+    # The digest is what ties the numbers to a surrogate; a panel recorded
+    # without it cannot be told apart from one run on a different artifact.
+    assert len(settings["checkpoint_sha256"]) == 64
+    assert summary["by_case"]["noise_free"]["n_replicates"] == 1
+
+
+def test_the_worst_parameter_travels_with_its_name():
+    """The first write-up quoted a sequence it called "the worst parameter"
+    across sample sizes that in fact tracked one fixed parameter. Which one is
+    worst changes with the sample size, so the name has to be reported with it.
+    """
+    import run_recovery_panel as panel
+
+    def result(case, recovered):
+        return R.RecoveryResult(
+            case=case, replicate=0, truth=np.array([10.0, 10.0]),
+            recovered=np.array(recovered), names=("a", "b"), loss_at_truth=1.0,
+            loss_at_fit=1.0, loss_spread=0.0, n_starts=2, n_converged=2,
+            at_bound=(), runtime_seconds=1.0)
+
+    record = panel.worst_parameter([result("small", [30.0, 11.0]),
+                                    result("large", [11.0, 3.0])])
+    assert record["small_r0"]["parameter"] == "a"
+    assert record["large_r0"]["parameter"] == "b"

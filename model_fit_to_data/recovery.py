@@ -45,6 +45,14 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+#: Both losses come out of a float32 objective, so the tie band is expressed in
+#: float32 ULPs of the larger loss rather than as an absolute number. 32 ULPs
+#: leaves room for the accumulation across conditions and starts that produces
+#: the observed ~2e-7 residuals, while staying far below any loss difference
+#: that would mean something.
+FLOAT32_EPS = float(np.finfo(np.float32).eps)
+TIE_TOLERANCE_ULPS = 32.0
+
 
 @dataclass
 class RecoveryCase:
@@ -99,10 +107,28 @@ class RecoveryResult:
         The distinction matters more than the error magnitude: a search failure
         is fixed by more starts, an identifiability failure is not fixed by
         anything and constrains what the parameter can be said to mean.
+
+        The tie band is float32-relative, not a fixed 1e-9. Both losses are
+        computed in float32, where one ULP near a loss of 1 is about 1.2e-7 --
+        a hundred times the old 1e-9 threshold. Under that threshold two
+        adjacent float32 values on either side of the truth were reported as
+        "the search failed" and "the objective prefers other parameters", two
+        opposite scientific conclusions drawn from rounding. The noise-free run
+        lands at -2.4e-7, which is arithmetic noise and is now reported as the
+        tie it is.
         """
-        if self.loss_at_fit > self.loss_at_truth + 1e-9:
+        gap = self.loss_at_fit - self.loss_at_truth
+        if not np.isfinite(gap):
+            raise ValueError(
+                f"cannot diagnose case {self.case!r} replicate {self.replicate}: loss at fit "
+                f"{self.loss_at_fit!r}, loss at truth {self.loss_at_truth!r}. A non-finite "
+                "loss is a failed evaluation, not a tie, and was previously classified as "
+                "'loss_tied_with_truth' because every comparison against NaN is false.")
+        tolerance = TIE_TOLERANCE_ULPS * FLOAT32_EPS * max(
+            1.0, abs(self.loss_at_fit), abs(self.loss_at_truth))
+        if gap > tolerance:
             return "search_failed"          # never reached the generating basin
-        if self.loss_at_fit < self.loss_at_truth - 1e-9:
+        if gap < -tolerance:
             return "objective_prefers_other_parameters"
         return "loss_tied_with_truth"       # flat direction, or exact recovery
 
@@ -127,6 +153,13 @@ class RecoveryResult:
             "diagnosis": self.diagnosis, "loss_spread": self.loss_spread,
             "n_starts": self.n_starts, "n_converged": self.n_converged,
             "at_bound": ",".join(self.at_bound), "runtime_seconds": self.runtime_seconds,
+            # The start-level evidence the diagnosis rests on. "search_failed"
+            # versus "the objective prefers other parameters" is a claim about
+            # whether the search covered the space, and a row that reports only
+            # the winning loss cannot be audited on that point afterwards.
+            "start_losses": ",".join(f"{value:.9g}" for value in self.start_losses),
+            "best_start_loss": (min(self.start_losses) if self.start_losses else float("nan")),
+            "worst_start_loss": (max(self.start_losses) if self.start_losses else float("nan")),
         }
         for name, true_value, fitted in zip(self.names, self.truth, self.recovered):
             record[f"true_{name}"] = float(true_value)
@@ -150,8 +183,17 @@ def sample_mixture_responses(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff,
         jnp.full(feat_diff.shape, float(sd_spat), jnp.float32),
         jnp.asarray(feat_diff, jnp.float32)], axis=-1)
 
-    distribution = predictor.distribution(rows, validate=False,
-                                          sd_motor=sd_motor or None)
+    sd_motor = float(sd_motor)
+    if not np.isfinite(sd_motor) or sd_motor < 0:
+        raise ValueError(
+            f"sd_motor must be finite and non-negative, got {sd_motor!r}: motor noise enters "
+            "as a variance, so -30 draws exactly the samples +30 does while the case record "
+            "says -30.")
+    # A concrete zero reaches `distribution` as zero, which it skips entirely.
+    # Collapsing it to None here would instead have meant "use the predictor's
+    # own SD", so a motor-carrying predictor would have added noise to a case
+    # that asked for none.
+    distribution = predictor.distribution(rows, validate=False, sd_motor=sd_motor)
     weights = np.asarray(jnp.exp(distribution["log_pi"]), dtype=np.float64)
     means = np.asarray(distribution["mu"], dtype=np.float64)
     sigmas = np.asarray(distribution["sigma"], dtype=np.float64)
@@ -200,18 +242,32 @@ def run_replicate(predictor, case: RecoveryCase, replicate: int, *, objective: s
     trials = [(jnp.asarray(values[:, 0]), jnp.asarray(values[:, 1]))
               for values in datasets.values()]
 
+    # The motor SD the data was generated at has to reach the fit, or the loop is
+    # not closed: responses drawn with motor noise would be fitted and scored by a
+    # model without it, and every parameter error and diagnosis below would be
+    # measuring that mismatch instead of recovery. Held fixed when it is not
+    # searched; `fit_continuous` refuses to do both.
+    fixed_motor = 0.0 if fit_motor else float(case.sd_motor)
+
     started = time.time()
     fit = fit_continuous(
         predictor, targets, list(datasets), objective=objective,
         curve_losses=curve_losses, energy_score=energy_score,
         d_circ_matrix=d_circ_matrix, feat_diff_grid=feat_diff_grid,
         emp_density_weights_sd=emp_density_weights_sd, condition_trials=trials,
-        fit_motor=fit_motor, n_starts=n_starts, seed=seed, verbosity=0)
+        sd_motor=fixed_motor, fit_motor=fit_motor, n_starts=n_starts, seed=seed,
+        verbosity=0)
     runtime = time.time() - started
+
+    # Truth is scored through the same motor-carrying predictor the fit used.
+    # Scoring it without the motor noise would make the comparison that the whole
+    # diagnosis rests on a comparison between two different models.
+    scoring_predictor = (predictor.with_motor_noise(fixed_motor) if fixed_motor
+                         else predictor)
 
     truth = case.truth_vector(fit_motor=fit_motor)
     loss_at_truth = float(score_all_conditions(
-        objective, predictor, targets, jnp.asarray(truth), curve_losses=curve_losses,
+        objective, scoring_predictor, targets, jnp.asarray(truth), curve_losses=curve_losses,
         energy_score=energy_score, d_circ_matrix=d_circ_matrix,
         feat_diff_grid=feat_diff_grid, emp_density_weights_sd=emp_density_weights_sd,
         condition_trials=trials, fit_motor=fit_motor))

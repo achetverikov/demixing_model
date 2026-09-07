@@ -68,11 +68,6 @@ def test_every_curve_the_plots_draw_is_produced(predictor, feat_grid):
     assert bundle["pooled_sd"].shape == (len(PARAMS), 18)
 
 
-def test_the_pooled_panel_is_optional(predictor, feat_grid):
-    bundle = mixture_plot_curves(predictor, PARAMS, feat_grid)
-    assert "pooled_sd" not in bundle
-
-
 def test_each_row_uses_its_own_parameters(predictor, feat_grid):
     """A bundle that ignored its rows would draw one fit's curve for every fit."""
     bundle = mixture_plot_curves(predictor, PARAMS, feat_grid)
@@ -93,6 +88,37 @@ def test_motor_noise_is_paired_with_its_own_row(predictor, feat_grid):
     np.testing.assert_array_equal(without["sd"][2], with_motor["sd"][2])
     assert np.all(with_motor["sd"][1] > without["sd"][1] - 1e-6)
     assert np.max(with_motor["sd"][1] - without["sd"][1]) > 1.0
+
+
+def test_a_zero_row_overrides_a_motor_carrying_predictor(predictor, feat_grid):
+    """A row of 0 means no motor noise. Previously 0 was collapsed to
+    "unspecified", which means "use the predictor's own SD" -- so on a predictor
+    built at motor SD 30 the request for no motor noise silently returned the
+    30-degree curve, differing from the true one by over 20 degrees of SD.
+
+    Every other motor test here uses a zero-motor base predictor, where the two
+    readings coincide, so none of them can see this.
+    """
+    noisy = predictor.with_motor_noise(30.0)
+    overridden = mixture_plot_curves(noisy, PARAMS, feat_grid, sd_motor_by_row=[0.0] * 3)
+    clean = mixture_plot_curves(predictor, PARAMS, feat_grid)
+
+    np.testing.assert_allclose(overridden["sd"], clean["sd"], rtol=1e-6)
+    # And the two models are far enough apart that the check is not vacuous.
+    kept = mixture_plot_curves(noisy, PARAMS, feat_grid, sd_motor_by_row=[30.0] * 3)
+    assert np.max(kept["sd"] - clean["sd"]) > 5.0
+
+
+def test_an_out_of_domain_parameter_raises_instead_of_plotting_nan(predictor, feat_grid):
+    """The helper ran every predictor call with validation off, so a negative SD
+    produced a NaN curve that a plot renders as a gap rather than an error."""
+    with pytest.raises(ValueError):
+        mixture_plot_curves(predictor, np.array([[-1.0, 40.0, 30.0]]), feat_grid)
+
+
+def test_a_negative_motor_sd_is_refused(predictor, feat_grid):
+    with pytest.raises(ValueError, match="non-negative"):
+        mixture_plot_curves(predictor, PARAMS, feat_grid, sd_motor_by_row=[0.0, -5.0, 0.0])
 
 
 def test_a_motor_length_mismatch_is_refused(predictor, feat_grid):

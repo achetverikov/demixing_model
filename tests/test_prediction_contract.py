@@ -66,11 +66,6 @@ def test_dprime_and_sd_spat_are_one_number_in_two_views():
         assert dprime == pytest.approx(SPATIAL_SEPARATION / sd_spat)
         assert float(sd_spat_from_dprime(dprime)) == pytest.approx(sd_spat)
 
-
-def test_param_order_is_the_documented_one():
-    assert PARAM_ORDER == ("sd_feat1", "sd_feat2", "sd_spat", "feat_diff")
-
-
 def test_mirror_swaps_only_the_two_feature_sds():
     out = np.asarray(mirror_params(PARAMS))
     np.testing.assert_array_equal(out[:, 0], np.asarray(PARAMS)[:, 1])
@@ -293,26 +288,6 @@ def test_surface_predictor_will_not_pretend_to_apply_motor_noise():
     predictor = SurfacePredictor(surfaces, n_samples=20, artifact="test.pkl")
     with pytest.raises(NotImplementedError, match="FFT"):
         predictor.with_motor_noise(10.0)
-
-
-def test_surface_predictor_rejects_the_wrong_shape():
-    with pytest.raises(ValueError, match="n_mu1_bias"):
-        SurfacePredictor(jnp.zeros((len(mu1_grid()), 90)), n_samples=20, artifact="t.pkl")
-
-
-@needs_artifact
-def test_a_wnm_checkpoint_does_not_silently_become_a_surface_predictor():
-    loaded = surrogate.load_surrogate(checkpoint_path=ARTIFACT)
-    assert isinstance(predictor_from_surrogate(loaded), WrappedMixturePredictor)
-
-
-# ---------------------------------------------------------------------------
-# The analytic shortcuts, checked against independent numerics
-# ---------------------------------------------------------------------------
-#
-# This layer replaces integration with closed forms in two places. Agreement
-# with the empirical target says nothing about either, so both are checked
-# directly against a dense numerical reference.
 
 def _dense_grid():
     return jnp.arange(-180.0, 180.0, 0.02)

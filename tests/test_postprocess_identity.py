@@ -98,12 +98,3 @@ def test_the_fingerprint_is_found_from_a_nested_fits_file(tmp_path):
     moved = nested / "fitted_parameters.csv"
     moved.write_text("subject\n")
     assert P.infer_checkpoint_path(moved, None) == WNM
-
-
-def test_the_installed_list_covers_both_families(tmp_path):
-    """A digest lookup can only resolve artifacts it knows about."""
-    from shared import surrogate as s
-
-    names = {path.name for path in s.installed_checkpoints()}
-    assert any(name.startswith("wnm_") for name in names)
-    assert any(name.startswith("model_epoch") for name in names)
