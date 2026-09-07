@@ -116,5 +116,5 @@ than quietly relying on the extra digits.
 
 ## Notes for developers
 
-The detailed plan is `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/TRANSITION_PLAN.md`.
+The detailed plan is `continuous_density/TRANSITION_PLAN.md`.
 It is an external development artifact, not shipped or expected in a normal checkout.

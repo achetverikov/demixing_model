@@ -49,7 +49,7 @@ different model than the fit used, and are listed under Known gaps below.
 
 **These artifacts are not yet the production default.** `shared/surrogate.py`
 still defaults to the surface network; the transition plan
-(`results/continuous_density_4.1q/TRANSITION_PLAN.md`) flips it after acceptance.
+(`continuous_density/TRANSITION_PLAN.md`) flips it after acceptance.
 `fit_model_to_data.py --search continuous` runs them through the gradient
 backend, and the lattice backends refuse a mixture checkpoint (as the continuous
 one refuses a surface checkpoint, having no gradients to descend). What has not
