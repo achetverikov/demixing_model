@@ -29,6 +29,7 @@ plus the exact settings the run used, so the run can be repeated).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import time
@@ -316,8 +317,19 @@ def main(argv=None):
     if args.panel == "random":
         # Every case has its own truth, so a per-case summary would be one
         # replicate against itself. The range summary is the point of this panel.
+        # The truths depend on the seed and the case count but not on the trial
+        # count, so runs that match on this digest are the *same* generating
+        # vectors measured at different trial counts -- a paired design, where a
+        # difference between cells is the trial count and nothing else. Runs that
+        # differ on it are drawing from different truths, and their correlations
+        # are not comparable: correlation depends on how the design happened to
+        # span the range, and on how many points estimated it.
+        truths = np.concatenate([case.truth_vector() for case in cases])
         settings.update(n_cases=args.n_cases, n_conditions=args.n_conditions,
                         sd_motor=args.sd_motor,
+                        truth_digest=hashlib.sha256(
+                            np.ascontiguousarray(truths, dtype=np.float64).tobytes()
+                        ).hexdigest(),
                         search_bounds={axis: list(pair) for axis, pair
                                        in surrogate.search_bounds(predictor.domain).items()})
         summary["range_summary"] = R.range_summary(results, drop_railed=True)

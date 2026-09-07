@@ -472,3 +472,29 @@ def test_random_cases_span_the_range_and_stay_inside_the_bounds():
     assert (feats > 100).mean() > 0.10
     # Each case has its own truth, and conditions differ within a case.
     assert len({case.sd_spat for case in cases}) == len(cases)
+
+
+def test_the_same_seed_gives_the_same_truths_at_every_trial_count():
+    """What makes the range panel a paired design: the truths depend on the seed
+    and the case count, never on the trial count. So cells that match on the
+    recorded `truth_digest` differ in the trial count and nothing else.
+
+    Correlation depends on how the design happened to span the range and on how
+    many points estimated it, so cells drawn from different truths -- or from
+    different numbers of them -- are not comparable, however similar the settings
+    otherwise look.
+    """
+    import run_recovery_panel as panel
+
+    bounds = {"sd_feat": (2.5, 200.0), "sd_spat": (5.0, 200.0)}
+
+    def truths(n_cases, n_trials):
+        cases = panel.random_cases(n_cases, 2, n_trials, bounds,
+                                   np.random.default_rng(0))
+        return np.concatenate([case.truth_vector() for case in cases])
+
+    np.testing.assert_array_equal(truths(50, 100), truths(50, 10000))
+    # A different case count is a different design, not a shorter one to compare
+    # against: the shared prefix is the same but the correlation is over a
+    # different sample.
+    assert len(truths(25, 100)) != len(truths(50, 100))
