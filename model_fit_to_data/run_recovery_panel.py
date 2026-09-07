@@ -33,6 +33,7 @@ import hashlib
 import json
 import multiprocessing
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -120,6 +121,123 @@ def random_cases(n_cases, n_conditions, n_trials, bounds, rng, sd_motor=0.0):
             sd_spat=float(draw(low_spat, high_spat)), sd_motor=sd_motor,
             n_trials_per_condition=n_trials))
     return cases
+
+
+def _noise_free_fit(predictor, feat_grid, truth, n_starts, seed):
+    """Fit the model's own curve at ``truth``. Returns (fit, objective_fn).
+
+    The loss at the truth is exactly 0 here -- CCC of a curve against itself --
+    so any fit with a positive loss demonstrably failed to reach the global
+    optimum. That is what makes this the one place where "the search failed" can
+    be asserted rather than inferred.
+    """
+    n_conditions = (len(truth) - 1) // 2
+    ideal = jnp.stack([
+        S.predicted_asymmetry_curve(predictor, truth[2 * i], truth[2 * i + 1],
+                                    truth[-1], feat_grid, EMP_DENSITY_WEIGHTS_SD)
+        for i in range(n_conditions)])
+
+    def objective_fn(parameters):
+        total = 0.0
+        for i in range(n_conditions):
+            got = S.predicted_asymmetry_curve(
+                predictor, parameters[2 * i], parameters[2 * i + 1], parameters[-1],
+                feat_grid, EMP_DENSITY_WEIGHTS_SD)
+            total = total + _compute_curve_losses(
+                got[None, :], ideal[i][None, :], loss_type="ccc", is_angular=False)[0]
+        return total
+
+    bounds_by_axis = surrogate.search_bounds(predictor.domain)
+    fit = minimize_continuous(
+        objective_fn,
+        build_bounds(n_conditions, bounds_by_axis["sd_feat"], bounds_by_axis["sd_spat"]),
+        condition_parameter_layout(n_conditions, fit_motor=False),
+        n_starts=n_starts, seed=seed)
+    return fit, objective_fn
+
+
+def run_start_sweep(predictor, feat_grid, source_rows, start_counts, *, seed,
+                    worst_above, limit, on_row=None):
+    """How many starts it takes to find an optimum that is known to exist.
+
+    Takes the generating vectors from an existing panel's rows -- by default the
+    ones that panel recovered worst -- and refits each against a *noise-free*
+    target at several start counts. Because the noise-free optimum is at the
+    truth with a loss of exactly 0, a fit that does not reach it is a search
+    failure that can be stated rather than inferred.
+
+    This answers a narrower question than the empirical panels, and the
+    difference matters: it bounds the search, not recovery. More starts find the
+    noise-free optimum reliably while doing almost nothing for recovery against
+    an empirical target, whose optimum is somewhere else.
+    """
+    frame = pd.read_csv(source_rows)
+    ratio_columns = [c for c in frame.columns if c.startswith("log_ratio_sd_feat")]
+    frame["worst"] = frame[ratio_columns].abs().max(axis=1)
+    selected = frame[frame.worst > worst_above].head(limit)
+    if selected.empty:
+        raise ValueError(
+            f"no rows in {source_rows} have a worst |log ratio| above {worst_above}; "
+            "nothing to sweep. Lower --worst-above or point at a panel that failed.")
+
+    # Parsed, not sorted. The optimizer's layout is [feat1_c0, feat2_c0,
+    # feat1_c1, feat2_c1, ..., sd_spat] -- condition-major. Sorting the column
+    # names alphabetically instead yields [feat1_c0, feat1_c1, feat2_c0, ...],
+    # which is condition-*minor*: it hands condition 0 the pair (feat1_c0,
+    # feat1_c1) and fits every case to a generating vector that never existed,
+    # while every loss stays finite and the summary looks plausible.
+    pattern = re.compile(r"^true_sd_feat(\d+)_c(\d+)$")
+    feature_columns = []
+    for column in frame.columns:
+        found = pattern.match(column)
+        if found:
+            feature_columns.append((int(found.group(2)), int(found.group(1)), column))
+    if not feature_columns or "true_sd_spat" not in frame.columns:
+        raise ValueError(
+            f"{source_rows} has no recognisable truth columns; expected "
+            "true_sd_feat<slot>_c<condition> plus true_sd_spat.")
+    feature_columns.sort()
+    truth_columns = [column for _, _, column in feature_columns] + ["true_sd_spat"]
+
+    records = []
+    for n_starts in start_counts:
+        for _, row in selected.iterrows():
+            truth = [float(row[c]) for c in truth_columns]
+            started = time.time()
+            fit, objective_fn = _noise_free_fit(predictor, feat_grid, truth,
+                                                n_starts, seed)
+            errors = np.abs(np.log(np.asarray(fit.parameters) / np.asarray(truth)))
+            records.append({
+                "case": row["case"], "n_starts": n_starts,
+                "empirical_worst_log_ratio": float(row["worst"]),
+                "noise_free_worst_log_ratio": float(errors.max()),
+                "loss_at_truth": float(objective_fn(jnp.asarray(truth))),
+                "loss_at_fit": float(fit.loss),
+                "n_converged": int(sum(s.success for s in fit.starts)),
+                "runtime_seconds": time.time() - started,
+            })
+            if on_row is not None:
+                on_row(records)
+        print(f"n_starts={n_starts}: done {len(selected)} cases", flush=True)
+    return pd.DataFrame(records)
+
+
+def summarise_start_sweep(frame):
+    """Per start count: did the search reach an optimum known to be at 0?"""
+    summary = {}
+    for n_starts, group in frame.groupby("n_starts"):
+        missed = group.loss_at_fit > group.loss_at_truth + 1e-6
+        summary[int(n_starts)] = {
+            "n_cases": int(len(group)),
+            "median_worst_log_ratio": float(group.noise_free_worst_log_ratio.median()),
+            "p90_worst_log_ratio": float(group.noise_free_worst_log_ratio.quantile(0.9)),
+            "max_worst_log_ratio": float(group.noise_free_worst_log_ratio.max()),
+            "fraction_recovered_within_1pct": float(
+                (group.noise_free_worst_log_ratio < 0.01).mean()),
+            "n_missed_known_optimum": int(missed.sum()),
+            "median_runtime_seconds": float(group.runtime_seconds.median()),
+        }
+    return summary
 
 
 def run_noise_free(predictor, feat_grid, *, objective, n_starts, seed):
@@ -360,7 +478,17 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--panel", required=True,
-                        choices=("noise_free", "empirical", "sample_size", "random"))
+                        choices=("noise_free", "empirical", "sample_size", "random",
+                                 "start_sweep"))
+    parser.add_argument("--from-rows", type=Path, default=None,
+                        help="start_sweep: a panel's random_rows.csv to take truths from")
+    parser.add_argument("--start-counts", type=int, nargs="+", default=[16, 64, 256],
+                        help="start_sweep: start counts to compare")
+    parser.add_argument("--worst-above", type=float, default=1.0,
+                        help="start_sweep: only sweep cases the source panel got this "
+                             "far wrong, in absolute log ratio")
+    parser.add_argument("--limit", type=int, default=40,
+                        help="start_sweep: how many such cases to take")
     parser.add_argument("--n-cases", type=int, default=200,
                         help="random panel: generating vectors drawn across the range")
     parser.add_argument("--n-conditions", type=int, default=2,
@@ -404,6 +532,42 @@ def main(argv=None):
             "continuous_density/package_wnm_artifact.py.")
     predictor = predictor_from_surrogate(surrogate.load_surrogate(checkpoint_path=checkpoint))
     feat_grid, d_circ = _grids()
+
+    if args.panel == "start_sweep":
+        if args.from_rows is None:
+            raise ValueError("--panel start_sweep requires --from-rows PANEL/random_rows.csv")
+        args.out.mkdir(parents=True, exist_ok=True)
+        rows_path = args.out / "start_sweep_rows.csv"
+
+        # Written as it goes, like the random panel. The 256-start cell alone is
+        # ~17 minutes, and holding three cells in memory until the end means an
+        # interruption anywhere loses all of them.
+        def _write_rows(records):
+            temporary = rows_path.with_suffix(".csv.partial")
+            pd.DataFrame(records).to_csv(temporary, index=False)
+            _replace_atomically(temporary, rows_path)
+
+        frame = run_start_sweep(predictor, feat_grid, args.from_rows, args.start_counts,
+                                seed=args.seed, worst_above=args.worst_above,
+                                limit=args.limit, on_row=_write_rows)
+        frame.to_csv(rows_path, index=False)
+        summary_path = args.out / "start_sweep_summary.json"
+        summary_path.write_text(json.dumps({
+            "panel": "start_sweep",
+            "settings": {
+                "checkpoint": str(checkpoint),
+                "checkpoint_sha256": surrogate.file_digest(checkpoint),
+                "source_rows": str(args.from_rows), "start_counts": args.start_counts,
+                "worst_above": args.worst_above, "limit": args.limit, "seed": args.seed,
+                "emp_density_weights_sd": EMP_DENSITY_WEIGHTS_SD,
+                # The sweep fits a noise-free target, so the objective is CCC on
+                # the model's own curve regardless of what the source panel used.
+                "objective": "noise-free CCC on the model's own asymmetry curve",
+            },
+            "by_start_count": summarise_start_sweep(frame),
+        }, indent=2, default=float) + "\n")
+        print(f"wrote {rows_path} and {summary_path}")
+        return 0
 
     if args.panel == "noise_free":
         results = run_noise_free(predictor, feat_grid, objective=args.objective,

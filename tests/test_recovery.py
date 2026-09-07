@@ -529,3 +529,32 @@ def test_running_cases_in_parallel_gives_the_same_numbers(tmp_path):
             if column.startswith(("fit_", "true_", "log_ratio_")) or column in (
                     "loss_at_fit", "loss_at_truth", "diagnosis"):
                 assert value == other[column], (one["case"], column)
+
+
+def test_the_start_sweep_reads_truths_in_the_optimizers_layout():
+    """Condition-major, and parsed rather than sorted.
+
+    The optimizer's layout is [feat1_c0, feat2_c0, feat1_c1, feat2_c1, sd_spat].
+    Sorting the column names alphabetically gives [feat1_c0, feat1_c1, feat2_c0,
+    feat2_c1, sd_spat] -- condition-minor -- which hands condition 0 a pair of
+    SDs drawn from two different conditions. Every loss stays finite and the
+    summary looks plausible, so nothing downstream would have caught it; the
+    only reason it surfaced was disagreeing with an earlier ad-hoc run.
+    """
+    import re as _re
+    import run_recovery_panel as panel
+
+    columns = ["case", "true_sd_feat1_c0", "true_sd_feat2_c0",
+               "true_sd_feat1_c1", "true_sd_feat2_c1", "true_sd_spat"]
+    pattern = _re.compile(r"^true_sd_feat(\d+)_c(\d+)$")
+    parsed = sorted((int(m.group(2)), int(m.group(1)), c)
+                    for c in columns if (m := pattern.match(c)))
+    order = [c for _, _, c in parsed] + ["true_sd_spat"]
+
+    assert order == ["true_sd_feat1_c0", "true_sd_feat2_c0",
+                     "true_sd_feat1_c1", "true_sd_feat2_c1", "true_sd_spat"]
+    # The layout this must agree with, from the optimizer itself.
+    from continuous_optimizer import condition_parameter_layout
+    assert [name for name in condition_parameter_layout(2, fit_motor=False)] == \
+        [c[len("true_"):] for c in order]
+    assert panel.run_start_sweep is not None
