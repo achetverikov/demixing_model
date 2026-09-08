@@ -104,8 +104,9 @@ WNM point likelihood through the same K12 predictor and differ only in search;
 `surface-production-hierarchical` is the production surface *search geometry*
 driving that likelihood, not the surface network, and not the 9/13-point WNM log
 lattice that this panel replaced. The surface NN appears only in the separate
-legacy-pipeline comparison further below. Artifacts live in `wnm_optimizer_corrected_panel_v1/`: `summary.csv`,
-`paired_metrics.csv`, `method_summary.csv` and `arm_recovery_summary.csv`,
+legacy-pipeline comparison further below. Artifacts live in
+`wnm_optimizer_corrected_panel_v1/`: `summary.csv`, `paired_metrics.csv`,
+`method_summary.csv` and `arm_recovery_summary.csv`,
 pinned by `assembly_manifest.json` and `arm_recovery_manifest.json`.
 
 | Arm | Median NLL gap | Max gap | Within 0.001 | Median s | Median evaluations | Median joint log-RMSE | Within factor 1.5 |
@@ -119,9 +120,9 @@ pinned by `assembly_manifest.json` and `arm_recovery_manifest.json`.
 This supersedes the statement that 32 SciPy starts reached the 0.001 gate on
 every development dataset. That was measured against a union best that did not
 contain a 32-start BADS arm. Against the corrected union, 32-start SciPy reaches
-the gate on none of the 24, and 32-start JAX-BADS nominally leads on both optimization and recovery at
-about twice the time and nine times the evaluations -- but neither lead
-survives the checks below.
+the gate on none of the 24, and 32-start JAX-BADS nominally leads on both
+optimization and recovery at about twice the time and nine times the
+evaluations -- but neither lead survives the checks below.
 PyBADS matches L-BFGS-B exactly, at roughly thirty times the runtime for
 reasons that are per-call overhead rather than search effort (see below). The production
 surface hierarchy is worst on both axes and spends about 243 times as many
@@ -321,8 +322,48 @@ median CCC of exactly 0.000 -- becomes 0.746. Median MAE falls with it, from
 0.836 to 0.303 degrees in that band. Most of what the banded empirical numbers
 measured was the noise in the target, not error in the fit.
 
-Two bands stay low against truth, and both are bands where the truth curve is
-nearly flat rather than badly fitted: circular SD at `[60,120)` and `[120,180]`
+### A low banded CCC usually means a flat band, not a bad fit
+
+Both bands that stay low against the truth curve are bands where the truth curve
+barely varies, and the same explanation covers the asymmetry curve's weakest
+band. Each case's asymmetry structure sits at a dissimilarity commensurate with
+its feature SDs: the narrow cases (SDs 5 to 20 degrees) peak at 30 to 36 degrees
+and have decayed by 60, while the broad cases (SDs 60 to 160) have almost
+nothing below 18 degrees and peak at 112 to 134. Truth-curve amplitude, in
+asymmetry units:
+
+| Case | [0,18) | [18,60) | [60,120) | [120,180] | Peak at |
+|---|---:|---:|---:|---:|---:|
+| narrow_1 | 0.0257 | **0.0170** | 0.0314 | 0.0048 | 36 deg |
+| narrow_3 | 0.0361 | **0.0125** | 0.0727 | 0.0653 | 30 deg |
+| broad_1 | **0.0008** | 0.0459 | 0.0465 | 0.0693 | 112 deg |
+| broad_3 | 0.0006 | 0.0021 | 0.0026 | 0.0006 | 134 deg |
+
+`[18,60)` is therefore the one band in which no regime is at full amplitude: it
+catches the narrow cases after their peak and the broad cases before theirs. For
+`narrow_1` and `narrow_3` it is the minimum-amplitude band outright, with median
+absolute error at 1.13 and 1.28 times the band's entire range, so their CCC there
+is 0.169 and 0.085 while the same fits score 0.918 and 0.595 at `[0,18)` and
+0.755 and 0.851 at `[60,120)`. That is what pulls the pooled `[18,60)` asymmetry
+median down to 0.427.
+
+`broad_3` is a second and separate contributor, and it is not band-specific: its
+asymmetry curve is flat across the whole axis, amplitude 0.0006 to 0.0026 with
+error 4.7 to 13.2 times the range, so its 15 datasets score about zero in every
+band and put a floor under every pooled median. None of this is a search
+difference -- all three arms agree to within 0.01 CCC in this band.
+
+Two things follow. The band edges are inherited from `continuous_density_4.1c`
+and are not aligned to this panel's structure: the boundary at 18 degrees cuts
+through the narrow cases' peak region while `[18,60)` straddles their decay.
+And a banded CCC should not be read without the band's target range next to it;
+where the range is small the honest summary is the absolute error, which is why
+both are stored. Gating CCC on a minimum truth amplitude, the analogue of the
+gate already applied to unestimable circular moments, would express this
+directly and has not been implemented.
+
+Two bands stay low against truth for the same reason, being nearly flat rather
+than badly fitted: circular SD at `[60,120)` and `[120,180]`
 scores 0.313 and 0.031 on truth-curve ranges of 0.691 and 0.378 degrees, with
 median absolute errors of 0.401 and 0.442. When a curve varies by less than half
 a degree across a band, there is no concordance to measure and the error is the
@@ -332,7 +373,8 @@ no information, not that it fits badly. This is the case that requires CCC, MAE
 and target range to be read together.
 
 The whole-curve concordances reported above are therefore not evidence of
-within-band agreement against the empirical target: no band of any curve reaches 0.4, and the two smallest
+within-band agreement against the empirical target: no band of any curve
+reaches 0.4, and the two smallest
 bands of mean bias and asymmetry are indistinguishable from zero. What the
 whole-curve number measures is that both curves rise with dissimilarity. The
 `[0,18)` band also carries the largest mean-bias MAE, 1.157 degrees against
