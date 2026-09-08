@@ -13,9 +13,12 @@ from model_fit_to_data.likelihood_search import (
     JaxBads,
     JaxoptLbfgsb,
     LikelihoodEvaluator,
+    bbz_jax_bads_search,
+    bbz_pybads_search,
     hierarchical_search,
     polish_search,
     scipy_lbfgsb,
+    surface_production_hierarchical_search,
 )
 from model_fit_to_data.wnm_scoring import trial_log_density
 from shared import surrogate
@@ -163,3 +166,78 @@ def test_polish_keeps_global_trace_and_improves_coarse_candidate():
     assert result.loss < coarse.loss
     np.testing.assert_allclose(result.parameters, TRUTH, rtol=1e-5)
     assert len(result.candidates) == len(coarse.candidates) + 1
+
+
+def test_surface_production_hierarchy_uses_nested_feature_and_spatial_schedule(
+        monkeypatch):
+    monkeypatch.setattr(
+        likelihood_search, "effective_feat_step_schedule",
+        lambda *_args: [40.0, 10.0, 1.0])
+    result = surface_production_hierarchical_search(
+        QuadraticEvaluator(TRUTH), TRIALS, BOUNDS,
+        shared_grid_size=7, feat_grid_size=7, min_grid_step=10.0,
+        zoom_factor=0.5, batch_size=64)
+
+    assert result.settings["feature_step_schedule"] == [40.0, 10.0, 1.0]
+    assert result.settings["coordinates"] == "linear"
+    assert len(result.candidates) >= 2
+    assert result.loss < 0.02
+
+
+class PybadsProductionStub:
+    calls = []
+
+    @classmethod
+    def _pybads_multistart(cls, value, starts, bounds, n_starts, *, trace,
+                           name, _unpack):
+        cls.calls.append((len(starts), len(bounds), n_starts, name))
+        optimum = np.log(TRUTH)
+        for index, start in enumerate(starts):
+            trace.append({
+                "start_idx": index, "start_obj": value(start),
+                "result_obj": value(optimum), "elapsed_sec": 0.1,
+                "n_iter": 3, "nfev": 20, "status": "converged",
+                **{f"init_{key}": val for key, val in _unpack(start, name).items()},
+                **{f"res_{key}": val for key, val in _unpack(optimum, name).items()},
+            })
+        return optimum, value(optimum)
+
+
+class JaxBadsProductionStub:
+    calls = []
+    _DEFAULTS = {"max_iter": 300, "tol": 1e-6}
+
+    @classmethod
+    def bads_jax_multistart(cls, value, args, starts, bounds, n_starts, *,
+                            trace, name, _unpack):
+        cls.calls.append((len(starts), len(bounds), n_starts, name))
+        optimum = np.log(TRUTH)
+        for index, start in enumerate(starts):
+            trace.append({
+                "start_idx": index,
+                "start_obj": float(value(jnp.asarray(start), *args)),
+                "result_obj": float(value(jnp.asarray(optimum), *args)),
+                "elapsed_sec": 0.1, "n_iter": 3, "nfev": 20,
+                "status": "converged",
+                **{f"init_{key}": val for key, val in _unpack(start, name).items()},
+                **{f"res_{key}": val for key, val in _unpack(optimum, name).items()},
+            })
+        return optimum, float(value(jnp.asarray(optimum), *args))
+
+
+@pytest.mark.parametrize(
+    ("search", "implementation", "method"),
+    [(bbz_pybads_search, PybadsProductionStub, "bbz-pybads"),
+     (bbz_jax_bads_search, JaxBadsProductionStub, "bbz-jax-bads")])
+def test_bbz_adapters_use_eight_shared_log_space_starts(
+        search, implementation, method):
+    implementation.calls.clear()
+    result = search(
+        QuadraticEvaluator(TRUTH), TRIALS, BOUNDS, implementation,
+        n_starts=8, seed=0)
+
+    assert implementation.calls == [(8, 3, 8, "wnm-likelihood")]
+    assert result.method == method
+    assert len(result.candidates) == 8
+    assert result.n_evaluations == 160
+    np.testing.assert_allclose(result.parameters, TRUTH)

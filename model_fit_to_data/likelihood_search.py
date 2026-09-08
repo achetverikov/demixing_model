@@ -17,6 +17,8 @@ import numpy as np
 from scipy.optimize import minimize
 
 from model_fit_to_data.continuous_optimizer import dispersed_starts
+from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import centered_grid
+from model_fit_to_data.run_fingerprint import effective_feat_step_schedule
 from model_fit_to_data.wnm_scoring import trial_log_density
 
 
@@ -263,6 +265,205 @@ def hierarchical_search(evaluator: LikelihoodEvaluator, trials, bounds, *,
         n_evaluations=total_evaluations,
         settings={"points_per_axis": points_per_axis, "n_stages": n_stages,
                   "batch_size": batch_size, "coordinates": coordinates})
+
+
+def _batched_grid_losses(evaluator, log_grid, feature_difference, bias, batch_size):
+    losses = []
+    for offset in range(0, len(log_grid), batch_size):
+        batch = log_grid[offset:offset + batch_size]
+        real_size = len(batch)
+        if real_size < batch_size:
+            batch = np.concatenate([
+                batch, np.repeat(batch[-1:], batch_size - real_size, axis=0)])
+        scored = evaluator.batch_value(jnp.asarray(batch), feature_difference, bias)
+        losses.append(np.asarray(scored)[:real_size])
+    return np.concatenate(losses)
+
+
+def surface_production_hierarchical_search(
+        evaluator: LikelihoodEvaluator, trials, bounds, *, shared_grid_size=40,
+        feat_grid_size=20, min_grid_step=1.0, zoom_factor=0.5,
+        batch_size=512) -> SearchResult:
+    """The production surface hierarchy, evaluated with the WNM likelihood.
+
+    The surface fitter searches the shared spatial parameter on an outer linear
+    grid.  At every spatial point it independently refines the two feature SDs
+    through the production feature-step schedule, then halves the spatial range
+    around the winning point until its spacing reaches one degree.  Only the
+    absent motor-noise axis is omitted here.
+    """
+    bounds = np.asarray(bounds, dtype=np.float64)
+    feat_low, feat_high = bounds[0]
+    if not np.array_equal(bounds[0], bounds[1]):
+        raise ValueError("surface hierarchy requires equal feature-SD bounds")
+    spat_hard_low, spat_hard_high = bounds[2]
+    feat_steps = effective_feat_step_schedule(
+        feat_grid_size, feat_low, feat_high)
+    feature_difference, bias = evaluator.trials(trials)
+    center = (feat_low + feat_high) / 2.0
+    spat_low, spat_high = spat_hard_low, spat_hard_high
+    candidates = []
+    total_evaluations = 0
+    started = time.perf_counter()
+
+    while True:
+        stage_started = time.perf_counter()
+        spatial = np.linspace(spat_low, spat_high, shared_grid_size)
+        best_features = np.full((shared_grid_size, 2), center, dtype=np.float64)
+        best_losses = np.full(shared_grid_size, np.inf)
+
+        for step in feat_steps:
+            make_axes = jax.vmap(
+                lambda value: centered_grid(
+                    value, feat_grid_size, step, feat_low, feat_high))
+            feat1 = np.asarray(make_axes(jnp.asarray(best_features[:, 0])))
+            feat2 = np.asarray(make_axes(jnp.asarray(best_features[:, 1])))
+            grid1 = np.broadcast_to(
+                feat1[:, :, None], (shared_grid_size, feat_grid_size, feat_grid_size))
+            grid2 = np.broadcast_to(
+                feat2[:, None, :], (shared_grid_size, feat_grid_size, feat_grid_size))
+            grid3 = np.broadcast_to(spatial[:, None, None], grid1.shape)
+            parameter_grid = np.stack([grid1, grid2, grid3], axis=-1).reshape(-1, 3)
+            losses = _batched_grid_losses(
+                evaluator, np.log(parameter_grid).astype(np.float32),
+                feature_difference, bias, batch_size)
+            losses = losses.reshape(shared_grid_size, feat_grid_size ** 2)
+            indices = np.argmin(losses, axis=1)
+            stage_features = parameter_grid.reshape(
+                shared_grid_size, feat_grid_size ** 2, 3)[
+                    np.arange(shared_grid_size), indices, :2]
+            stage_losses = losses[np.arange(shared_grid_size), indices]
+            improved = stage_losses < best_losses
+            best_features[improved] = stage_features[improved]
+            best_losses[improved] = stage_losses[improved]
+            total_evaluations += parameter_grid.shape[0]
+
+        best_index = int(np.argmin(best_losses))
+        parameters = np.asarray([
+            *best_features[best_index], spatial[best_index]])
+        loss = evaluator.score(parameters, trials)
+        start = np.asarray([center, center, (spat_low + spat_high) / 2.0])
+        start_loss = evaluator.score(start, trials)
+        total_evaluations += 2
+        candidates.append(Candidate(
+            start_index=len(candidates),
+            start=start, start_loss=start_loss,
+            parameters=parameters, reported_loss=float(best_losses[best_index]),
+            loss=loss, success=True, status=f"stage-{len(candidates) + 1}",
+            n_iterations=len(feat_steps),
+            n_evaluations=shared_grid_size * feat_grid_size ** 2 * len(feat_steps) + 2,
+            elapsed_seconds=time.perf_counter() - stage_started,
+            at_bound=_bound_hits(parameters, bounds)))
+
+        spatial_step = (spat_high - spat_low) / (shared_grid_size - 1)
+        if spatial_step <= min_grid_step:
+            break
+        half_range = (spat_high - spat_low) * zoom_factor / 2.0
+        spat_low = max(spat_hard_low, parameters[2] - half_range)
+        spat_high = min(spat_hard_high, parameters[2] + half_range)
+
+    best = min(candidates, key=lambda candidate: candidate.loss)
+    return SearchResult(
+        method="surface-production-hierarchical",
+        parameters=best.parameters, loss=best.loss,
+        candidates=tuple(candidates),
+        elapsed_seconds=time.perf_counter() - started,
+        n_evaluations=total_evaluations,
+        settings={"shared_grid_size": shared_grid_size,
+                  "feat_grid_size": feat_grid_size,
+                  "feature_step_schedule": feat_steps,
+                  "min_grid_step": min_grid_step,
+                  "zoom_factor": zoom_factor,
+                  "batch_size": batch_size,
+                  "coordinates": "linear",
+                  "motor_noise": "fixed-zero"})
+
+
+def _wnm_unpack(log_parameters, _name=None):
+    values = np.exp(np.asarray(log_parameters, dtype=np.float64))
+    return dict(zip(("sd_feat1", "sd_feat2", "sd_spat"), values))
+
+
+def _bbz_trace_result(evaluator, trials, bounds, trace, method, elapsed, settings):
+    candidates = []
+    for record in trace:
+        start = np.asarray([record[f"init_{name}"] for name in
+                            ("sd_feat1", "sd_feat2", "sd_spat")])
+        has_result = all(f"res_{name}" in record for name in
+                         ("sd_feat1", "sd_feat2", "sd_spat"))
+        parameters = (np.asarray([record[f"res_{name}"] for name in
+                                  ("sd_feat1", "sd_feat2", "sd_spat")])
+                      if has_result else start)
+        loss = evaluator.score(parameters, trials)
+        candidates.append(Candidate(
+            start_index=int(record["start_idx"]), start=start,
+            start_loss=float(record["start_obj"]), parameters=parameters,
+            reported_loss=float(record["result_obj"]) if has_result else np.inf,
+            loss=loss, success=bool(has_result and np.isfinite(loss)),
+            status=str(record["status"]), n_iterations=int(record.get("n_iter", 0)),
+            n_evaluations=int(record.get("nfev", 0)),
+            elapsed_seconds=float(record["elapsed_sec"]),
+            at_bound=_bound_hits(parameters, bounds)))
+    successful = [candidate for candidate in candidates if candidate.success]
+    if not successful:
+        raise RuntimeError(f"{method} returned no finite candidate")
+    best = min(successful, key=lambda candidate: candidate.loss)
+    return SearchResult(
+        method=method, parameters=best.parameters, loss=best.loss,
+        candidates=tuple(candidates), elapsed_seconds=elapsed,
+        n_evaluations=sum(candidate.n_evaluations for candidate in candidates),
+        settings=settings)
+
+
+def bbz_pybads_search(evaluator, trials, bounds, implementation, *, n_starts=8,
+                      seed=0):
+    """Call BBZ's production PyBADS multistart wrapper on WNM log-SDs."""
+    starts = np.log(dispersed_starts(bounds, n_starts, seed))
+    lower, upper = _log_bounds(bounds)
+    feature_difference, bias = evaluator.trials(trials)
+
+    def value(log_parameters):
+        return float(evaluator.value(
+            jnp.asarray(log_parameters, jnp.float32), feature_difference, bias))
+
+    trace = []
+    started = time.perf_counter()
+    implementation._pybads_multistart(
+        value, starts, list(zip(lower, upper)), n_starts,
+        trace=trace, name="wnm-likelihood", _unpack=_wnm_unpack)
+    elapsed = time.perf_counter() - started
+    return _bbz_trace_result(
+        evaluator, trials, bounds, trace, "bbz-pybads", elapsed,
+        {"n_starts": n_starts, "seed": seed, "coordinates": "log",
+         "implementation": "observer_models._pybads_multistart",
+         "optimizer_defaults": "pybads"})
+
+
+def bbz_jax_bads_search(evaluator, trials, bounds, implementation, *, n_starts=8,
+                        seed=0):
+    """Call BBZ's production JAX-BADS entry point on WNM log-SDs."""
+    if seed != 0:
+        raise ValueError("BBZ JAX-BADS fixes its optimizer PRNG seed at zero")
+    starts = np.log(dispersed_starts(bounds, n_starts, seed))
+    lower, upper = _log_bounds(bounds)
+    feature_difference, bias = evaluator.trials(trials)
+    trace = []
+    started = time.perf_counter()
+    implementation.bads_jax_multistart(
+        evaluator.loss_fn, (feature_difference, bias), starts,
+        list(zip(lower, upper)), n_starts, trace=trace,
+        name="wnm-likelihood", _unpack=_wnm_unpack)
+    elapsed = time.perf_counter() - started
+    defaults = {key: value for key, value in implementation._DEFAULTS.items()
+                if np.asarray(value).ndim == 0}
+    settings = {
+        "n_starts": n_starts, "seed": seed, "coordinates": "log",
+        "implementation": "bads_jax.bads_jax_multistart",
+        "budget": 300 * (len(bounds) + 2),
+        **{key: float(value) for key, value in defaults.items()},
+    }
+    return _bbz_trace_result(
+        evaluator, trials, bounds, trace, "bbz-jax-bads", elapsed, settings)
 
 
 class JaxoptLbfgsb:
