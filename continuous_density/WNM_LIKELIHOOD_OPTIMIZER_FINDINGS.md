@@ -182,10 +182,10 @@ winner on a different device moved the loss by up to 0.0177 (median 0.0000, p90
 83.3% of the 32-start SciPy gaps, 75.0% of PyBADS's and 95.8% of 32-start
 JAX-BADS's fall under it, against 33.3% for the surface hierarchy. So the arm
 ordering is trustworthy at the hierarchy's scale and at JAX-BADS-8's 0.619 miss,
-but the separation between the three 32-start arms is not established by these
-gaps. A gate below the device reproducibility cannot be the selection criterion,
-and choosing one of those three needs either a tighter scoring path or a
-criterion other than the gap.
+but the separation between the 32-start arms is not established by these float32
+gaps. A gate below the device reproducibility cannot be the selection criterion.
+The targeted float64 diagnostic below supplies the tighter scoring path this
+called for, and it does settle the question.
 
 ### PyBADS is not worse than JAX-BADS, and is not budget-matched
 
@@ -295,6 +295,56 @@ Median CCC for 32-start SciPy, whole curve against bands:
 | mean bias | 0.601 | -0.002 | 0.267 | 0.238 | 0.234 |
 | bias SD | 0.471 | not scorable | 0.388 | 0.018 | 0.003 |
 | asymmetry | 0.586 | 0.002 | 0.093 | 0.251 | 0.175 |
+
+### Float64 diagnostic: the ranking is a precision artifact (2026-09-08)
+
+`OPEN_DECISIONS.md` item 2 made a targeted x64 diagnostic conditional on a key
+likelihood or BWCRPS comparison proving precision-sensitive. This one is, so the
+diagnostic was run: `check_precision_sensitivity.py` rescores every stored winner
+of the 120-dataset panel at each combination of device and precision, writing
+`precision_{cpu,gpu}_{f32,f64}.csv`.
+
+Setting JAX's global x64 flag alone would not have promoted anything -- the
+production path casts parameters and trials to float32 and loads float32
+checkpoint weights -- so the diagnostic rebuilds the predictor with float64
+variables and feeds float64 inputs, and records the enabled flag, the realized
+dtype, and the cross-device agreement rather than assuming any of them. This
+repository already contains one ineffective float64 fix, which is why the
+agreement is reported as evidence and not the flag.
+
+Disagreement between the two devices, scoring identical parameters:
+
+| Precision | Median | p90 | Max |
+|---|---:|---:|---:|
+| float32 | 5.95e-03 | 1.65e-02 | 6.20e-02 |
+| float64 | 5.08e-07 | 1.89e-06 | 5.58e-06 |
+
+Float64 removes it: four orders of magnitude smaller, and below anything that
+could reorder the arms. The arm comparison then resolves, paired over 120
+datasets, as JAX-BADS minus L-BFGS-B:
+
+| Scoring | JAX-BADS lower | Median difference |
+|---|---:|---:|
+| CPU float32 | 0 of 120 | +0.001816 |
+| GPU float32 | **102 of 120** | -0.007050 |
+| CPU float64 | 0 of 120 | +0.001522 |
+| GPU float64 | 0 of 120 | +0.001522 |
+
+Under float64 the two devices agree to six decimal places and both say the same
+thing: **32-start L-BFGS-B attains the lower likelihood on all 120 datasets.**
+The GPU float32 result that put JAX-BADS ahead on 102 of 120 was an artifact of
+reduction order, not a property of either optimizer. CPU float32 already agreed
+with float64 on the ordering; it was the GPU float32 path that disagreed.
+
+This strengthens rather than changes the selection. L-BFGS-B was chosen on
+worst-case reliability and cost with recovery tied; it now also has the lower
+objective value everywhere, once the objective is evaluated precisely enough for
+the question to have an answer.
+
+The scope of the conclusion is the *scoring*, not the search: every arm still
+searched in float32, so this does not show what a float64 *search* would find.
+Global x64 adoption remains deferred, since JAX's flag is global and would change
+the surface backend's arithmetic as well.
 
 ### Banded against the truth curve
 

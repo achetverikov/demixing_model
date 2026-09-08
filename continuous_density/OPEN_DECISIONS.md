@@ -72,6 +72,17 @@ so this statement does not claim that all hierarchy error is confined to the
 narrow regime. Quantization error on a scale parameter is relative, so a fixed
 absolute step cannot serve a range spanning 5 to 160 degrees.
 
+Bias-weighted CRPS was selected the same way on 2026-09-08 and reached the same
+answer: 32-start serial L-BFGS-B, recorded in
+`WNM_BWCRPS_OPTIMIZER_FINDINGS.md`. Its median ordering against JAX-BADS is
+again device-decided, but at differences of about 7e-05 that sit below the
+device shift, while JAX-BADS's worst case of 0.062 and the hierarchy's 0.0034
+are device-robust against L-BFGS-B's 0.0005. Recovery is tied. The more
+important BWCRPS result is that the objective prefers the fitted parameters
+over the truth on essentially every dataset, by about 153 times the spread
+between arms, so for this objective the search choice is close to irrelevant
+beside the objective's own displacement from truth.
+
 The complete 120-dataset development L-BFGS-B run finished with at least 24
 converged starts per dataset. Detailed protocol and results are stored under
 `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`.
@@ -145,7 +156,19 @@ retired. The diagnostic must also verify that float64 is genuinely in force
 rather than assumed. The scoring path casts parameters and trials to float32
 explicitly and loads float32 checkpoint weights, so setting the global flag
 alone does not promote the computation, and this repository has already
-recorded one ineffective float64 fix (`TRANSITION_AUDIT.md`, finding 4).
+recorded one ineffective float64 fix (`TRANSITION_AUDIT.md`, finding 4).  **The
+diagnostic was run on 2026-09-08 and the question is now answered.** Rescoring
+the 120-dataset likelihood panel at every combination of device and precision,
+float64 reduces the cross-device disagreement from a median of 5.95e-03 to
+5.08e-07, and under float64 both devices agree that 32-start L-BFGS-B attains
+the lower likelihood on all 120 datasets. The GPU float32 result that put
+JAX-BADS ahead on 102 of 120 was reduction order, not optimization. This
+confirms the L-BFGS-B selection rather than changing it. The conclusion covers
+scoring only: every arm still searched in float32, so what a float64 search
+would find is untested. Global x64 adoption stays deferred until the surface
+backend is retired, and the practical rule meanwhile is that any arm comparison
+at differences below about 0.06 NLL must be scored in float64 or on a single
+fixed device.
 
 ## 3. Fitting bounds versus the corpus hull (needed before any production WNM fit)
 
