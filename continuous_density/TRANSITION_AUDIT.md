@@ -13,11 +13,11 @@ The audit used the repository guidance in `AGENTS.md`, `CLAUDE.md`, and
 rerun tests or GPU jobs; statements about its test totals and discovered defects
 came from the commit record. Claims about current support were checked against
 source. The 2026-09-07 update fixed and reran the density start-sweep selection
-and its targeted recovery tests. A later update records the single-condition
-likelihood comparison, followed by a correction: its hierarchy and BADS arms
-were not faithful production configurations, so likelihood optimizer selection
-is reopened. Detailed protocol and generated results remain under
-`$DEMIXING_ARTIFACT_ROOT`.
+and its targeted recovery tests. A later correction found that the first
+single-condition likelihood comparison used incomplete hierarchy and BADS
+comparators. The corrected implementations were subsequently run on all 120
+development datasets, settling likelihood on 32-start serial L-BFGS-B. Detailed
+protocol and generated results remain under `$DEMIXING_ARTIFACT_ROOT`.
 
 ## Executive summary
 
@@ -64,10 +64,12 @@ browser work, rollout, regeneration, and removal of the surface NN are deferred.
   noise-free start-count sweep over hard range-panel cases have run.
 - The first actual-DM data panel is frozen and generated: n=100, single
   condition, no motor noise, with uniformly allocated dissimilarities and nested
-  180/450/900-trial datasets. The deployed surface baseline and the provisional
+  180/450/900-trial datasets. The deployed surface baseline and the selected
   32-start WNM likelihood search fitted all 120 development datasets; that WNM
-  search was also run once on all 60 held-out datasets. Common recovery,
-  likelihood, mean-bias, bias-SD, and asymmetry summaries are saved with the runs.
+  search was also run once on all 60 held-out datasets. Production-faithful
+  hierarchy and 32-start JAX-BADS comparators completed the 120-dataset
+  development split. Common recovery, likelihood, mean-bias, bias-SD, and
+  asymmetry summaries are saved with the runs.
 
 ### Partial or not yet completed
 
@@ -79,9 +81,8 @@ browser work, rollout, regeneration, and removal of the surface NN are deferred.
   the surface-only optimizer, so it does not yet provide a working WNM prediction
   path.
 - On the actual-DM n=100 panel, paired development/held-out surface comparisons
-  exist, but likelihood search selection is reopened because the prior hierarchy
-  and BADS comparators were incomplete ports. Bias-weighted CRPS, density,
-  smoothed expectation, and representative real-data comparisons also remain.
+  and corrected likelihood-search comparisons exist. Bias-weighted CRPS,
+  density, smoothed expectation, and representative real-data comparisons remain.
 - Unified subject plots and PDF slices explicitly reject WNM. This is acceptable
   during the recovery stage and is deferred below.
 - `surface_browser`, demos, external fit scripts, the comparison pipeline, model
@@ -262,11 +263,12 @@ current critical path.
   `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`.
 
 Shared evaluation metrics and practical optimization-gap/runtime criteria are
-part of R2 and must be fixed before inspecting the held-out fits. n=20,
-multi-condition, and motor-noise extensions are deferred until this focused
-panel works.
+part of R2. The likelihood held-out fits were already inspected before the
+comparator correction, so they remain descriptive rather than a new prospective
+confirmation. n=20, multi-condition, and motor-noise extensions are deferred
+until this focused panel works.
 
-### R2. Establish optimization quality separately by objective — likelihood reopened
+### R2. Establish optimization quality separately by objective — likelihood settled
 
 All candidate solutions for an objective must be reevaluated through one common
 WNM scorer. Record best loss, gaps to the best available reference, boundary hits,
@@ -282,18 +284,20 @@ convergence, start variability, evaluator calls, wall time, and peak memory.
 The goal is not to declare one universal optimizer. Freeze the simplest reliable
 strategy separately for each objective.
 
-For likelihood, the initial development comparison favored serial 32-start SciPy
-L-BFGS-B with deterministic log-space Latin-hypercube starts. Sixteen starts had
-material misses; 64 changed only sub-threshold gaps at nearly twice the CPU time.
-That comparison did not settle the search: the hierarchy was a simplified
-9/13-point log lattice rather than the production surface hierarchy, JAX-BADS
-used four starts and one third of BBZ's three-parameter default budget on the
-representative panel, and PyBADS was absent. Re-run those three faithful arms on
-development data, with GPU execution for the JAX hierarchy and JAX-BADS, before
-freezing likelihood search. The primary BADS comparison uses the same 32
-dispersed starts as L-BFGS-B; the eight-start JAX-BADS run is retained only as a
-BBZ-production-count diagnostic. Detailed traces and thresholds are recorded in
-the external recovery artifact.
+For likelihood, the corrected comparison used the production surface hierarchy,
+32-start JAX-BADS with BBZ's three-parameter search budget, and a 24-dataset
+PyBADS check. The three affordable arms were extended to all 120 development
+datasets and rescored separately on CPU and GPU. The JAX-BADS versus L-BFGS-B
+NLL order reversed with the scoring device, while paired parameter recovery was
+effectively tied. L-BFGS-B had the smaller worst-case gap on both devices, at
+half the median time and about one ninth of the evaluations. Likelihood is
+therefore frozen on serial SciPy L-BFGS-B with 32 deterministic log-space
+Latin-hypercube starts. PyBADS was not extended because it tied L-BFGS-B on CPU
+at roughly 30 times the runtime. The production hierarchy was worse under both
+scoring devices; its catastrophic truth-curve failures were concentrated in the
+narrow cases because its one-degree absolute feature lattice is too coarse near
+the lower bound. Detailed traces and thresholds are recorded in the external
+recovery artifact.
 
 ### R3. Complete WNM closed-loop recovery — likelihood complete
 
@@ -313,15 +317,15 @@ the external recovery artifact.
 The actual-DM likelihood development fits provide the first result: 72.5% of
 datasets recovered all three parameters within a factor of 1.5, with median
 per-dataset joint log-RMSE 0.150. Broad/weak cases remained hardest. This is a
-finite-sample result from the 32-start search, but the claim that its search was
-independently established is withdrawn pending the corrected development
-comparison. It does not replace the pending BWCRPS and curve-objective analyses.
+finite-sample result from the selected 32-start search, whose optimization
+quality is now independently supported by the corrected development comparison.
+It does not replace the pending BWCRPS and curve-objective analyses.
 
 On the already-inspected held-out tuples, 70.0% recovered all parameters within
 a factor of 1.5, with median per-dataset joint log-RMSE 0.140. Recovery rose from
 25% at 180 trials to 90% at 450 and 95% at 900. These are descriptive results for
-the 32-start search, not a fresh confirmation of the optimizer now being
-reselected.
+the selected 32-start search, not a fresh prospective confirmation: the tuples
+had already been inspected before the corrected development comparison.
 
 ### R4. Run paired recovery from the actual DM observer — likelihood complete
 
@@ -356,8 +360,8 @@ WNM beat surface on common-grid NLL in 70.0% of pairs; global joint log-RMSE was
 versus 0.587, median per-dataset joint log-RMSE was 0.140 versus 0.315, and
 factor-of-1.5 recovery was 70.0% versus 43.3%. Curve metrics remained mixed,
 especially for nearly flat targets, rather than showing uniform dominance. It
-cannot serve as prospective optimizer confirmation after the comparator defect
-was found; corrected search selection must use development data only.
+cannot serve as prospective optimizer confirmation because it was inspected
+before the corrected development-only search selection.
 
 ### R5. Run paired representative real-data fits
 

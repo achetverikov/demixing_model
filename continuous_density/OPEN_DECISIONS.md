@@ -64,11 +64,13 @@ artifact. PyBADS was excluded from this panel on cost (user decision,
 runtime is Python-level call overhead at 26.1 ms per evaluation, not extra
 search. The production surface search geometry, driving the same WNM likelihood
 rather than the surface network, is worst under both devices, which is the one
-device-robust ranking; its failure is confined to the narrow cases, 13 of 15
-`narrow_1` datasets and one `narrow_3`, where a 1.0-degree feature lattice
-anchored at 2.5 cannot represent a true `sd_feat1` of 5.0 and returns 3.5 or
-4.5. Quantization error on a scale parameter is relative, so a fixed absolute
-step cannot serve a range spanning 5 to 160 degrees.
+device-robust ranking. Its catastrophic mean-bias truth-curve degradation is
+confined to 13 of 15 `narrow_1` datasets and one `narrow_3`, where a 1.0-degree
+feature lattice anchored at 2.5 cannot represent a true `sd_feat1` of 5.0 and
+returns 3.5 or 4.5. It also has smaller optimization gaps outside those cases,
+so this statement does not claim that all hierarchy error is confined to the
+narrow regime. Quantization error on a scale parameter is relative, so a fixed
+absolute step cannot serve a range spanning 5 to 160 degrees.
 
 The complete 120-dataset development L-BFGS-B run finished with at least 24
 converged starts per dataset. Detailed protocol and results are stored under

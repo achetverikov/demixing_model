@@ -9,13 +9,15 @@ rollout and regeneration, default promotion, and surface-NN retirement are
 deferred until those recovery gates are met. A recovery runner and initial n=20
 density panels now exist. The first actual-DM n=100 single-condition panel is
 frozen and generated. Its 120 development datasets were fitted with the deployed
-surface NN and with a provisionally selected 32-start WNM likelihood search;
-that search was then run once on all 60 held-out datasets. A later audit found
-that its hierarchy and BADS comparators were not production-faithful, so search
-selection is reopened and the held-out result is descriptive rather than a clean
+surface NN and with the selected 32-start WNM likelihood search; that search was
+then run once on all 60 held-out datasets. A later audit found that the first
+hierarchy and BADS comparators were not production-faithful. Corrected hierarchy
+and JAX-BADS implementations were run on all 120 development datasets, and the
+likelihood choice was settled again on 32-start serial L-BFGS-B. The already
+inspected held-out result remains descriptive rather than a clean prospective
 confirmation. WNM improved held-out common-grid likelihood and parameter recovery
-over the surface baseline under the 32-start search. Objective-specific WNM
-search and recovery work continues for bias-weighted CRPS, density, and smoothed
+over the surface baseline under that search. Objective-specific WNM search and
+recovery work continues for bias-weighted CRPS, density, and smoothed
 expectation. Statements below that no
 recovery runner or data were found describe the 2026-09-06 baseline.
 
