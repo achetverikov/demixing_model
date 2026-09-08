@@ -11,8 +11,9 @@ Ordered by when the plan needs them settled.
 
 ## 1. Objective-specific WNM search and start budgets (active in recovery R2)
 
-**Status: the focused single-condition likelihood search is reopened; the other
-retained objectives are also still open.** The earlier held-out run used
+**Status: the focused single-condition likelihood search is settled on 32-start
+serial L-BFGS-B (see the 120-dataset panel below); the other retained
+objectives are still open.** The earlier held-out run used
 serial SciPy L-BFGS-B with 32 deterministic log-space Latin-hypercube starts,
 seed 0, artifact bounds, 500 iterations, `ftol=1e-9`, `gtol=1e-6`, and JAX
 float32. The generic continuous optimizer's default of 8 starts remains a
@@ -20,9 +21,10 @@ placeholder and has not become a universal production default.
 
 On the likelihood development budget panel, 16 starts had two material misses,
 32 reached the 0.001-NLL gate on every dataset, and 64 only reduced
-sub-threshold gaps while nearly doubling median CPU time. That gate result held
-only against a union best without a 32-start BADS arm; on the corrected panel
-32-start SciPy reaches the gate on none of the 24 datasets (see below).
+sub-threshold gaps while nearly doubling median CPU time. That gate result held only against a union best without a 32-start BADS arm,
+and is device-conditional: on the 24-dataset panel rescored on GPU, 32-start
+SciPy reaches the gate on none of the 24, while on the 120-dataset panel
+rescored on CPU it reaches it on 98.3% (see below).
 However, the competing arms were not faithful production comparisons. The WNM
 hierarchy used a new 9/13-point log lattice with a coupled nearest-cell zoom,
 rather than the surface pipeline's 40-point shared grid, 20-by-20 feature grid,
@@ -41,47 +43,31 @@ it alone is compared at a fixed configuration while every rival was equalized;
 its failure mode is lattice alignment, and the analogue of a multistart budget
 would be jittered lattice offsets. No such arm has been built.
 
-The corrected five-arm panel has since been run and rescored on one device, in
-`wnm_optimizer_corrected_panel_v1/`, under the results directory named below.
-Thirty-two-start JAX-BADS nominally leads on optimization gap (median 0.0000,
-83.3% within 0.001) and parameter recovery (median joint log-RMSE 0.096,
-factor-of-1.5 rate 66.7%) against 0.0115 / 0.0% and 0.139 / 62.5% for 32-start
-SciPy, but neither lead is real. The NLL ordering is an artifact of the rescore
-device: rescored on CPU instead of the GPU the panel used, JAX-BADS is lower on
-0 of 24 rather than 23 of 24, a sign flip on 23 datasets, because each arm
-converged to its own device's float32 objective. The recovery gap is a
-marginal-median artifact: paired, it is -0.0001, with one dataset of 24
-accounting for it. PyBADS is likewise not worse: against L-BFGS-B, its own
-device-mate, it is tied (median difference 0.00000 on a CPU rescore), and its
-apparent deficit to JAX-BADS is the same device artifact, 22 sign flips of 24.
-It spends fewer evaluations per start than JAX-BADS, 117.3 against 378.5, but
-that is a difference of stopping rules rather than of budget: JAX-BADS's
-1500-evaluation cap never binds, the largest observed being 508.3 per start, so
-both implementations self-terminate on their own convergence criteria. Its
-30-fold runtime is 26.1 ms per evaluation of Python-level call overhead, not
-extra search. All three 32-start arms find the same optimum here.
-They differ only in cost, 6.28 against 3.20 seconds, and the production surface
-search geometry, driving the same WNM likelihood rather than the surface
-network, is worst on both. PyBADS is excluded from further comparisons (user
-decision, 2026-09-08): tied with L-BFGS-B on its own device, it adds no
-discrimination, and a 120-dataset arm would cost about 3.3 hours against
-roughly 13 minutes for JAX-BADS. Its purpose was to check that the JAX port
-matches the reference implementation, which it does; the existing 24-dataset
-results stay as the record, and the exclusion is on cost, not on quality.
-
-The decision between the three 32-start arms is not settled by these
-gaps: rescoring one winner on another device moves the loss by up to 0.0177,
-and most of their gaps fall below that, so the 0.001 gate is finer than the
-scoring reproducibility. Curve agreement does not break the tie either: by
-dissimilarity band no arm exceeds 0.4 median CCC in any band, and the
-hierarchy's apparently better whole-curve CCC is a marginal-median artifact
-that disappears when datasets are paired. Scored against a noise-free curve at
-the generating parameters instead of the noisy empirical one, the likelihood
-arms reach 0.93 median CCC and the hierarchy 0.08, its failure concentrated on
-the six `narrow_1` datasets where the production feature lattice cannot
-represent a true `sd_feat1` of 5.0 and returns 4.50. Selecting among the
-32-start arms needs a criterion that is resolvable in float32, not a further
-tightening of the gate.
+The comparison has since been run on all 120 development datasets for the three
+surviving arms, assembled twice so the ranking could be computed under each
+scoring device (`wnm_development_panel_gpu_v1/` and
+`wnm_development_panel_cpu_v1/`). The result is that the NLL ranking between
+32-start JAX-BADS and 32-start L-BFGS-B is entirely an artifact of the scoring
+device: paired over 120 datasets JAX-BADS is lower on 102 of 120 when scored on
+GPU and on 0 of 120 when the identical winners are scored on CPU, because each
+arm converged to its own device's float32 objective. Parameter recovery, which
+does not depend on the scoring device, is a tie: paired difference -0.00008
+with JAX-BADS better on 63 of 120, against marginal medians of 0.1423 and
+0.1495 that suggest a difference that is not there. What does separate them is
+worst-case reliability and cost, both favouring L-BFGS-B: its largest gap over
+120 datasets is 0.067 against JAX-BADS's 0.659, at half the time and a ninth of
+the evaluations. **Thirty-two-start serial L-BFGS-B is therefore the choice for
+the likelihood**, with the earlier JAX-BADS lead recorded as a scoring
+artifact. PyBADS was excluded from this panel on cost (user decision,
+2026-09-08): it is tied with L-BFGS-B on its own device, and its 30-fold
+runtime is Python-level call overhead at 26.1 ms per evaluation, not extra
+search. The production surface search geometry, driving the same WNM likelihood
+rather than the surface network, is worst under both devices, which is the one
+device-robust ranking; its failure is confined to the narrow cases, 13 of 15
+`narrow_1` datasets and one `narrow_3`, where a 1.0-degree feature lattice
+anchored at 2.5 cannot represent a true `sd_feat1` of 5.0 and returns 3.5 or
+4.5. Quantization error on a scale parameter is relative, so a fixed absolute
+step cannot serve a range spanning 5 to 160 degrees.
 
 The complete 120-dataset development L-BFGS-B run finished with at least 24
 converged starts per dataset. Detailed protocol and results are stored under
