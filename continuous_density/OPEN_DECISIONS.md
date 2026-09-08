@@ -124,7 +124,28 @@ cannot be switched on unilaterally.
 **Decision needed only if a key likelihood or BWCRPS comparison shows a
 precision-sensitive solution**: whether to run and potentially adopt a targeted
 x64 configuration, and if adoption precedes NN retirement, whether to re-verify
-the surface parity fixtures under x64. Otherwise this stays deferred.
+the surface parity fixtures under x64.
+
+**That condition fired on 2026-09-08.** The likelihood comparison is
+precision-sensitive in exactly the sense this item names: rescoring the same
+120-dataset panel of stored winners on CPU rather than GPU reverses the
+JAX-BADS versus L-BFGS-B order, from lower on 102 of 120 to lower on 0 of 120,
+because in float32 the two devices are slightly different objective functions.
+
+The recorded rationale above is also too optimistic about the scale. It
+justifies deferral by a convergence floor near 1e-8 relative, but the effect
+that actually decided an arm comparison is a device-dependent reduction
+difference of up to 0.04 NLL, four orders of magnitude larger. The question is
+not optimizer convergence; it is that two devices disagree about the objective
+by more than the arms disagree with each other. A targeted matched x64
+diagnostic is therefore due, reported separately and not as global adoption:
+JAX's x64 flag is global, so enabling it would change the surface backend's
+arithmetic as well, and that stays deferred until the surface backend is
+retired. The diagnostic must also verify that float64 is genuinely in force
+rather than assumed. The scoring path casts parameters and trials to float32
+explicitly and loads float32 checkpoint weights, so setting the global flag
+alone does not promote the computation, and this repository has already
+recorded one ineffective float64 fix (`TRANSITION_AUDIT.md`, finding 4).
 
 ## 3. Fitting bounds versus the corpus hull (needed before any production WNM fit)
 
