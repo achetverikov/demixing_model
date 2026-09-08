@@ -30,6 +30,11 @@ only four starts on the representative panel and a budget of 500 evaluations /
 1,500 evaluations / 300 iterations. PyBADS was not tested at all. Therefore the
 earlier comparison does not rule out any of those three approaches.
 
+Use the same 32 deterministic dispersed starts for PyBADS, JAX-BADS, and
+L-BFGS-B in the primary comparison, so optimizer family is not confounded with
+start coverage. Retain the eight-start JAX-BADS run separately as a
+BBZ-production-count diagnostic. The hierarchy has no start-count setting.
+
 The complete 120-dataset development L-BFGS-B run finished with at least 24
 converged starts per dataset. Detailed protocol and results are stored under
 `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`.

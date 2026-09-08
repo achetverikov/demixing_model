@@ -290,8 +290,10 @@ That comparison did not settle the search: the hierarchy was a simplified
 used four starts and one third of BBZ's three-parameter default budget on the
 representative panel, and PyBADS was absent. Re-run those three faithful arms on
 development data, with GPU execution for the JAX hierarchy and JAX-BADS, before
-freezing likelihood search. Detailed traces and thresholds are recorded in the
-external recovery artifact.
+freezing likelihood search. The primary BADS comparison uses the same 32
+dispersed starts as L-BFGS-B; the eight-start JAX-BADS run is retained only as a
+BBZ-production-count diagnostic. Detailed traces and thresholds are recorded in
+the external recovery artifact.
 
 ### R3. Complete WNM closed-loop recovery — likelihood complete
 
