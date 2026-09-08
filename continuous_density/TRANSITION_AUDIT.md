@@ -13,9 +13,11 @@ The audit used the repository guidance in `AGENTS.md`, `CLAUDE.md`, and
 rerun tests or GPU jobs; statements about its test totals and discovered defects
 came from the commit record. Claims about current support were checked against
 source. The 2026-09-07 update fixed and reran the density start-sweep selection
-and its targeted recovery tests. A later update records the completed
-single-condition development likelihood comparison; its detailed protocol and
-generated results remain under `$DEMIXING_ARTIFACT_ROOT`.
+and its targeted recovery tests. A later update records the single-condition
+likelihood comparison, followed by a correction: its hierarchy and BADS arms
+were not faithful production configurations, so likelihood optimizer selection
+is reopened. Detailed protocol and generated results remain under
+`$DEMIXING_ARTIFACT_ROOT`.
 
 ## Executive summary
 
@@ -62,9 +64,9 @@ browser work, rollout, regeneration, and removal of the surface NN are deferred.
   noise-free start-count sweep over hard range-panel cases have run.
 - The first actual-DM data panel is frozen and generated: n=100, single
   condition, no motor noise, with uniformly allocated dissimilarities and nested
-  180/450/900-trial datasets. The deployed surface baseline and the selected WNM
-  likelihood search fitted all 120 development datasets; the frozen WNM search
-  was then confirmed once on all 60 held-out datasets. Common recovery,
+  180/450/900-trial datasets. The deployed surface baseline and the provisional
+  32-start WNM likelihood search fitted all 120 development datasets; that WNM
+  search was also run once on all 60 held-out datasets. Common recovery,
   likelihood, mean-bias, bias-SD, and asymmetry summaries are saved with the runs.
 
 ### Partial or not yet completed
@@ -76,9 +78,10 @@ browser work, rollout, regeneration, and removal of the surface NN are deferred.
 - The direct prediction command identifies WNM artifacts but still constructs
   the surface-only optimizer, so it does not yet provide a working WNM prediction
   path.
-- On the actual-DM n=100 panel, likelihood search selection and paired
-  development/held-out surface comparisons are complete. Bias-weighted CRPS,
-  density, smoothed expectation, and representative real-data comparisons remain.
+- On the actual-DM n=100 panel, paired development/held-out surface comparisons
+  exist, but likelihood search selection is reopened because the prior hierarchy
+  and BADS comparators were incomplete ports. Bias-weighted CRPS, density,
+  smoothed expectation, and representative real-data comparisons also remain.
 - Unified subject plots and PDF slices explicitly reject WNM. This is acceptable
   during the recovery stage and is deferred below.
 - `surface_browser`, demos, external fit scripts, the comparison pipeline, model
@@ -263,7 +266,7 @@ part of R2 and must be fixed before inspecting the held-out fits. n=20,
 multi-condition, and motor-noise extensions are deferred until this focused
 panel works.
 
-### R2. Establish optimization quality separately by objective — likelihood selected
+### R2. Establish optimization quality separately by objective — likelihood reopened
 
 All candidate solutions for an objective must be reevaluated through one common
 WNM scorer. Record best loss, gaps to the best available reference, boundary hits,
@@ -279,14 +282,16 @@ convergence, start variability, evaluator calls, wall time, and peak memory.
 The goal is not to declare one universal optimizer. Freeze the simplest reliable
 strategy separately for each objective.
 
-For likelihood, the development comparison selected serial 32-start SciPy
+For likelihood, the initial development comparison favored serial 32-start SciPy
 L-BFGS-B with deterministic log-space Latin-hypercube starts. Sixteen starts had
 material misses; 64 changed only sub-threshold gaps at nearly twice the CPU time.
-The initially promising hierarchical-plus-polish search failed on an expanded
-panel because its zoom was sensitive to lattice alignment. This settles the
-likelihood search for the focused held-out confirmation, not the other three
-objectives. Detailed traces and thresholds are recorded in the external recovery
-artifact.
+That comparison did not settle the search: the hierarchy was a simplified
+9/13-point log lattice rather than the production surface hierarchy, JAX-BADS
+used four starts and one third of BBZ's three-parameter default budget on the
+representative panel, and PyBADS was absent. Re-run those three faithful arms on
+development data, with GPU execution for the JAX hierarchy and JAX-BADS, before
+freezing likelihood search. Detailed traces and thresholds are recorded in the
+external recovery artifact.
 
 ### R3. Complete WNM closed-loop recovery — likelihood complete
 
@@ -306,13 +311,15 @@ artifact.
 The actual-DM likelihood development fits provide the first result: 72.5% of
 datasets recovered all three parameters within a factor of 1.5, with median
 per-dataset joint log-RMSE 0.150. Broad/weak cases remained hardest. This is a
-finite-sample recovery result under an independently checked search; it does not
-replace the pending BWCRPS and curve-objective analyses.
+finite-sample result from the 32-start search, but the claim that its search was
+independently established is withdrawn pending the corrected development
+comparison. It does not replace the pending BWCRPS and curve-objective analyses.
 
-On the held-out tuples, 70.0% recovered all parameters within a factor of 1.5,
-with median per-dataset joint log-RMSE 0.140. Recovery rose from 25% at 180 trials
-to 90% at 450 and 95% at 900, confirming that the smallest datasets are the
-limiting condition for this strict criterion.
+On the already-inspected held-out tuples, 70.0% recovered all parameters within
+a factor of 1.5, with median per-dataset joint log-RMSE 0.140. Recovery rose from
+25% at 180 trials to 90% at 450 and 95% at 900. These are descriptive results for
+the 32-start search, not a fresh confirmation of the optimizer now being
+reselected.
 
 ### R4. Run paired recovery from the actual DM observer — likelihood complete
 
@@ -342,11 +349,13 @@ log-RMSE was 0.410 for WNM versus 0.453 for surface; median per-dataset values
 were 0.150 versus 0.189. Bias-SD and asymmetry curve summaries favored WNM;
 mean-bias CCC favored WNM while its median RMSE was slightly higher.
 
-The one-time 60-dataset held-out comparison confirmed the main result. WNM beat
-surface on common-grid NLL in 70.0% of pairs; global joint log-RMSE was 0.391
+The one-time 60-dataset held-out comparison found the same directional result.
+WNM beat surface on common-grid NLL in 70.0% of pairs; global joint log-RMSE was 0.391
 versus 0.587, median per-dataset joint log-RMSE was 0.140 versus 0.315, and
 factor-of-1.5 recovery was 70.0% versus 43.3%. Curve metrics remained mixed,
-especially for nearly flat targets, rather than showing uniform dominance.
+especially for nearly flat targets, rather than showing uniform dominance. It
+cannot serve as prospective optimizer confirmation after the comparator defect
+was found; corrected search selection must use development data only.
 
 ### R5. Run paired representative real-data fits
 

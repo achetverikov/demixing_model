@@ -11,8 +11,8 @@ Ordered by when the plan needs them settled.
 
 ## 1. Objective-specific WNM search and start budgets (active in recovery R2)
 
-**Status: the focused single-condition likelihood search is selected and
-confirmed; the other retained objectives are still open.** The held-out run used
+**Status: the focused single-condition likelihood search is reopened; the other
+retained objectives are also still open.** The earlier held-out run used
 serial SciPy L-BFGS-B with 32 deterministic log-space Latin-hypercube starts,
 seed 0, artifact bounds, 500 iterations, `ftol=1e-9`, `gtol=1e-6`, and JAX
 float32. The generic continuous optimizer's default of 8 starts remains a
@@ -20,15 +20,25 @@ placeholder and has not become a universal production default.
 
 On the likelihood development budget panel, 16 starts had two material misses,
 32 reached the 0.001-NLL gate on every dataset, and 64 only reduced
-sub-threshold gaps while nearly doubling median CPU time. A log-hierarchical
-search with gradient polishing looked strong on the first pilot but failed on
-the expanded panel because the zoom depended on lattice alignment. The complete
-120-dataset development run then finished with at least 24 converged starts per
-dataset. Detailed protocol and results are stored under
+sub-threshold gaps while nearly doubling median CPU time. However, the competing
+arms were not faithful production comparisons. The WNM hierarchy used a new
+9/13-point log lattice with a coupled nearest-cell zoom, rather than the surface
+pipeline's 40-point shared grid, 20-by-20 feature grid, fixed feature-step
+schedule, 0.5 spatial zoom, and 1-degree stopping rule. The JAX-BADS pilot used
+only four starts on the representative panel and a budget of 500 evaluations /
+100 iterations; BBZ uses eight curated starts and, for three parameters, defaults to
+1,500 evaluations / 300 iterations. PyBADS was not tested at all. Therefore the
+earlier comparison does not rule out any of those three approaches.
+
+The complete 120-dataset development L-BFGS-B run finished with at least 24
+converged starts per dataset. Detailed protocol and results are stored under
 `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`.
-On held-out data WNM beat the surface pipeline on common-grid NLL in 70.0% of
-pairs and improved global joint log-RMSE from 0.587 to 0.391. This closes the
-likelihood decision for the focused panel without selecting a universal search.
+The already-inspected held-out data showed WNM beating the surface pipeline on
+common-grid NLL in 70.0% of pairs and improving global joint log-RMSE from 0.587
+to 0.391. Those numbers remain descriptive, but they are no longer evidence of a
+prospectively frozen optimizer choice. Do not inspect held-out data while
+reselecting the search, and do not describe a later reuse of those tuples as a
+first confirmation.
 
 `continuous_optimizer.minimize_continuous` defaults to a placeholder `n_starts`.
 The budget materially decides the answer:
