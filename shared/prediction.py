@@ -33,10 +33,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
-from shared.mu1_axis import mu1_grid, periodic_integral, sign_masks, mu1_cell_width
+from shared.mu1_axis import (mu1_cell_width, mu1_grid, mu1_grid_np,
+                             periodic_integral, sign_masks)
 from shared.utils import gaussian_curve_smoother
 
 #: Component separation on the spatial axis, in model degrees.  Hardcoded at
@@ -472,13 +474,11 @@ class WrappedMixturePredictor(BiasPredictor):
         dist = self.distribution(params, validate, sd_motor)
         weights = jnp.exp(dist['log_pi'])
 
-        def mass(lo, hi):
-            per_component = self._wm.wrapped_normal_interval_probability(
-                dist['mu'], dist['sigma'], lo, hi, self.arc_wraps)
-            return jnp.sum(weights * per_component, axis=-1)
-
-        return jnp.stack([mass(float(edges[i]), float(edges[i + 1]))
-                          for i in range(len(edges) - 1)], axis=-1)
+        per_component = jax.vmap(
+            lambda lo, hi: self._wm.wrapped_normal_interval_probability(
+                dist['mu'], dist['sigma'], lo, hi, self.arc_wraps),
+            out_axes=-1)(edges[:-1], edges[1:])
+        return jnp.sum(weights[..., None] * per_component, axis=-2)
 
     def mean_and_resultant(self, params, validate: bool = True, sd_motor=None):
         return self._wm.mean_and_resultant(self.distribution(params, validate, sd_motor))
@@ -560,7 +560,7 @@ class WrappedMixturePredictor(BiasPredictor):
     @staticmethod
     def _default_edges():
         """Cell edges of the production reporting grid, from its centres."""
-        centres = np.asarray(mu1_grid())
+        centres = mu1_grid_np()
         half = mu1_cell_width() / 2.0
         return jnp.asarray(np.concatenate([centres - half, [centres[-1] + half]]))
 

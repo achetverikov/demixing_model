@@ -77,6 +77,7 @@ class LikelihoodEvaluator:
     """
 
     def __init__(self, predictor):
+        self.name = "wnm-likelihood"
         self.predictor = predictor
 
         def loss(log_parameters, feature_difference, bias):
@@ -430,7 +431,8 @@ def bbz_pybads_search(evaluator, trials, bounds, implementation, *, n_starts=8,
     started = time.perf_counter()
     implementation._pybads_multistart(
         value, starts, list(zip(lower, upper)), n_starts,
-        trace=trace, name="wnm-likelihood", _unpack=_wnm_unpack)
+        trace=trace, name=getattr(evaluator, "name", "wnm-likelihood"),
+        _unpack=_wnm_unpack)
     elapsed = time.perf_counter() - started
     return _bbz_trace_result(
         evaluator, trials, bounds, trace, "bbz-pybads", elapsed,
@@ -452,7 +454,8 @@ def bbz_jax_bads_search(evaluator, trials, bounds, implementation, *, n_starts=8
     implementation.bads_jax_multistart(
         evaluator.loss_fn, (feature_difference, bias), starts,
         list(zip(lower, upper)), n_starts, trace=trace,
-        name="wnm-likelihood", _unpack=_wnm_unpack)
+        name=getattr(evaluator, "name", "wnm-likelihood"),
+        _unpack=_wnm_unpack)
     elapsed = time.perf_counter() - started
     defaults = {key: value for key, value in implementation._DEFAULTS.items()
                 if np.asarray(value).ndim == 0}

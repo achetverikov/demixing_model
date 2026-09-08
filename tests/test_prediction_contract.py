@@ -15,6 +15,7 @@ through two different estimators.
 import sys
 from pathlib import Path
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -209,6 +210,20 @@ def test_cell_probabilities_are_a_distribution_across_the_domain(predictor, sd_m
     assert probs.shape == (len(PARAMS), len(mu1_grid()))
     assert np.all(probs >= -1e-9)
     np.testing.assert_allclose(probs.sum(axis=-1), 1.0, atol=1e-5)
+
+
+@needs_artifact
+def test_cell_probabilities_are_jittable_and_differentiable(predictor):
+    """Distributional objectives differentiate through integrated cell mass."""
+    def objective(sd_feat1):
+        rows = PARAMS.at[0, 0].set(sd_feat1)
+        probabilities = predictor.cell_probabilities(rows, validate=False)
+        return probabilities[0, 90] + 0.5 * probabilities[0, 91]
+
+    value, gradient = jax.jit(jax.value_and_grad(objective))(10.0)
+    assert np.isfinite(float(value))
+    assert np.isfinite(float(gradient))
+    assert not np.isclose(float(gradient), 0.0)
 
 
 @needs_artifact
