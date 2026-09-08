@@ -21,7 +21,8 @@ placeholder and has not become a universal production default.
 
 On the likelihood development budget panel, 16 starts had two material misses,
 32 reached the 0.001-NLL gate on every dataset, and 64 only reduced
-sub-threshold gaps while nearly doubling median CPU time. That gate result held only against a union best without a 32-start BADS arm,
+sub-threshold gaps while nearly doubling median CPU time. That gate result held
+only against a union best without a 32-start BADS arm,
 and is device-conditional: on the 24-dataset panel rescored on GPU, 32-start
 SciPy reaches the gate on none of the 24, while on the 120-dataset panel
 rescored on CPU it reaches it on 98.3% (see below).
