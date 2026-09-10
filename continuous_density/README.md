@@ -349,13 +349,16 @@ artifact directory.
 The focused n=100 actual-DM recovery stage is also complete for likelihood,
 bias-weighted CRPS, density, and smoothed expectation, including the deployed
 surface-NN comparator and frozen held-out cases. Likelihood and BWCRPS support
-the WNM pipeline; density and smoothed expectation recover their target curves
-but weakly identify the generating parameters. Density KDE alignment and
-smoothed-expectation feature smoothing have been tested explicitly. See
+the WNM pipeline. Density and smoothed expectation fit their realized empirical
+targets well but weakly identify the generating parameters: at 450 trials the
+empirical curves can fluctuate substantially around the generating-parameter
+curves, and both optimizers follow that finite-sample variation. Density KDE
+alignment and smoothed-expectation feature smoothing have been tested
+explicitly. See
 [`TRANSITION_AUDIT.md`](TRANSITION_AUDIT.md) for the current gate status and the
 objective-specific `*FINDINGS.md` files for results. The remaining critical path
-is routing the selected objective-specific WNM searches through the fitting
-entry point, completing direct WNM prediction, settling comparison bounds, and
+is routing the selected common 64-start batched JAX L-BFGS-B policy through the
+fitting entry point, completing direct WNM prediction, settling comparison bounds, and
 then running paired representative real-data fits. Default promotion and
 surface-NN retirement have not occurred.
 

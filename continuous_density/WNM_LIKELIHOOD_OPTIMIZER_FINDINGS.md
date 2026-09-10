@@ -1,7 +1,18 @@
 # WNM likelihood optimizer findings
 
 Date: 2026-09-07; corrected panel, banded curve scoring and the full
-120-dataset panel added 2026-09-08
+120-dataset panel added 2026-09-08; 64-start common policy added 2026-09-10
+
+The frozen implementation is now the faithful batched JAX L-BFGS-B port with
+64 starts, float32 arrays, and `highest` matmul precision, following the final
+cross-objective executive decision. On the 120 development datasets it removed
+three material misses of the 32-start port; against their two-arm union, 64
+starts covered 120/120 with maximum gap 0.000732. Median time increased from
+0.306 to 0.466 seconds. Parameter recovery and whole/banded truth-curve CCC
+were effectively unchanged. Against the wider tested union, the 64-start arm
+had one 0.001221 gap to SciPy, which is accepted in exchange for a single
+optimizer policy across objectives. The earlier optimizer-family and 32-start
+comparisons below remain as selection provenance.
 
 All run directories and CSV file names in this document are relative to
 `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`,
@@ -21,7 +32,8 @@ comparison against faithful PyBADS, JAX-BADS, and surface-hierarchy
 implementations. The primary BADS arms used the same 32 dispersed starts as
 L-BFGS-B; an eight-start JAX-BADS run separately represented BBZ's production
 start count. Both JAX arms ran on GPU. The corrected 120-dataset comparison below
-settles the likelihood search on serial 32-start L-BFGS-B.
+settled the optimizer family on 32-start L-BFGS-B; the later faithful-port
+comparison selected its batched JAX implementation with full float32 matmuls.
 
 ## Full 120-dataset development panel (2026-09-08)
 
@@ -552,16 +564,17 @@ state.
 
 ## Follow-up status and remaining cleanup
 
-1. Search selection is complete for bias-weighted CRPS, density, and smoothed
-   expectation; see their objective-specific findings documents. Likelihood's
-   optimizer is not generalized to those objectives.
-2. CPU/GPU rescoring and the targeted float64 diagnostic are complete. They
-   identify the apparent GPU JAX-BADS advantage as a float32 reduction-order
-   artifact and confirm L-BFGS-B. Search itself remains float32; global x64
-   adoption is deferred until the surface backend is retired.
+1. Search selection is complete for all retained objectives. The final
+   executive policy is the same 64-start batched port for each; see their
+   objective-specific findings documents.
+2. CPU/GPU rescoring, the targeted float64 diagnostic, and the faithful-port
+   comparison are complete. They identify default GPU TF32 surrogate matmuls as
+   the remaining cross-device discrepancy. Search remains float32 but requires
+   `highest` matmul precision; global x64 adoption is unnecessary.
 3. No jittered-lattice hierarchy arm was built. This is recorded rather than
-   left as an open recovery requirement: the selected 32-start L-BFGS-B search
-   is cheaper and more reliable on the focused likelihood panel.
+   left as an open recovery requirement: the selected 64-start port is cheaper
+   and more reliable than the historical hierarchy on the focused likelihood
+   panel.
 4. The research and transition banded-metric analyses still use separate frame
    schemas. Collapsing them is engineering cleanup for a shared production
    consumer, not a blocker for the completed recovery result.

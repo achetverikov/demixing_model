@@ -16,24 +16,28 @@ Ordered by when the plan needs them settled.
 
 ## 1. Objective-specific WNM search and start budgets (resolved for focused recovery)
 
-**Status: the focused single-condition searches are settled for all four
-currently implemented objectives.** Likelihood and bias-weighted CRPS use
-32-start serial L-BFGS-B. Density uses the 80-by-64 log curve cache followed by
-one continuous polish. Smoothed expectation uses the same cache, polishes eight
-distinct minima, and conditionally runs the hierarchy when the cache and SciPy
-canonical losses differ by more than 0.01. The alternative matched-KDE density
-operator remains diagnostic rather than a production objective; its completed
-32-start fits do not by themselves select a production search for that new
-operator. The earlier held-out run used
-serial SciPy L-BFGS-B with 32 deterministic log-space Latin-hypercube starts,
-seed 0, artifact bounds, 500 iterations, `ftol=1e-9`, `gtol=1e-6`, and JAX
-float32. The generic continuous optimizer's default of 8 starts remains a
-placeholder and has not become a universal production default.
+**Status: resolved by executive decision for focused recovery.** All four
+retained objectives use one search policy: the batched JAX L-BFGS-B port with
+64 deterministic dispersed starts, float32 arrays, and `highest` matmul
+precision. Objective-specific caches, SciPy unions, and conditional hierarchy
+rules are not part of the selected path. This deliberately favors one
+maintainable optimizer over the last increment of objective-specific search
+coverage.
 
-These choices are validated in the focused recovery harness, but the public
+The tradeoff is explicit. Sixty-four starts removed the three material
+likelihood misses of the 32-start port and gave complete 32/64-union coverage;
+BWCRPS recovery and loss were effectively unchanged; matched-KDE density met
+the full development gate and made its non-reusable cache unnecessary. For
+matched smoothed expectation, however, the port alone reached the 0.001 gate on
+91/120 datasets with worst gap 44.40, versus 116/120 and 0.249 for the matched
+cache/composite. The executive decision accepts those misses for cross-
+objective consistency. These are search losses against empirical objectives,
+not corresponding deficits in paired truth-curve CCC or parameter recovery.
+
+This policy is frozen in the focused recovery harness, but the public
 fitter still admits WNM only through `--search continuous`. Routing the selected
-density and smoothed-expectation cache strategies into that entry point remains
-a prerequisite for like-for-like real-data fits; multi-condition/shared-
+matched operators and the common 64-start search into that entry point
+remains a prerequisite for like-for-like real-data fits; multi-condition/shared-
 `sd_spat` search is outside what this single-condition panel settled.
 
 **Historical selection path.** On the likelihood development budget panel, 16 starts had two material misses,
@@ -89,16 +93,31 @@ so this statement does not claim that all hierarchy error is confined to the
 narrow regime. Quantization error on a scale parameter is relative, so a fixed
 absolute step cannot serve a range spanning 5 to 160 degrees.
 
-Bias-weighted CRPS was selected the same way on 2026-09-08 and reached the same
-answer: 32-start serial L-BFGS-B, recorded in
-`WNM_BWCRPS_OPTIMIZER_FINDINGS.md`. Its median ordering against JAX-BADS is
+The implementation choice was superseded on 2026-09-10 after benchmarking the
+faithful batched JAX L-BFGS-B port. Default GPU float32 matmuls used TF32 and
+changed the likelihood surface enough to alter basins. With
+`JAX_DEFAULT_MATMUL_PRECISION=highest`, the 32-start port was within 0.001 of
+the selected SciPy/port union on all 120 development datasets, with maximum gap
+0.000977 and 9.65-fold median paired speedup. This configuration is now frozen;
+held-out evaluation is confirmatory. Detailed traces and the cross-objective
+precision comparison live under
+`$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`.
+
+Bias-weighted CRPS was selected the same way on 2026-09-08 and initially chose
+32-start serial L-BFGS-B, recorded in `WNM_BWCRPS_OPTIMIZER_FINDINGS.md`. Its
+median ordering against JAX-BADS is
 again device-decided, but at differences of about 7e-05 that sit below the
 device shift, while JAX-BADS's worst case of 0.062 and the hierarchy's 0.0034
 are device-robust against L-BFGS-B's 0.0005. Recovery is tied. The more
 important BWCRPS result is that the objective prefers the fitted parameters
 over the truth on essentially every dataset, by about 153 times the spread
 between arms, so for this objective the search choice is close to irrelevant
-beside the objective's own displacement from truth.
+beside the objective's own displacement from truth. The faithful batched port
+subsequently met the 0.001 union gate on all 120 development and all 60 held-out
+datasets with `highest` matmul precision. On held-out data its median time was
+1.037 seconds versus 5.490 for SciPy, and it also had the lower common-rescored
+loss by more than 0.001 on the three cases where the SciPy arm missed the gate.
+The port therefore supersedes serial SciPy for BWCRPS.
 
 The frozen BWCRPS choice was confirmed once on the 60 held-out datasets. WNM
 beat the surface-NN parameter fit after both were rescored through the common
@@ -109,17 +128,23 @@ supporting evidence for the primary distributional and parameter criteria, not
 a claim of uniform curve superiority. Full results are in
 `WNM_BWCRPS_OPTIMIZER_FINDINGS.md` and the external recovery artifact it names.
 
-For the current density operator, the selected cache-plus-polish search reached
-the common-score gate on the complete development panel and was frozen before
-the 60 held-out fits. A separate target-alignment panel showed that matched KDE
+For the legacy density operator, the selected cache-plus-polish search reached
+the common-score gate on the complete development panel. The target-alignment
+panel showed that matched KDE
 does not shift typical parameter recovery relative to the current operator, but
 does reduce large-error tails. On held-out data its global joint log-RMSE was
 1.305, versus 1.306 for the existing surface pipeline; the paired median
-difference was inconclusive. This makes it a viable alternative pipeline, not a
-demonstrated recovery improvement. Detailed results remain with the external
-recovery artifact.
+difference was inconclusive. Matched KDE was selected for semantic consistency,
+and is now the validation-selected density operator. The proper development
+comparison rebuilt the 80-by-64 lattice for each dataset because the fitted
+curve depends on its empirical bandwidth. The 64-start `highest`-matmul port
+covered all 120 development datasets at the 0.001 gate, with maximum gap
+4.17e-7, versus 0.000960 for the lattice. Median time was 0.282 versus 18.546
+seconds. The port was materially better on three datasets and the lattice was
+never materially better, so the 64-start port is selected and the matched-KDE
+cache is abandoned. Detailed results remain with the external recovery artifact.
 
-For smoothed expectation, the cache/eight-polish/conditional-hierarchy rule was
+For the legacy smoothed-expectation operator, the cache/eight-polish/conditional-hierarchy rule was
 within 0.001 of the union best on every development and held-out dataset. WNM
 improved held-out mean-bias prediction across most non-near-zero dissimilarity
 bands, but parameter recovery was worse than for the surface NN and spread
@@ -147,7 +172,14 @@ common-grid NLL in 70.0% of pairs and improving global joint log-RMSE from 0.587
 to 0.391. Those numbers remain descriptive, but they are no longer evidence of a
 prospectively frozen optimizer choice. Do not inspect held-out data while
 reselecting the search, and do not describe a later reuse of those tuples as a
-first confirmation.
+first confirmation. The matched operator remains current for semantic
+consistency. The proper development comparison rebuilt the complex-moment
+cache and included the port, SciPy, hierarchy, and JAX-BADS arms. The cache
+remains necessary. Substituting the port for SciPy in the adapted conditional
+composite preserves its 116/120 coverage and 0.249 worst gap at 3.62-fold lower
+median runtime, but the four misses mean the selection rule remains open. A
+complete 64-start port run did not fix any composite miss; all four evade the
+cache-versus-continuous disagreement trigger.
 
 `continuous_optimizer.minimize_continuous` defaults to a placeholder `n_starts`.
 The budget materially decides the answer:
@@ -177,7 +209,7 @@ objective-specific choices at the start of this section are frozen for the
 focused panel. The surface NN keeps its deployed search as the legacy comparator;
 it does not need matching WNM search implementations.
 
-## 2. float64 for the continuous search (diagnostic resolved; adoption deferred)
+## 2. Numerical precision for the continuous search (resolved)
 
 Originally recorded in `TODO.md` item 3. The repo runs JAX at float32, which
 floors convergence near 1e-8 relative; recovery of a known optimum lands at
@@ -216,13 +248,17 @@ the 120-dataset likelihood panel at every combination of device and precision,
 float64 reduces the cross-device disagreement from a median of 5.95e-03 to
 5.08e-07, and under float64 both devices agree that 32-start L-BFGS-B attains
 the lower likelihood on all 120 datasets. The GPU float32 result that put
-JAX-BADS ahead on 102 of 120 was reduction order, not optimization. This
-confirms the L-BFGS-B selection rather than changing it. The conclusion covers
-scoring only: every arm still searched in float32, so what a float64 search
-would find is untested. Global x64 adoption stays deferred until the surface
-backend is retired, and the practical rule meanwhile is that any arm comparison
-at differences below about 0.06 NLL must be scored in float64 or on a single
-fixed device.
+JAX-BADS ahead on 102 of 120 reflected device arithmetic, not optimizer-family
+quality. That scoring-only test confirmed L-BFGS-B but did not yet isolate the
+responsible float32 operation; the later port diagnostic below did.
+
+The faithful-port diagnostic on 2026-09-10 refined that explanation. The large
+likelihood discrepancy came primarily from the surrogate's default GPU TF32
+matrix multiplications, not from the L-BFGS-B implementation or ordinary sum
+reduction order. Keeping float32 arrays but setting matmul precision to
+`highest` restored the CPU likelihood basin and passed the 0.001 gate on all
+120 development datasets. Global float64 adoption is therefore unnecessary;
+the frozen GPU likelihood rule is full-float32 (`highest`) matmuls.
 
 ## 3. Fitting bounds versus the corpus hull (needed before any production WNM fit)
 

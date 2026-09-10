@@ -304,23 +304,54 @@ PyBADS check. The three affordable arms were extended to all 120 development
 datasets and rescored separately on CPU and GPU. The JAX-BADS versus L-BFGS-B
 NLL order reversed with the scoring device, while paired parameter recovery was
 effectively tied. L-BFGS-B had the smaller worst-case gap on both devices, at
-half the median time and about one ninth of the evaluations. Likelihood is
-therefore frozen on serial SciPy L-BFGS-B with 32 deterministic log-space
-Latin-hypercube starts. PyBADS was not extended because it tied L-BFGS-B on CPU
+half the median time and about one ninth of the evaluations. Likelihood was
+initially frozen on serial SciPy L-BFGS-B with 32 deterministic log-space
+Latin-hypercube starts. A subsequent faithful-port comparison isolated default
+GPU TF32 matmuls as the source of the remaining device discrepancy. With
+float32 arrays and `highest` matmul precision, the 32-start batched JAX port met
+the 0.001 gate on all 120 development datasets at 9.65-fold median paired
+speedup. That configuration now supersedes serial SciPy and is frozen for
+held-out confirmation. PyBADS was not extended because it tied L-BFGS-B on CPU
 at roughly 30 times the runtime. The production hierarchy was worse under both
 scoring devices; its catastrophic truth-curve failures were concentrated in the
 narrow cases because its one-degree absolute feature lattice is too coarse near
 the lower bound. Detailed traces and thresholds are recorded in the external
 recovery artifact.
 
-For density, an 80-by-64 log curve cache plus one continuous polish was selected
-and frozen held out. For smoothed expectation, the same cache with eight
-distinct polishes and a conditional hierarchy reached the common-score gate on
-all development and held-out datasets. The smoothed-expectation comparison
-included BBZ JAX-BADS; it supplied no production win beyond the selected rule.
-The matched-KDE density variant remains a diagnostic target: its 32-start run
-does not supersede the search selection for the currently implemented density
-objective.
+BWCRPS followed the same implementation transition. The 32-start float32 port
+with `highest` matmul precision met the 0.001 union gate on all 120 development
+and all 60 held-out datasets. On held-out data its worst gap was 0.000721 and
+its median paired speedup over serial SciPy was 5.26-fold, so it now supersedes
+the serial implementation.
+
+For the legacy density operator, an 80-by-64 log curve cache plus one continuous
+polish was selected. The current density target is matched KDE; its 32-start
+`highest`-matmul port reproduced all 60 frozen held-out SciPy diagnostics within
+1.79e-7 at 25.75-fold median speedup. The subsequent proper development
+comparison rebuilt the 80-by-64 lattice per empirical bandwidth. A 64-start
+port met the 0.001 gate on all 120 datasets with maximum gap 4.17e-7, was never
+materially worse than the lattice, and was 65.9 times faster at the median; it
+is now the selected matched-density search. The current smoothed-expectation
+operator uses observed-design matched complex-moment smoothing. Its rebuilt
+cache remained necessary in the proper development comparison, which also
+included JAX-BADS. Replacing the 32-start SciPy component with the port preserved
+the adapted composite's 116/120 coverage and 0.249 worst gap while reducing
+median time from 7.20 to 1.99 seconds. That substitution is frozen, but the
+conditional selection rule remains unresolved because four union winners are
+still missed. A complete 64-start port follow-up improved the port-only gate
+rate from 86/120 to 91/120 but left all four composite misses unchanged, so the
+remaining defect is the trigger rather than the continuous start budget.
+
+The final cross-objective policy supersedes those objective-specific selections.
+By executive decision, every retained objective uses the 64-start batched JAX
+L-BFGS-B port with float32 arrays and `highest` matmul precision; no cache,
+SciPy union, or conditional hierarchy is selected. The reason is operational
+consistency, not dominance on every empirical objective. In particular, the
+decision accepts matched-smoothed coverage of 91/120 and worst gap 44.40 rather
+than the cache/composite's 116/120 and 0.249. Paired parameter recovery and
+whole/banded truth-curve CCC did not show a systematic 64-start deficit. The
+64-start policy improved likelihood's rare deep-basin misses, was neutral for
+BWCRPS recovery, and fully covered the matched-density development union.
 
 ### R3. Complete WNM closed-loop recovery — completed
 
@@ -369,7 +400,15 @@ same 32-start SciPy search and 0.970/1.149 for the existing surface NN. The
 paired differences are inconclusive, and the development parameter gain does
 not generalize. Matched truth is nevertheless closer to the empirical curve on
 73.3% of held-out datasets, supporting the matched operator for curve semantics
-while leaving smoothed expectation a weak parameter-recovery objective.
+while leaving smoothed expectation a weak parameter-recovery objective. An
+annotated check of the two intermediate held-out cases at 450 trials clarifies
+why. For both density and smoothed expectation, the recovered-parameter curve is
+closer to the realized empirical target than the generating-parameter curve in
+all 10 datasets for both WNM and the surface NN. The fitting is good, but with
+only five responses per dissimilarity the empirical curves fluctuate too much
+around truth. The optimizer follows those fluctuations, producing poor
+parameters and, especially for reversed smoothed-expectation cases, materially
+displaced curves.
 
 On the already-inspected held-out tuples, 70.0% recovered all parameters within
 a factor of 1.5, with median per-dataset joint log-RMSE 0.140. Recovery rose from
@@ -487,9 +526,9 @@ and verified on WNM.
   `density_legacy` beyond compatibility checks.
 - General cache support for every objective when a smaller independent reference
   suffices.
-- Global x64 adoption. Run a targeted x64 diagnostic only if a key likelihood or
-  BWCRPS optimization comparison shows that float32 precision materially changes
-  the selected solution; otherwise defer it until the surface backend is retired.
+- Global x64 adoption. The targeted likelihood diagnostic instead selected
+  float32 arrays with `highest` GPU matmul precision; default TF32 changed the
+  surrogate objective materially, while global x64 is unnecessary.
 
 ## Decision rule for resuming the migration
 

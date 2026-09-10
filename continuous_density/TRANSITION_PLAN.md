@@ -457,12 +457,19 @@ approximations and gradients; agreement of empirical targets does not establish 
    protocol and generated data live under
    `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`.
 
-   **Outcome as of 2026-09-10:** this focused panel is complete. Likelihood and
-   BWCRPS use 32-start serial L-BFGS-B; density uses an 80-by-64 log curve cache
-   plus one polish; smoothed expectation uses the same cache with eight polishes
-   and a conditional hierarchy. JAX-BADS was included in the comparison panels.
-   Density matched-KDE and smoothed-expectation matched-feature operators were
-   tested separately. Findings are tracked in the objective-specific
+   **Outcome as of 2026-09-10:** this focused panel is complete. By executive
+   decision, likelihood, BWCRPS, matched-KDE density, and observed-design
+   matched smoothed expectation all use the batched JAX L-BFGS-B port with 64
+   deterministic dispersed starts, float32 arrays, and `highest` matmul
+   precision. No objective-specific cache, SciPy union, or conditional
+   hierarchy is selected. This consistency decision accepts the matched-
+   smoothed port's empirical-loss misses: it reached the 0.001 gate on 91/120
+   development datasets with worst gap 44.40, versus 116/120 and 0.249 for the
+   cache/composite. Those misses did not produce a systematic paired deficit in
+   parameter recovery or whole/banded truth-curve CCC. Sixty-four starts
+   materially improved likelihood basin coverage, did not materially change
+   BWCRPS, and fully covered the matched-density development union. JAX-BADS was
+   included in the comparison panels. Findings are tracked in the objective-specific
    `continuous_density/*FINDINGS.md` files; generated rows remain under the
    artifact path above. Broader recovery designs remain deferred rather than
    prerequisites for R5--R6.
@@ -486,16 +493,17 @@ approximations and gradients; agreement of empirical targets does not establish 
 
    In comparisons of search, reevaluate every candidate through the same K12 scorer.
    In comparisons of deployed pipelines, fit the paired data with K12 plus its
-   objective-selected search and with the surface NN plus its existing production
+   selected common 64-start port search and with the surface NN plus its existing production
    search, then compare common downstream scores. The surface arm is a legacy
    baseline, not a second development target.
 
-   Keep float64 out of the fixed matrix unless a key likelihood or BWCRPS search
-   comparison shows a material precision-sensitive solution. In that case run a
-   targeted matched x64 diagnostic and report it separately. JAX's x64 flag is
-   global, so adopting it for the surface backend would require re-verifying that
-   backend's arithmetic; otherwise defer global adoption until the surface backend
-   is retired.
+   Keep global float64 out of the fixed matrix. The targeted likelihood
+   diagnostic found that default GPU TF32 surrogate matmuls—not the nominal
+   float32 dtype or L-BFGS-B implementation—caused the material device
+   discrepancy. GPU WNM likelihood search therefore requires
+   `JAX_DEFAULT_MATMUL_PRECISION=highest`; apply and record the same setting when
+   validating other GPU WNM objectives. Global x64 would also change the surface
+   backend's arithmetic and is unnecessary for the selected likelihood search.
 
    Record per replicate: generating and recovered `sd_feat1`, `sd_feat2`, shared
    `sd_spat` (plus derived d-prime), shared `sd_motor`, condition contrasts, signed
@@ -588,8 +596,8 @@ approximations and gradients; agreement of empirical targets does not establish 
    history and validation artifacts stay outside the tracked runtime documentation.
 
    Update the external pipeline's preflight, search dispatch, fit, plot, likelihood
-   repair, and motor-run model selection together. Select the benchmark-supported
-   search and require caches only for the selected cached path. Prefer calling the shared
+   repair, and motor-run model selection together. Route the selected 64-start
+   port uniformly and do not require the rejected research caches. Prefer calling the shared
    resolver instead of recreating filename conventions. Preserve the downstream
    fitted-parameter/curve schema and propagate surrogate identity. Rebuild affected
    DM outputs and downstream comparison artifacts in versioned directories; BBZ
@@ -668,14 +676,33 @@ approximations and gradients; agreement of empirical targets does not establish 
    that leaves the KDE aggregation sitting in the fitting path will mislead it the
    other way.
 
+8. **Make recovery validation a maintained repository feature.**
+
+   After the transition, rollout, and surface-NN retirement are complete, replace
+   the one-off recovery scripts used during development with a standardized recovery
+   facility in DM. It must exercise every supported optimizer through a common
+   adapter: shared simulated datasets and starts, explicit objective and surrogate
+   identities, canonical rescoring, resumable manifests, parameter-recovery tables,
+   and true/recovered/empirical curve comparisons stratified by dissimilarity and
+   trial count. Adding an optimizer should make it available to the same tests and
+   plots without copying the protocol.
+
+   Build this from the existing simulator, target constructors, search dispatch,
+   prediction/export functions, and curve-plotting utilities. In particular, do not
+   carry the development scripts' duplicate curve evaluation or plotting code into
+   the maintained implementation. Keep small deterministic recovery fixtures and
+   smoke tests in the repository; full panels, traces, tables, and figures remain
+   versioned under `$DEMIXING_ARTIFACT_ROOT`.
+
 **Practical implementation boundaries**
 
-Use five reviewable changes: (1) artifact packaging, shared provider, and test
+Use six reviewable changes: (1) artifact packaging, shared provider, and test
 collection; (2) reusable targets, competing searches, and identity; (3) rescoring,
 exports, plots, and prediction APIs; (4) acceptance results, default promotion, and
 batch-pipeline rollout; (5) surface-NN removal and documentation, after downstream
-regeneration. Keep WNM opt-in until all runtime consumers are connected, and keep
-the NN removable-but-present until (5). The first three can be developed without
+regeneration; and (6) the standardized recovery facility, after the transition is
+otherwise complete. Keep WNM opt-in until all runtime consumers are connected, and
+keep the NN removable-but-present until (5). The first three can be developed without
 retraining either family. Existing unrelated working-tree changes must be preserved.
 
 The largest risk is inconsistent estimator semantics between fitting and its

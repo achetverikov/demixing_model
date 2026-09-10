@@ -1,6 +1,6 @@
 # Smoothed-expectation target-alignment findings
 
-Date: 2026-09-09; held-out update 2026-09-10
+Date: 2026-09-09; held-out and intermediate-curve update 2026-09-10
 
 Artifact paths and analysis scripts named below are relative to
 `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`.
@@ -123,6 +123,72 @@ reported normal convergence, and 52 of 60 selected winners did so. Restricting
 selection to successful candidates changes median/global log-RMSE to
 1.186/1.264 from 1.130/1.239; it does not change any comparison conclusion.
 
+### Intermediate 450-trial curve check
+
+The held-out `ordinary_2` and `reversed_2` cases isolate intermediate feature
+scales, excluding the narrow and broad/weak regimes. At 450 trials, or five
+responses per dissimilarity, the recovered-parameter mean curve was closer than
+the generating-parameter curve to the empirical target in all 10 datasets for
+both WNM and the surface NN. Across the two cases, median
+recovered-versus-empirical RMSE was 0.118 degrees for matched WNM and 0.132
+degrees for the deployed surface operator, compared with 0.284 and 0.332 degrees
+at the generating parameters.
+
+The optimizer is therefore fitting the realized empirical curve well, while the
+empirical curve itself fluctuates too much around truth to support reliable
+parameter recovery. This is most visible for `reversed_2`: median recovered-
+versus-generating curve RMSE is 0.614 degrees for WNM and 0.607 degrees for the
+surface NN. For `ordinary_2` it is only 0.128 and 0.148 degrees. The held-out
+failure is consequently a finite-sample curve-target problem with strong regime
+dependence, not evidence that the optimizer generally fails to fit its target.
+
+## Batched optimizer follow-up
+
+The faithful JAX L-BFGS-B port was tested on the same 60 frozen held-out
+matched-operator datasets with 32 seed-0 starts, float32 arrays,
+`JAX_DEFAULT_MATMUL_PRECISION=highest`, and no truth start. It reached the
+0.001 union gate on 59/60 datasets and reduced median time from 6.084 to 0.261
+seconds, a 22.10x paired speedup. The miss was `broad_2_seed0_n450`: common CPU
+loss 8.29395 for the port versus 5.61148 for SciPy. Median/global joint log-RMSE
+was 1.1466/1.2334 versus 1.1297/1.2386, respectively.
+
+A post-hoc hard-case probe produced loss 9.8699 with 64 non-nested starts and
+4.6848 with 128. This establishes start-design sensitivity but cannot justify
+selecting 128 starts from held-out performance. This comparison tests only the
+32-start component; it does not select a matched-objective production search.
+The selected cache/eight-polish/32-start-SciPy/conditional-hierarchy rule was
+developed for the original pointwise model operator and must be rebuilt with
+matched complex-moment curves before the port can be compared with it.
+
+That proper development comparison is now complete. The matched 80-by-64
+complex-moment cache contains 409,600 curves and was followed by eight
+cache-seeded polishes. The panel also included 32-start SciPy, the 32-start
+port, the production hierarchy, and 32-start JAX-BADS. The cache materially
+improves empirical-objective coverage: it was within 0.001 of the full union on 116/120 datasets with worst
+gap 0.249, whereas the port alone covered 86/120 with worst gap 44.40.
+Substituting the port for SciPy inside the adapted cache/continuous/conditional-
+hierarchy strategy preserved its 116/120 coverage and 0.249 worst gap while
+reducing median strategy time from 7.20 to 1.99 seconds, a 3.62-fold speedup.
+The inherited conditional rule still misses four development union winners.
+
+A complete 64-start float32/`highest` port follow-up improved the standalone
+gate rate from 86/120 to 91/120 but left its worst gap at 44.40. Using 64 starts
+inside the composite still covered 116/120 with worst gap 0.249 and was slightly
+slower than the 32-start version (2.032 versus 1.986 median seconds). Combining
+both start designs also left the same four misses. In all four, cache and port
+agreement prevented the hierarchy trigger; the full-panel winner was the
+hierarchy in three and JAX-BADS in one.
+
+The final executive decision nevertheless selects the standalone 64-start
+float32/`highest` port and drops the cache/composite, so all retained objectives
+share one optimizer. This knowingly accepts 29/120 development fits outside the
+0.001 empirical-loss gate and a worst gap of 44.40. The justification is
+consistency rather than smoothed-objective dominance: parameter recovery was
+effectively tied between 32 and 64 starts, and paired whole-curve and four-band
+truth CCC differences were approximately zero. The empirical-loss misses must
+remain visible in downstream reporting rather than being described as rare or
+numerically negligible.
+
 ## Conclusion
 
 Smoothed expectation had the same class of feature-alignment problem as density.
@@ -147,4 +213,15 @@ The development run and derived tables are under
 `wnm_smoothed_exp_alignment_development_gpu_v1/`; its analysis is in
 `analyze_smoothed_exp_alignment.py`. The held-out run and tables are under
 `wnm_smoothed_exp_matched_heldout_gpu_v1/`; its analysis is in
-`analyze_smoothed_exp_matched_heldout.py`.
+`analyze_smoothed_exp_matched_heldout.py`. Annotated intermediate-case curves
+and their data are under `intermediate_curve_recovery_n450/`, reproduced by
+`plot_intermediate_curve_recovery.py`.
+
+## Notes for developers
+
+The detailed matched-search panel is in the external
+`wnm_matched_smoothed_exp_development_cpu_v1/` artifact. Its component and
+strategy rows are development evidence; the earlier held-out 64/128-start
+probe remains post-hoc and must not be used to tune the final conditional rule.
+The complete development 64-start follow-up is in
+`wnm_matched_smoothed_exp_port32_port64_development_cpu_v2/`.

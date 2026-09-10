@@ -1,6 +1,6 @@
 # WNM bias-weighted-CRPS optimizer findings
 
-Date: 2026-09-08
+Date: 2026-09-08; 64-start common policy added 2026-09-10
 
 Run directories and CSV names are relative to
 `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`,
@@ -15,7 +15,22 @@ JAX-BADS, and the production surface search geometry driving the same BWCRPS
 objective. PyBADS was run only on one disputed dataset, as predeclared, rather
 than as a fourth arm.
 
-## Result: 32-start serial L-BFGS-B, as for likelihood
+## Result: 64-start batched JAX L-BFGS-B port
+
+The development optimizer-family comparison originally selected 32-start
+serial SciPy L-BFGS-B, as described below. A later faithful JAX port kept the
+same starts and objective but evaluated all starts in one device batch. With
+float32 arrays and `highest` matmul precision it met the 0.001 union gate on all
+120 development datasets and was frozen before held-out confirmation.
+
+The final cross-objective executive decision increases this to 64 starts so all
+retained objectives use one optimizer configuration. The complete 64-start
+float32/`highest` development run also covered 120/120 against the 32/64 union;
+its worst gap was 0.000282 versus 0.000328 for 32 starts. Parameter recovery and
+whole/banded truth-curve CCC were effectively unchanged, while median time rose
+from 1.067 to 1.582 seconds. Thus the larger budget is selected for consistency,
+not because BWCRPS itself requires it. The held-out confirmation below applies
+to the 32-start predecessor and has not been rerun at 64 starts.
 
 Every arm's winner was rescored through one common scorer, on each device
 separately (`wnm_bwcrps_development_cpu_v1/`, `wnm_bwcrps_development_gpu_v1/`).
@@ -107,6 +122,17 @@ The generated rows and summaries are under
 `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/wnm_bwcrps_scipy32_heldout_cpu_v1/`.
 The surface comparison uses the WNM scorer for both arms; the surface model's
 native BWCRPS values are not used as a cross-family score.
+
+The then-frozen 32-start batched-port configuration was run on those same 60 held-out
+datasets and both arms were rescored through the common CPU float32 evaluator.
+The port was within 0.001 of the two-arm union on all 60 datasets (worst gap
+`0.000721`); SciPy was within the gate on 57. Median solve time was `1.037`
+seconds for the port versus `5.490` for SciPy, a median paired speedup of
+`5.26x`. Median/global joint log-RMSE was `0.2690/0.7319` for the port versus
+`0.2693/0.7763` for SciPy. This established the port as the implementation;
+the later executive policy changes only its start count to 64. Detailed port traces and common-rescored rows
+are in the sibling `jax_lbfgsb_port_bias_weighted_crps32_highest_heldout_gpu_v1/`
+and `jax_lbfgsb_port_comparison_development_v1/` artifacts.
 
 ## What this does not establish
 
