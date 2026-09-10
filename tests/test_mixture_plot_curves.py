@@ -254,6 +254,8 @@ def test_standard_subject_pipeline_uses_direct_matched_wnm_curves(predictor, fea
         np.testing.assert_array_equal(np.asarray(got[actual_name]), expected[expected_name][0])
     assert prepared["S"]["experiments"]["exp"]["surrogate_identity"][
         "surrogate_family"] == "wnm"
+    assert prepared["S"]["experiments"]["exp"]["surrogate_identity"][
+        "dm_version"] == "wnm_k12_20samples"
 
 
 def test_standard_pipeline_pools_report_orders_from_exact_wnm_cell_masses(

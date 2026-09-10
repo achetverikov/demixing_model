@@ -45,6 +45,7 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
         results = pickle.load(handle)
     predictor = predictor_from_surrogate(
         surrogate.load_surrogate(checkpoint_path=checkpoint))
+    identity = predictor.identity().as_dict()
     feat_grid = np.asarray(config.create_grid("feat_diff"), dtype=np.float32)
     density_curve_spec = payload["density_curve_spec"]
     matmul_precision = payload["continuous_spec"]["matmul_precision"]
@@ -83,6 +84,7 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
                     "sd_feat1": float(parameters[0]), "sd_feat2": float(parameters[1]),
                     "sd_spat": float(parameters[2]), "sd_motor": float(parameters[3]),
                     "density_bandwidth": bandwidth,
+                    **identity,
                 })
 
     frame = pd.DataFrame(rows)
@@ -93,6 +95,7 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
     (output_dir / "manifest.json").write_text(json.dumps({
         "source_results": str(results_dir), "checkpoint": str(checkpoint),
         "run_fingerprint_digest": sidecar["digest"], "methods": list(methods),
+        **identity,
         "prediction": "direct analytic WNM; no reconstructed NN surface",
         "density_curve": "pooled-SJ KDE plus observed-design feature operator",
         "bias_curve": "observed-design pooled complex first moment",

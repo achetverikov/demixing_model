@@ -127,9 +127,25 @@ def test_installed_artifact_declares_its_own_identity(n_samples, path):
     assert meta["checkpoint_selection"] == "in_sample_slice"
 
     identity = loaded.identity()
+    assert identity["dm_version"] == f"wnm_k12_{n_samples}samples"
     assert identity["surrogate_family"] == "wnm"
     assert identity["surrogate_n_samples"] == n_samples
     assert identity["surrogate_artifact"] == Path(path).name
+
+
+@pytest.mark.parametrize(
+    ("family", "artifact", "expected"),
+    [
+        ("wnm", "wnm_k12_20samples.pkl", "wnm_k12_20samples"),
+        (
+            "surface_nn",
+            "model_epoch1425_10ktrain_20samples.pkl",
+            "surface_nn_epoch1425_10ktrain_20samples",
+        ),
+    ],
+)
+def test_dm_version_identifies_the_implementation(family, artifact, expected):
+    assert surrogate.dm_version(family, artifact) == expected
 
 
 @pytest.mark.skipif(not INSTALLED_WNM, reason="no packaged WNM artifact installed")

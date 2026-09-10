@@ -1,4 +1,5 @@
 import pickle
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -40,7 +41,9 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
     })
     monkeypatch.setattr(export_module, "file_sha256", lambda _: "digest")
     monkeypatch.setattr(export_module.surrogate, "load_surrogate", lambda **_: object())
-    monkeypatch.setattr(export_module, "predictor_from_surrogate", lambda _: object())
+    identity = {"dm_version": "wnm_k12_20samples", "surrogate_family": "wnm"}
+    predictor = SimpleNamespace(identity=lambda: SimpleNamespace(as_dict=lambda: identity))
+    monkeypatch.setattr(export_module, "predictor_from_surrogate", lambda _: predictor)
     monkeypatch.setattr(export_module.config, "create_grid",
                         lambda _: np.array([2.0, 4.0], dtype=np.float32))
 
@@ -63,6 +66,7 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
 
     assert len(frame) == 2
     assert frame["bias_deg"].tolist() == [3.0, 4.0]
+    assert frame["dm_version"].unique().tolist() == ["wnm_k12_20samples"]
     assert (output_dir / "wnm_fitted_curves.csv").exists()
     assert (output_dir / "condition_one.png").exists()
     assert "direct analytic WNM" in (output_dir / "manifest.json").read_text()

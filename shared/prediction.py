@@ -305,7 +305,10 @@ class PredictorIdentity:
     evaluator_version: str = "1"
 
     def as_dict(self) -> dict:
+        from shared.surrogate import dm_version
+
         return {
+            "dm_version": dm_version(self.family, self.artifact),
             "surrogate_family": self.family,
             "surrogate_n_samples": self.n_samples,
             "surrogate_artifact": self.artifact,

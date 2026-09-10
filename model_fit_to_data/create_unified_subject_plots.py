@@ -523,6 +523,10 @@ def prepare_all_subjects_data(
         surrogate_identity = prediction_backend.identity().as_dict()
     else:
         surrogate_identity = {
+            "dm_version": surrogate.dm_version(
+                surrogate.FAMILY_SURFACE_NN,
+                Path(prediction_backend.checkpoint_path).name,
+            ),
             "surrogate_family": surrogate.FAMILY_SURFACE_NN,
             "surrogate_artifact": Path(prediction_backend.checkpoint_path).name,
             "surrogate_n_samples": np.nan,
@@ -1357,7 +1361,7 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                         'density_asymmetry': opt_asymm_data.flatten()
                     })
                     identity = first_subject_data['surrogate_identity']
-                    for field in ('surrogate_family', 'surrogate_artifact',
+                    for field in ('dm_version', 'surrogate_family', 'surrogate_artifact',
                                   'surrogate_n_samples', 'surrogate_evaluator_version'):
                         if field in identity:
                             opt_curve_df[field] = identity[field]
@@ -1426,7 +1430,7 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                         f'{opt}_loss': opt_losses
                     }
                     identity = first_subject_data['surrogate_identity']
-                    for field in ('surrogate_family', 'surrogate_artifact',
+                    for field in ('dm_version', 'surrogate_family', 'surrogate_artifact',
                                   'surrogate_n_samples', 'surrogate_evaluator_version'):
                         if field in identity:
                             param_df_data[field] = identity[field]

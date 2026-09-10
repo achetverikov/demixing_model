@@ -117,6 +117,16 @@ def production_checkpoint(n_samples: int) -> Path:
     return path
 
 
+def dm_version(family: str, artifact: str) -> str:
+    """Stable comparison label for one demixing-model implementation."""
+    stem = Path(artifact).stem
+    if stem == family or stem.startswith(f"{family}_"):
+        return stem
+    if family == FAMILY_SURFACE_NN and stem.startswith("model_"):
+        stem = stem.removeprefix("model_")
+    return f"{family}_{stem}"
+
+
 def checkpoint_for_run(results_path, explicit=None, n_samples: Optional[int] = None) -> Path:
     """The checkpoint a *fitted run* was produced with.
 
@@ -289,6 +299,7 @@ class LoadedSurrogate:
     def identity(self) -> dict:
         """The fields a run fingerprint or an exported fit should record."""
         identity = {
+            "dm_version": dm_version(self.family, self.path.name),
             "surrogate_family": self.family,
             "surrogate_n_samples": self.n_samples,
             "surrogate_artifact": self.path.name,

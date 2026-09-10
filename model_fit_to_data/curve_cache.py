@@ -253,6 +253,7 @@ def surrogate_manifest_fields(checkpoint_path) -> Dict[str, Any]:
 
     loaded = surrogate.load_surrogate(checkpoint_path=checkpoint_path)
     fields = {
+        "dm_version": surrogate.dm_version(loaded.family, loaded.path.name),
         "surrogate_family": loaded.family,
         "surrogate_n_samples": loaded.n_samples,
         "surrogate_artifact": loaded.path.name,
