@@ -4,6 +4,8 @@ Date: 2026-09-09
 
 Artifact paths and analysis scripts named below are relative to
 `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`.
+Generated artifacts are external and are not shipped with or expected in a
+normal checkout.
 
 ## Question
 

@@ -5,13 +5,15 @@ Date: 2026-09-08
 Run directories and CSV names are relative to
 `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`,
 where the analysis scripts named here also live. This document is versioned with
-the code; the artifacts it cites are not.
+the code; the external artifacts it cites are not shipped with or expected in a
+normal checkout.
 
 Selection used only the 120 development datasets, following
-`WNM_BWCRPS_OPTIMIZER_PLAN.md`. Held-out tuples were not opened. Three arms were
-compared: 32-start serial SciPy L-BFGS-B, 32-start JAX-BADS, and the production
-surface search geometry driving the same BWCRPS objective. PyBADS was run only on
-one disputed dataset, as predeclared, rather than as a fourth arm.
+`WNM_BWCRPS_OPTIMIZER_PLAN.md`. At selection time the held-out tuples had not
+been opened. Three arms were compared: 32-start serial SciPy L-BFGS-B, 32-start
+JAX-BADS, and the production surface search geometry driving the same BWCRPS
+objective. PyBADS was run only on one disputed dataset, as predeclared, rather
+than as a fourth arm.
 
 ## Result: 32-start serial L-BFGS-B, as for likelihood
 

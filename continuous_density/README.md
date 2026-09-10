@@ -7,9 +7,11 @@ likelihood:
 raw EM outcomes → conditional wrapped-normal mixture
 ```
 
-The production pipeline is untouched. This prototype models
-`p(b | sd_feat1, sd_feat2, sd_ident, feat_diff)` directly and trains by raw-sample
-negative log likelihood—never from a histogram, KDE, bias grid, or surface.
+The deployed default still uses the surface NN, but the transition branch now
+packages WNM artifacts and exposes WNM as an opt-in fitting/scoring backend. The
+research trainer here models `p(b | sd_feat1, sd_feat2, sd_ident, feat_diff)`
+directly and trains by raw-sample negative log likelihood—never from a histogram,
+KDE, bias grid, or surface.
 
 ## Model and simulator
 
@@ -51,7 +53,7 @@ Validation has two complementary raw-simulation designs:
   curves. This design supports a modest checkpoint-selection set and a separate
   high-simulation final test.
 
-Earlier `results/mu1_experiments` work showed why both are needed: feature-axis
+Earlier `$DEMIXING_ARTIFACT_ROOT/mu1_experiments` work showed why both are needed: feature-axis
 KDE pooling was the dominant old-pipeline distortion, especially at the
 dissimilarity boundaries, while mean bias aggregated over dissimilarity could
 hide structured errors. The archived 100k references contain only KDE surface
@@ -70,7 +72,7 @@ paths—if the variable is unset, `$DEMIXING_ARTIFACT_ROOT/...` would otherwise
 become an unintended root-level path.
 
 ```bash
-export DEMIXING_ARTIFACT_ROOT=/workspaces/demixing_model/results
+export DEMIXING_ARTIFACT_ROOT=/path/to/demixing-artifacts
 export PYTHONPATH=.
 PY=/workspaces/.venv/bin/python
 mkdir -p "$DEMIXING_ARTIFACT_ROOT/continuous_density"
@@ -293,7 +295,7 @@ independently on the same trials. `benchmark.py` reports warmed-up prediction an
 
 ## Task 2.0 local-representation benchmark
 
-The revised benchmark lives in `results/continuous_density_2.0/`. Its selection and
+The revised benchmark lives in `$DEMIXING_ARTIFACT_ROOT/continuous_density_2.0/`. Its selection and
 confirmation triples and seeds are frozen in `BENCHMARK_DESIGN.json`. Generate selection
 first; do not generate or open confirmation until family, size, optimizer, quadrature, and
 analysis code are frozen.
@@ -331,7 +333,7 @@ The implemented Phase A also includes `periodic_spline.py` / `fit_local_spline.p
 selection and five-point 2M precision increment leave Phase A unresolved because broad
 multimodal response-SD uncertainty exceeds the frozen margin across independent fitting
 halves. Accordingly the confirmation corpus was not generated and Phase B was not started.
-See `results/continuous_density_2.0/TECHNICAL_REPORT.md`.
+See `$DEMIXING_ARTIFACT_ROOT/continuous_density_2.0/TECHNICAL_REPORT.md`.
 
 ## Status
 
@@ -344,8 +346,24 @@ held-out NLL over the production surrogate on 97.7% of scattered cases and
 conclusion. Generated checkpoints, references, and CSVs remain in the external
 artifact directory.
 
+The focused n=100 actual-DM recovery stage is also complete for likelihood,
+bias-weighted CRPS, density, and smoothed expectation, including the deployed
+surface-NN comparator and frozen held-out cases. Likelihood and BWCRPS support
+the WNM pipeline; density and smoothed expectation recover their target curves
+but weakly identify the generating parameters. Density KDE alignment and
+smoothed-expectation feature smoothing have been tested explicitly. See
+[`TRANSITION_AUDIT.md`](TRANSITION_AUDIT.md) for the current gate status and the
+objective-specific `*FINDINGS.md` files for results. The remaining critical path
+is routing the selected objective-specific WNM searches through the fitting
+entry point, completing direct WNM prediction, settling comparison bounds, and
+then running paired representative real-data fits. Default promotion and
+surface-NN retirement have not occurred.
+
 ## Notes for developers
 
 Generated NPZs, checkpoints, CSVs, and figures belong under
-`$DEMIXING_ARTIFACT_ROOT/continuous_density/`; they are not tracked. The prototype
-remains separate from production fitting code.
+`$DEMIXING_ARTIFACT_ROOT/continuous_density/`; they are not shipped with or
+expected in a normal checkout. The prototype training and large evaluation
+artifacts remain separate from runtime code. The packaged WNM backend is
+integrated behind explicit surrogate selection while the surface NN remains the
+deployed default.

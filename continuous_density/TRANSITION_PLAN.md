@@ -1,25 +1,21 @@
 **K12 WNM transition plan — 2026-09-06**
 
-**Current execution status (updated 2026-09-07).** This document preserves the
+**Current execution status (updated 2026-09-10).** This document preserves the
 full transition design prepared against `12f5206`; it is not a live checklist.
-`TRANSITION_AUDIT.md` records the revised execution order. Work is currently
-limited to recovery and the search, prediction, and fitting support required to
-attribute its failures (audit R1--R6). Plotting/browser integration, downstream
-rollout and regeneration, default promotion, and surface-NN retirement are
-deferred until those recovery gates are met. A recovery runner and initial n=20
-density panels now exist. The first actual-DM n=100 single-condition panel is
-frozen and generated. Its 120 development datasets were fitted with the deployed
-surface NN and with the selected 32-start WNM likelihood search; that search was
-then run once on all 60 held-out datasets. A later audit found that the first
-hierarchy and BADS comparators were not production-faithful. Corrected hierarchy
-and JAX-BADS implementations were run on all 120 development datasets, and the
-likelihood choice was settled again on 32-start serial L-BFGS-B. The already
-inspected held-out result remains descriptive rather than a clean prospective
-confirmation. WNM improved held-out common-grid likelihood and parameter recovery
-over the surface baseline under that search. Objective-specific WNM search and
-recovery work continues for bias-weighted CRPS, density, and smoothed
-expectation. Statements below that no
-recovery runner or data were found describe the 2026-09-06 baseline.
+`TRANSITION_AUDIT.md` records the revised execution order and current gates.
+Focused n=100 actual-DM recovery, objective-specific search selection, paired
+surface-NN comparison, and held-out analysis are complete for likelihood,
+bias-weighted CRPS, density, and smoothed expectation. Likelihood and BWCRPS
+support WNM; the two curve objectives weakly identify parameters, including
+after matched-target diagnostics. Current work is the direct WNM prediction path
+and public selected-search routing, followed by a bounds decision and the
+representative real-data comparison (audit R5--R6 and `OPEN_DECISIONS.md` item
+3). Plotting/browser integration, downstream rollout and regeneration, default
+promotion, and surface-NN retirement remain deferred. Statements below that no
+recovery runner or data were found describe only the 2026-09-06 baseline.
+
+Generated evidence referenced through `$DEMIXING_ARTIFACT_ROOT` is external and
+is not shipped with or expected in a normal checkout.
 
 Prepared from the current working tree of the inner `demixing_model` repository
 (HEAD `12f5206`, with existing uncommitted changes), the 4.1q artifacts, and the
@@ -51,7 +47,7 @@ retirement.
 Two artifacts are therefore in play, and this plan is careful to name them apart.
 The **training corpora** are the 4,400-trajectory, 148,076-cell histogram sets that
 trained the current K12 models: n=20 is recorded under
-`results/continuous_density_4.1p/artifacts/histogram_shards`, while the packaged
+`$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1p/artifacts/histogram_shards`, while the packaged
 n=100 artifact records `continuous_density_4.1o`. They are not the 4.1q benchmark,
 which is a separate, deliberately held-out 197-trajectory set
 (`design_benchmark.py` raises if the two overlap). Both are 720-bin histograms
@@ -416,8 +412,9 @@ approximations and gradients; agreement of empirical targets does not establish 
    empirical fitting targets from those responses, fit without revealing the truth,
    and compare recovered parameters and independent predictions.
 
-   Existing follow-ups are in `continuous_density/AUDIT_SUMMARY.md` (next steps,
-   item 5) and `continuous_density/RESULTS.md` (remaining recovery work). Workspace
+   At plan preparation, follow-ups were recorded in
+   `continuous_density/AUDIT_SUMMARY.md` (next steps, item 5) and
+   `continuous_density/RESULTS.md` (then-remaining recovery work). Workspace
    `DEMIXING_MODEL_CONSOLIDATED_AUDIT.md` identifies missing recovery oracles for
    estimator asymmetries; `BWCRPS_VALIDATION.md`, section 4, specifies recovery for
    the alternative models and is useful design context, not completed DM evidence.
@@ -425,9 +422,10 @@ approximations and gradients; agreement of empirical targets does not establish 
    source/results search. That baseline is now superseded: the runner lives in
    `model_fit_to_data/run_recovery_panel.py`, findings in
    `continuous_density/RECOVERY_FINDINGS.md`, and generated rows/summaries under
-   `results/continuous_density_4.1q/recovery/`. These historical notes are
+   `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/`. These historical notes are
    pointers, not evidence that their other old bug/status claims remain current.
-   DM `TODO.md`, item 3, tracks this work.
+   DM `TODO.md`, item 3, was the original tracker; current status is in
+   `TRANSITION_AUDIT.md` and the findings files.
 
    **Separate three questions in the benchmark.**
 
@@ -458,6 +456,16 @@ approximations and gradients; agreement of empirical targets does not establish 
    reused unchanged across all searches and both surrogate pipelines. The exact
    protocol and generated data live under
    `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`.
+
+   **Outcome as of 2026-09-10:** this focused panel is complete. Likelihood and
+   BWCRPS use 32-start serial L-BFGS-B; density uses an 80-by-64 log curve cache
+   plus one polish; smoothed expectation uses the same cache with eight polishes
+   and a conditional hierarchy. JAX-BADS was included in the comparison panels.
+   Density matched-KDE and smoothed-expectation matched-feature operators were
+   tested separately. Findings are tracked in the objective-specific
+   `continuous_density/*FINDINGS.md` files; generated rows remain under the
+   artifact path above. Broader recovery designs remain deferred rather than
+   prerequisites for R5--R6.
 
    Use the development tuples for starts, step sizes, stopping tolerances and
    numerical score settings; keep response seeds and optimizer-start seeds
@@ -549,7 +557,7 @@ approximations and gradients; agreement of empirical targets does not establish 
    | Shared scoring | Live, cache, fitted cross-objective scores, exported curves, and likelihood rescoring agree at identical parameters within declared numerical tolerances. |
    | Search quality | Compare hierarchical, cached exhaustive, multistart gradient, and grid-seeded polish on identical WNM development problems; select and freeze a stable accuracy/cost tradeoff before held-out confirmation. Record loss gaps to the best available common-rescored candidate and start-to-start variability; historical surface-search fixtures remain unchanged. |
    | Estimator integration | Smoothed WNM curves reproduce direct analytic prediction followed by the existing smoothing operation; pooled SD and report-order scores preserve their estimator definitions. |
-   | Accuracy retained | Re-evaluate the final packaged checkpoints on 4.1q, separately by band and random/hard group. Recover the recorded raw-curve advantage and check fitting-smoothed curves too. Name the surface baseline per sample count before running: three different NN checkpoints are currently in play -- 4.1q compared against `pretrained/model_epoch1425_10ktrain_20samples.pkl` (also `fit_model_to_data.py`'s default) at n=20 and `results/neural_net_checkpoints_100samples_circular_4.1p/model_epoch_1500.pkl` at n=100, while the external pipeline deploys `model_epoch1500_10ktrain_{20,100}samples.pkl`. Retirement is judged against what production actually runs. |
+   | Accuracy retained | Re-evaluate the final packaged checkpoints on 4.1q, separately by band and random/hard group. Recover the recorded raw-curve advantage and check fitting-smoothed curves too. Name the surface baseline per sample count before running: three different NN checkpoints are currently in play -- 4.1q compared against `pretrained/model_epoch1425_10ktrain_20samples.pkl` (also `fit_model_to_data.py`'s default) at n=20 and `$DEMIXING_ARTIFACT_ROOT/neural_net_checkpoints_100samples_circular_4.1p/model_epoch_1500.pkl` at n=100, while the external pipeline deploys `model_epoch1500_10ktrain_{20,100}samples.pkl`. Retirement is judged against what production actually runs. |
    | Full density | Score these exact checkpoints against the surface comparators on independent references, including ungated broad cases. Start with existing benchmark histograms and a consistent bin-probability comparison; use selected fresh raw/high-precision references only if a material discrepancy remains unresolved. |
    | Actual fitting | Run the public fit → export/plot → likelihood-rescore chain. Require completion, reproducible losses, and no unexplained material failures. Real-data fit quality need not always favor the more faithful simulator surrogate. |
    | Recovery | Complete the replicated simulator-based recovery protocol below. Report each noise parameter, condition contrasts, objective-specific identifiability, and held-out banded predictions; distinguish search failure, surrogate error, and target-induced non-recovery. |

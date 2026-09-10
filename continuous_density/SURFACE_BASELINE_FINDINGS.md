@@ -2,6 +2,8 @@
 
 Artifact paths and analysis scripts named below are relative to
 `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`.
+Generated artifacts are external and are not shipped with or expected in a
+normal checkout.
 
 This is the legacy surface-NN baseline for the single-condition, actual-DM
 recovery panel (`n_samples = 100`). It is a comparator for the WNM recovery
@@ -11,8 +13,9 @@ analysis, not a proposed direction for further surface-model development.
 
 - Only the eight development tuples were analyzed: 8 tuples × 5 response seeds
   × 3 trial counts (180, 450, and 900) = 120 subject datasets.
-- The four held-out tuples were fitted but were excluded before their fitted
-  parameters or empirical curves were read.
+- At this development-baseline stage, the four held-out tuples had been fitted
+  but their fitted parameters and empirical curves had not been read. They were
+  opened only after the objective-specific WNM settings were frozen.
 - Likelihood, bias-weighted CRPS, and smoothed exponential bias loss used the
   deployed hierarchical search. Density-asymmetry CCC used exhaustive 1-degree
   curve-cache search.
@@ -140,5 +143,7 @@ methods on the three affected `broad_3`, 180-trial datasets.
 - `analyze_surface_baseline.py`: the reproducible analysis that generated the
   CSVs and manifest.
 
-These artifacts are development-only. The held-out fits must remain unopened
-until the WNM fitting/search settings are frozen.
+These artifacts are development-only. The corresponding held-out surface
+metrics have since been analyzed after the WNM fitting/search settings were
+frozen; they are recorded in `surface_baseline_held_out_*.csv` and the
+objective-specific WNM findings documents.

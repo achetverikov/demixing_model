@@ -1,5 +1,7 @@
 # K12 transition audit and revised work plan — 2026-09-07
 
+Current status updated: 2026-09-10.
+
 ## Purpose and evidence
 
 This memo records an audit of `TRANSITION_PLAN.md` and the inner
@@ -8,6 +10,9 @@ in the subsequent discussion. It replaces the audit's initial ordering of the
 remaining work. It does not replace the detailed transition plan or claim
 production clearance.
 
+Generated evidence referenced through `$DEMIXING_ARTIFACT_ROOT` is external and
+is not shipped with or expected in a normal checkout.
+
 The audit used the repository guidance in `AGENTS.md`, `CLAUDE.md`, and
 `bias_model_comparison/analysis/CODING_GUIDE.md`. The original audit did not
 rerun tests or GPU jobs; statements about its test totals and discovered defects
@@ -15,22 +20,26 @@ came from the commit record. Claims about current support were checked against
 source. The 2026-09-07 update fixed and reran the density start-sweep selection
 and its targeted recovery tests. A later correction found that the first
 single-condition likelihood comparison used incomplete hierarchy and BADS
-comparators. The corrected implementations were subsequently run on all 120
-development datasets, settling likelihood on 32-start serial L-BFGS-B. Detailed
-protocol and generated results remain under `$DEMIXING_ARTIFACT_ROOT`.
+comparators. Corrected objective-specific searches and paired surface
+comparisons have now completed for all four retained objectives on the focused
+n=100 panel, including their held-out stages. Detailed protocol and generated
+results remain under `$DEMIXING_ARTIFACT_ROOT`.
 
 ## Executive summary
 
 K12 itself remains a credible replacement for the surface NN. Development
 comparisons against the simulation corpus show that it is the more faithful
-forward representation. The unresolved question is whether the complete WNM
-fitting pipeline can exploit that fidelity reliably and perform at least as well
-as the deployed surface-NN pipeline on recovery and real-data fit.
+forward representation. The focused actual-DM recovery panel now supports WNM
+under likelihood and bias-weighted CRPS; density and smoothed expectation give
+weak parameter recovery for both families even after target-alignment checks.
+The unresolved transition questions are representative real-data performance,
+public routing for the selected objective-specific WNM searches, comparison
+bounds, and completion of the direct WNM prediction path.
 
-The transition has built much of the low-level WNM machinery, but implementation
-has spread across loaders, prediction operations, every historical objective,
-optimization, provenance, caches, plotting estimators, and recovery infrastructure
-before the key recovery comparisons are complete. From the first transition
+The transition built much of the low-level WNM machinery across loaders,
+prediction operations, every historical objective, optimization, provenance,
+caches, plotting estimators, and recovery infrastructure before the key recovery
+comparisons were complete. From the first transition
 commit (`bd8a0f1`) through the last implementation commit covered by this update
 (`25448c3`), 27 commits changed 49 files, adding 9,710 and deleting 1,159 lines;
 4,200 inserted lines are under `tests/`. The next commit, `f47f3af`, added 1,479
@@ -39,9 +48,11 @@ counted as implementation growth. At least 49 defects are explicitly recorded
 across the audit/fix commits, several of which changed fitted or reported
 numbers.
 
-The immediate work should therefore be recovery and the minimum search,
-prediction, and fitting support required to attribute recovery failures. Plotting,
-browser work, rollout, regeneration, and removal of the surface NN are deferred.
+The immediate work is now R5--R6: public routing for the selected WNM searches,
+the minimum direct-prediction support and bounds decision needed for paired
+representative real-data fits, then those fits. Presentation-only plotting,
+browser work, rollout, regeneration, and removal of the surface NN remain
+deferred.
 
 ## Current implementation status
 
@@ -64,25 +75,25 @@ browser work, rollout, regeneration, and removal of the surface NN are deferred.
   noise-free start-count sweep over hard range-panel cases have run.
 - The first actual-DM data panel is frozen and generated: n=100, single
   condition, no motor noise, with uniformly allocated dissimilarities and nested
-  180/450/900-trial datasets. The deployed surface baseline and the selected
-  32-start WNM likelihood search fitted all 120 development datasets; that WNM
-  search was also run once on all 60 held-out datasets. Production-faithful
-  hierarchy and 32-start JAX-BADS comparators completed the 120-dataset
-  development split. Common recovery, likelihood, mean-bias, bias-SD, and
-  asymmetry summaries are saved with the runs.
+  180/450/900-trial datasets. Objective-specific WNM searches and the deployed
+  surface baseline fitted the complete development and held-out panels for
+  likelihood, bias-weighted CRPS, density, and smoothed expectation. Common
+  recovery, loss, mean-bias, bias-SD, asymmetry, and dissimilarity-band summaries
+  are saved with the runs. Density and smoothed-expectation target-alignment
+  diagnostics are also complete.
 
 ### Partial or not yet completed
 
-- The likelihood benchmark can evaluate WNM with an independent batched
-  hierarchy and with continuous search, but the public fitter still couples WNM
-  to `--search continuous`; objective-specific hierarchy/cache integration
-  remains for the other retained objectives where the comparison requires it.
+- The recovery harnesses can evaluate WNM with objective-specific hierarchy,
+  cache, JAX-BADS, and continuous searches, but those selected search strategies
+  are not all integrated into the public fitter. It still couples WNM to
+  `--search continuous`.
 - The direct prediction command identifies WNM artifacts but still constructs
   the surface-only optimizer, so it does not yet provide a working WNM prediction
   path.
 - On the actual-DM n=100 panel, paired development/held-out surface comparisons
-  and corrected likelihood-search comparisons exist. Bias-weighted CRPS,
-  density, smoothed expectation, and representative real-data comparisons remain.
+  are complete for all four objectives. Broader n=20, multi-condition, and motor
+  recovery extensions and representative real-data comparisons remain.
 - Unified subject plots and PDF slices explicitly reject WNM. This is acceptable
   during the recovery stage and is deferred below.
 - `surface_browser`, demos, external fit scripts, the comparison pipeline, model
@@ -124,7 +135,7 @@ regression because the fixture did not exercise the clamp. Stable mathematical
 contracts and public-call-site tests are more valuable than expanding temporary
 equivalence scaffolding.
 
-### 4. The change/audit cycle has not reached a frozen boundary
+### 4. The change/audit cycle required a frozen boundary
 
 Recent fixes include scoring on the wrong feature grid, accepting failed optimizer
 starts as winners, silently fitting motor-enabled runs at zero motor noise, an
@@ -138,9 +149,10 @@ protect the production path. The audits caught these, but the pattern shows that
 features were being layered before a small set of canonical entry points was
 frozen and exercised.
 
-Batch the recovery-enabling fixes, freeze their code and settings, and then run
-the paired analyses. Avoid alternating large new layers with audit repairs while
-the benchmark itself is changing.
+The focused recovery code and settings were subsequently frozen and the paired
+analyses completed. Preserve that boundary: avoid reopening optimizer or target
+selection from held-out results while moving to the real-data and prediction
+stages.
 
 ### 5. Status documentation is already drifting
 
@@ -150,7 +162,8 @@ fixed. Recent commits also corrected three earlier implementation claims. Commit
 `f47f3af` fixed a separate provenance failure: earlier commit messages claimed to
 carry transition-document changes that were outside the repository and therefore
 untracked. The plan and findings are now tracked beside the code for the active
-transition, with generated CSV/JSON artifacts remaining under `results/`. Status
+transition, with generated CSV/JSON artifacts remaining under
+`$DEMIXING_ARTIFACT_ROOT/`. Status
 prose should be updated only at frozen milestones and should be derived from
 executing call sites where possible. The detailed result narrative remains
 temporary tracked transition material and should return to the result artifacts
@@ -170,15 +183,16 @@ baseline and should be run with its established fitting strategy.
 
 ### Recovery is a core attribution analysis
 
-The current density result concerns the combined WNM + empirical density target +
-continuous-search pipeline. Increasing from 16 to 64 starts did not materially
+The density result available at the initial audit concerned the combined WNM +
+empirical density target + continuous-search pipeline. Increasing from 16 to 64 starts did not materially
 improve empirical-target recovery. A separate noise-free sweep shows that this
 does not mean the search is adequate: even large multistart budgets miss known
 optima on some hard cases. The empirical fits nevertheless achieve losses below
 the loss at truth, proving that the realized empirical target can prefer a
 non-truth parameter vector even if a still-better basin remains undiscovered.
-Hierarchical, cached exhaustive, or other affordable reference searches remain
-necessary to quantify the optimization gap and choose a practical search.
+Hierarchical, cached exhaustive, or other affordable reference searches were
+therefore necessary to quantify the optimization gap and choose a practical
+search; completed R2 below records the result.
 
 On the corrected 40 hardest density cases, 16, 64, and 256 starts missed the
 known noise-free optimum in 30, 18, and 7 cases, at median costs of 2.2, 7.1,
@@ -243,9 +257,9 @@ This determines whether the complete WNM pipeline is at least as effective as th
 legacy production pipeline, while the within-WNM search comparisons determine
 whether a WNM failure is merely an optimization failure.
 
-## Currently needed work: recovery analyses
+## Completed recovery analyses and current critical path
 
-Only code required to execute and interpret the following analyses is on the
+R1--R4 below record the completed focused recovery stage. R5--R6 are now the
 current critical path.
 
 ### R1. Freeze the first paired recovery data design — completed
@@ -399,7 +413,7 @@ especially for nearly flat targets, rather than showing uniform dominance. It
 cannot serve as prospective optimizer confirmation because it was inspected
 before the corrected development-only search selection.
 
-### R5. Run paired representative real-data fits
+### R5. Run paired representative real-data fits — pending R6, search routing, and bounds
 
 - Fit the same representative datasets, rows, conditions, outlier policy, and
   motor policy with WNM and with the deployed surface-NN baseline.
@@ -411,8 +425,14 @@ before the corrected development-only search selection.
   memory in addition to fit scores.
 - Reuse legacy NN results only when their data, preprocessing, objective semantics,
   and evaluation conventions match exactly; otherwise rerun the paired NN arm.
+- Before launching the curve-objective arms, expose the recovery-selected WNM
+  cache/search dispatch through the fitting entry point. The focused panel did
+  not settle multi-condition/shared-`sd_spat` search, so either limit the first
+  paired panel accordingly or validate that extension separately.
+- Resolve `OPEN_DECISIONS.md` item 3 and state whether both families share one
+  fitting box or retain their artifact-specific bounds.
 
-### R6. Validate the direct prediction path needed by the analyses
+### R6. Validate the direct prediction path needed by the analyses — current
 
 The recovery and real-data comparisons must use WNM predictions directly rather
 than route them through a sampled surface. Complete and test the direct WNM branch
@@ -425,8 +445,8 @@ features and browser integration remain deferred.
 
 ## Deferred stages
 
-The following work should not expand while R1--R6 remain unresolved, except for a
-small fix required to run a recovery analysis safely.
+The following work should not expand while R5--R6 remain unresolved, except for
+a small fix required to run the direct-prediction or real-data analysis safely.
 
 ### Presentation and exploratory interfaces
 

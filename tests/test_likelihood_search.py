@@ -168,6 +168,45 @@ def test_polish_keeps_global_trace_and_improves_coarse_candidate():
     assert len(result.candidates) == len(coarse.candidates) + 1
 
 
+def test_polish_keeps_source_when_its_only_local_start_fails(monkeypatch):
+    evaluator = QuadraticEvaluator(TRUTH)
+    coarse = hierarchical_search(
+        evaluator, TRIALS, BOUNDS, points_per_axis=3, n_stages=1,
+        batch_size=32, coordinates="log")
+
+    def failed_minimize(_objective, x0, **_kwargs):
+        return SimpleNamespace(
+            x=np.asarray(x0), fun=coarse.loss - 1.0, success=False,
+            message="abnormal termination", nit=0, nfev=1)
+
+    monkeypatch.setattr(likelihood_search, "minimize", failed_minimize)
+    result = polish_search(evaluator, TRIALS, BOUNDS, coarse)
+
+    assert result.loss == coarse.loss
+    np.testing.assert_array_equal(result.parameters, coarse.parameters)
+    assert not result.candidates[-1].success
+    assert len(result.candidates) == len(coarse.candidates) + 1
+
+
+def test_polish_keeps_lower_rescored_point_despite_failed_convergence(monkeypatch):
+    evaluator = QuadraticEvaluator(TRUTH)
+    coarse = hierarchical_search(
+        evaluator, TRIALS, BOUNDS, points_per_axis=3, n_stages=1,
+        batch_size=32, coordinates="log")
+
+    def failed_minimize(_objective, _x0, **_kwargs):
+        return SimpleNamespace(
+            x=np.log(TRUTH), fun=-1.0, success=False,
+            message="abnormal termination", nit=1, nfev=2)
+
+    monkeypatch.setattr(likelihood_search, "minimize", failed_minimize)
+    result = polish_search(evaluator, TRIALS, BOUNDS, coarse)
+
+    assert result.loss < coarse.loss
+    np.testing.assert_allclose(result.parameters, TRUTH)
+    assert not result.candidates[-1].success
+
+
 def test_surface_production_hierarchy_uses_nested_feature_and_spatial_schedule(
         monkeypatch):
     monkeypatch.setattr(

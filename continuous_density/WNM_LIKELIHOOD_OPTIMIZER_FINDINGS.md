@@ -6,7 +6,8 @@ Date: 2026-09-07; corrected panel, banded curve scoring and the full
 All run directories and CSV file names in this document are relative to
 `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`,
 where the analysis scripts named here also live. The document is versioned with
-the code; the artifacts it cites are not.
+the code; the external artifacts it cites are not shipped with or expected in a
+normal checkout.
 
 ## Comparator correction and final resolution
 
@@ -549,18 +550,18 @@ tuples produce particularly flat curves, so CCC remains secondary to RMSE and
 target range. No held-out empirical SD bin reached the uniform-limit missing
 state.
 
-## Remaining decisions
+## Follow-up status and remaining cleanup
 
-1. Select search budgets independently for bias-weighted CRPS, density, and
-   smoothed expectation; likelihood does not answer their optimization problem.
-2. Measure GPU execution and concurrency; device access is now authorized, and
-   only the throughput and contention numbers are still missing.
-3. Give the hierarchy a start-coverage remedy or record that it cannot have one.
-   Every rival was re-run at 32 dispersed starts; the hierarchy has no start
-   setting, so it alone was compared at a fixed configuration. Its failure mode
-   is lattice alignment, whose analogue of a multistart budget is a set of
-   jittered lattice offsets. No such arm exists yet.
-4. Collapse the two banded-metric implementations. `continuous_density_4.1c`
-   scores bands through `evaluation.band_curve_metrics` on a different frame
-   schema; `analyze_wnm_curve_bands.py` here bands per-dataset curve arrays.
-   Both read the same band edges, and both should end up calling one helper.
+1. Search selection is complete for bias-weighted CRPS, density, and smoothed
+   expectation; see their objective-specific findings documents. Likelihood's
+   optimizer is not generalized to those objectives.
+2. CPU/GPU rescoring and the targeted float64 diagnostic are complete. They
+   identify the apparent GPU JAX-BADS advantage as a float32 reduction-order
+   artifact and confirm L-BFGS-B. Search itself remains float32; global x64
+   adoption is deferred until the surface backend is retired.
+3. No jittered-lattice hierarchy arm was built. This is recorded rather than
+   left as an open recovery requirement: the selected 32-start L-BFGS-B search
+   is cheaper and more reliable on the focused likelihood panel.
+4. The research and transition banded-metric analyses still use separate frame
+   schemas. Collapsing them is engineering cleanup for a shared production
+   consumer, not a blocker for the completed recovery result.

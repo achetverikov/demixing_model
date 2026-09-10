@@ -2,7 +2,17 @@
 
 **Snapshot:** 2026-08-09, branch `dev/continuous-density-fixes`, code state
 `ae261b0` plus this report.  The governing plan is
-`/workspaces/demixing_model/Task_ Prototype a continuous conditional-density representation for the Demixing Model.md`.
+the historical workspace brief `Task_ Prototype a continuous conditional-density
+representation for the Demixing Model.md` (not shipped with this repository).
+
+**Current-status note (2026-09-10):** this report remains the authoritative
+record of the trajectory-model experiment at its snapshot, not the live
+transition checklist. The focused actual-DM recovery and paired surface-NN
+comparison have since completed for likelihood, bias-weighted CRPS, density,
+and smoothed expectation. Current gate status is in `TRANSITION_AUDIT.md`; the
+objective-specific `*FINDINGS.md` files contain the results. Representative
+real-data fits, selected-search routing, comparison bounds, and direct WNM
+prediction remain before default promotion.
 
 ## Executive conclusion
 
@@ -13,7 +23,7 @@ in all four conditioning variables, and is much smaller.  The current retained
 checkpoint is:
 
 ```text
-/workspaces/demixing_model/results/continuous_density/wnmix_k12_trajectory_design_large.pkl
+$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_trajectory_design_large.pkl
 ```
 
 It is a K=12 wrapped-normal mixture with a 128-256-256 parameter network,
@@ -22,7 +32,7 @@ times are 0.138 ms for one-condition prediction and 0.318 ms for a 1,000-trial
 likelihood after warm-up (100 repeats).  The matching production competitor is:
 
 ```text
-/workspaces/demixing_model/demixing_model/pretrained/model_epoch1500_10ktrain_100samples.pkl
+pretrained/model_epoch1500_10ktrain_100samples.pkl
 ```
 
 That production checkpoint is 9,184,330 bytes, about 20 times larger.
@@ -49,29 +59,31 @@ The experiments use three levels of evidence that must not be conflated:
    curves and a high-feature-noise extension, both with 100k raw outcomes per
    row.  These data drove diagnosis and plotting and are not untouched tests.
 
-The current branch passes the complete CPU test suite: **72 passed, 1 skipped**.
-The skipped test is the opt-in simulator/GPU test.
+At this snapshot the complete CPU test suite reported **72 passed, 1 skipped**;
+this is not a current branch-wide test count. The skipped test was the opt-in
+simulator/GPU test.
 
 ## Canonical artifacts
 
 | Purpose | Artifact |
 |---|---|
-| retained checkpoint | `results/continuous_density/wnmix_k12_trajectory_design_large.pkl` |
-| original global K=12 baseline | `results/continuous_density/wnmix_k12_16k500.pkl` |
-| trajectory training data | `results/continuous_density/train_trajectories_2k_45x500.npz` |
-| checkpoint-selection data | `results/continuous_density/selection_lowd_24x45_2k.npz` |
-| untouched final raw test | `results/continuous_density/test_lowd_16x90_100k.npz` |
-| baseline/retained final metrics | `results/continuous_density/test_lowd_16x90_100k_density_comparison.csv` |
-| retained/production final comparison | `results/continuous_density/comparison_trajectory_large_on_test_lowd_16x90_100k.csv` |
-| base UEV raw reference | `results/continuous_density/validation_uev_100k_seed161803.npz` |
-| high-noise UEV raw extension | `results/continuous_density/validation_uev_highfeat_dprime2_100k_seed271828.npz` |
-| current three-way UEV table | `results/continuous_density/uev_objective_ablation/uev_raw100k_vs_models.csv` |
-| current UEV figures | `results/continuous_density/uev_objective_ablation/` |
-| tightened local K=12 diagnostic | `results/continuous_density/uev_local_capacity_asym_sd10_60_dprime2_comp1_b2048/` |
-| retained-checkpoint benchmark | `results/continuous_density/benchmark_k12_trajectory_design_large.json` |
+| retained checkpoint | `$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_trajectory_design_large.pkl` |
+| original global K=12 baseline | `$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_16k500.pkl` |
+| trajectory training data | `$DEMIXING_ARTIFACT_ROOT/continuous_density/train_trajectories_2k_45x500.npz` |
+| checkpoint-selection data | `$DEMIXING_ARTIFACT_ROOT/continuous_density/selection_lowd_24x45_2k.npz` |
+| untouched final raw test | `$DEMIXING_ARTIFACT_ROOT/continuous_density/test_lowd_16x90_100k.npz` |
+| baseline/retained final metrics | `$DEMIXING_ARTIFACT_ROOT/continuous_density/test_lowd_16x90_100k_density_comparison.csv` |
+| retained/production final comparison | `$DEMIXING_ARTIFACT_ROOT/continuous_density/comparison_trajectory_large_on_test_lowd_16x90_100k.csv` |
+| base UEV raw reference | `$DEMIXING_ARTIFACT_ROOT/continuous_density/validation_uev_100k_seed161803.npz` |
+| high-noise UEV raw extension | `$DEMIXING_ARTIFACT_ROOT/continuous_density/validation_uev_highfeat_dprime2_100k_seed271828.npz` |
+| current three-way UEV table | `$DEMIXING_ARTIFACT_ROOT/continuous_density/uev_objective_ablation/uev_raw100k_vs_models.csv` |
+| current UEV figures | `$DEMIXING_ARTIFACT_ROOT/continuous_density/uev_objective_ablation/` |
+| tightened local K=12 diagnostic | `$DEMIXING_ARTIFACT_ROOT/continuous_density/uev_local_capacity_asym_sd10_60_dprime2_comp1_b2048/` |
+| retained-checkpoint benchmark | `$DEMIXING_ARTIFACT_ROOT/continuous_density/benchmark_k12_trajectory_design_large.json` |
 
-All paths above are under `/workspaces/demixing_model/`.  Raw samples are saved
-in the NPZ files; the references are not merely precomputed surfaces.
+The artifact root is external to the repository and is not shipped or expected
+in a normal checkout. Raw samples are saved in the NPZ files; the references are
+not merely precomputed surfaces.
 
 ## Model and data construction
 
@@ -207,7 +219,7 @@ The canonical current figures and their source CSV contain only raw 100k,
 retained trajectory density, and production NN:
 
 ```text
-results/continuous_density/uev_objective_ablation/
+$DEMIXING_ARTIFACT_ROOT/continuous_density/uev_objective_ablation/
 ```
 
 The directory name is historical; it no longer contains objective-ablation
@@ -320,10 +332,10 @@ as band-aids and were rejected.
 Rejected checkpoints remain available for audit:
 
 ```text
-results/continuous_density/wnmix_k12_grouped_nll.pkl
-results/continuous_density/wnmix_k12_grouped_moment2.pkl
-results/continuous_density/wnmix_k12_grouped_moment10.pkl
-results/continuous_density/wnmix_k12_grouped_moment10_cvar10.pkl
+$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_grouped_nll.pkl
+$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_grouped_moment2.pkl
+$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_grouped_moment10.pkl
+$DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_grouped_moment10_cvar10.pkl
 ```
 
 ## Plan coverage and remaining gaps
@@ -341,6 +353,9 @@ results/continuous_density/wnmix_k12_grouped_moment10_cvar10.pkl
 | secondary modes and grid density discrepancy | evaluated in older reports, but affected by reporting-KDE choices and not rerun for the retained checkpoint after the asymmetry correction |
 | analytic motor noise | implemented and unit-tested; not validated in a full behavioral-fitting comparison |
 | empirical fitting demo | completed for the earlier global K=12 only; retained trajectory checkpoint has not been compared across participants/datasets |
+| focused actual-DM recovery | completed for all four retained objectives, including paired surface-NN and held-out comparisons |
+| density/smoothed-exp target alignment | completed; matched operators improve target semantics but both objectives remain weak for parameter identification |
+| selected-search routing, direct WNM prediction, bounds policy, and representative real-data panel | not completed; current transition gates R5--R6 and `OPEN_DECISIONS.md` item 3 |
 | replacement of production | deliberately not done |
 
 ## Known limitations and audit warnings
@@ -350,10 +365,9 @@ results/continuous_density/wnmix_k12_grouped_moment10_cvar10.pkl
 2. **Historical UEV d-prime labels are nominal.** Actual simulator separation is
    42 degrees, not 40.
 3. **Older asymmetry columns are stale.** See the correction section above.
-4. **`continuous_density/RESULTS.md` is historical.** It ends at the balanced
-   augmentation stage and incorrectly names that checkpoint as selected relative
-   to the later trajectory experiment.  This report and
-   `trajectory_experiment_results.md` supersede it.
+4. **`continuous_density/RESULTS.md` is historical forward-model evidence.** It
+   now labels the balanced augmentation as an intermediate selection and points
+   to this report and the transition findings for current status.
 5. **High feature noise remains weak.** The retained model is much better than
    production on extreme maxima but still has structured bias/SD undershoot.
 6. **The corrected local K=12 test covered `(10,60)`, not `(90,120)`.** It does
@@ -365,7 +379,11 @@ results/continuous_density/wnmix_k12_grouped_moment10_cvar10.pkl
 8. **Checkpoint-selection gains are small in absolute NLL.** Their paired
    uncertainty is reported; moment maxima do not uniformly improve.
 
-## Recommended next experiments
+## Snapshot recommendations and current next work
+
+Items 1--4 below are forward-model experiments recommended at the audit
+snapshot; they remain optional research rather than the current transition
+critical path. Item 5 reflects the current R5--R6 work.
 
 1. Run the held-out local-capacity protocol directly on the high-noise failures,
    especially `(90,120,nominal d'=2,component=2)` around feature difference 28
@@ -380,9 +398,11 @@ results/continuous_density/wnmix_k12_grouped_moment10_cvar10.pkl
 4. Regenerate retained-checkpoint off-grid density-asymmetry and secondary-mode
    metrics with the corrected raw statistic; do not reuse stale comparison CSV
    asymmetry fields.
-5. Re-run the empirical trial-level fit with the retained checkpoint over
-   multiple participants/conditions, then add parameter-recovery tests before
-   considering production integration.
+5. Route the selected objective-specific WNM searches through the fitting entry
+   point, complete direct WNM prediction, settle the comparison bounds, and then
+   run the paired representative real-data panel against the deployed surface
+   NN. The focused parameter-recovery tests are complete and should not be
+   repeated as a prerequisite.
 
 ## Reproduction entry points
 
@@ -402,7 +422,7 @@ continuous_density/benchmark.py
 The retained experiment's shorter result record is also at:
 
 ```text
-/workspaces/demixing_model/results/continuous_density/trajectory_experiment_results.md
+$DEMIXING_ARTIFACT_ROOT/continuous_density/trajectory_experiment_results.md
 ```
 
 ## Suggested audit checks

@@ -57,11 +57,16 @@ def polish_search(evaluator, trials, bounds, source: SearchResult, **lbfgsb_kwar
     """Polish a search winner with one SciPy L-BFGS-B start and retain both traces."""
     polished = scipy_lbfgsb(
         evaluator, trials, bounds, starts=np.asarray([source.parameters]),
-        **lbfgsb_kwargs)
-    winner = polished if polished.loss < source.loss else source
+        require_success=False, **lbfgsb_kwargs)
+    # A line-search status is a convergence diagnostic, not an invalidation of
+    # an otherwise finite evaluated point. Keep that status on the candidate,
+    # but select the point by the canonical rescore just like any other search
+    # candidate. The source remains available when the failed attempt is worse.
+    use_polish = polished.loss < source.loss
     return SearchResult(
         method=f"{source.method}+scipy-lbfgsb",
-        parameters=winner.parameters, loss=winner.loss,
+        parameters=polished.parameters if use_polish else source.parameters,
+        loss=polished.loss if use_polish else source.loss,
         candidates=source.candidates + polished.candidates,
         elapsed_seconds=source.elapsed_seconds + polished.elapsed_seconds,
         n_evaluations=source.n_evaluations + polished.n_evaluations,
@@ -138,7 +143,8 @@ def _bound_hits(parameters, bounds, rtol=1e-6):
 
 def scipy_lbfgsb(evaluator: LikelihoodEvaluator, trials, bounds, *, n_starts=8,
                   seed=0, workers=1, starts=None, max_iterations=500,
-                  tolerance=1e-9, gradient_tolerance=1e-6) -> SearchResult:
+                  tolerance=1e-9, gradient_tolerance=1e-6,
+                  require_success=True) -> SearchResult:
     """SciPy L-BFGS-B with a JAX value/gradient, optionally concurrent by start."""
     if starts is None:
         starts = dispersed_starts(bounds, n_starts, seed)
@@ -186,12 +192,13 @@ def scipy_lbfgsb(evaluator: LikelihoodEvaluator, trials, bounds, *, n_starts=8,
             candidates = list(pool.map(run, indexed))
     elapsed = time.perf_counter() - started
     successful = [candidate for candidate in candidates if candidate.success]
-    if not successful:
+    if not successful and require_success:
         statuses = sorted({candidate.status for candidate in candidates})
         raise RuntimeError(
             f"none of {n_starts} L-BFGS-B starts converged "
             f"(statuses: {statuses})")
-    best = min(successful, key=lambda candidate: candidate.loss)
+    eligible = candidates if not require_success else successful
+    best = min(eligible, key=lambda candidate: candidate.loss)
     return SearchResult(
         method="scipy-lbfgsb" if workers == 1 else "scipy-lbfgsb-threaded",
         parameters=best.parameters, loss=best.loss, candidates=tuple(candidates),
@@ -199,7 +206,8 @@ def scipy_lbfgsb(evaluator: LikelihoodEvaluator, trials, bounds, *, n_starts=8,
         n_evaluations=sum(candidate.n_evaluations for candidate in candidates),
         settings={"n_starts": n_starts, "seed": seed, "workers": workers,
                   "max_iterations": max_iterations, "tolerance": tolerance,
-                  "gradient_tolerance": gradient_tolerance})
+                  "gradient_tolerance": gradient_tolerance,
+                  "require_success": require_success})
 
 
 def hierarchical_search(evaluator: LikelihoodEvaluator, trials, bounds, *,

@@ -2,6 +2,8 @@
 
 Artifact paths and analysis scripts named below are relative to
 `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`.
+Generated artifacts are external and are not shipped with or expected in a
+normal checkout.
 
 ## Decision
 
@@ -62,7 +64,11 @@ Parameter recovery itself favors the surface NN:
 | Development | WNM | 1.113 | 0.725 | 11.7% |
 | Development | surface NN | **0.899** | **0.668** | **20.8%** |
 | Held out | WNM | 1.332 | 1.318 | 8.3% |
-| Held out | surface NN | **1.149** | **0.970** | **10.0%** |
+| Held out | surface NN | **1.149** | **0.970** | **11.7%** |
+
+The held-out surface factor rate counts an estimate exactly at the reciprocal
+factor boundary (5.0 fitted versus 7.5 true) as recovered; the earlier stored
+Boolean excluded it through floating-point roundoff.
 
 The paired WNM-minus-surface median log-RMSE difference is +0.038 on
 development and +0.099 held out; WNM has lower parameter error on only 35% of

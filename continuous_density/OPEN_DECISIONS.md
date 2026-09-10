@@ -1,15 +1,20 @@
 # Open decisions — K12 transition
 
-Unresolved choices and evidence thresholds, recorded here instead of burying them
-in implementation notes. Items 1 and 3 affect the active recovery comparisons;
-item 2 is conditional on those results. Items 4--6 are deferred and do not block
-the recovery work.
+Current status updated: 2026-09-10.
+
+Unresolved choices and evidence thresholds, recorded here instead of burying
+them in implementation notes. The focused recovery decisions in items 1--2 are
+resolved and retained for provenance. Item 3 affects production comparison;
+items 4--6 remain deferred or low priority.
+
+Generated evidence referenced through `$DEMIXING_ARTIFACT_ROOT` is external and
+is not shipped with or expected in a normal checkout.
 
 Ordered by when the plan needs them settled.
 
 ---
 
-## 1. Objective-specific WNM search and start budgets (active in recovery R2)
+## 1. Objective-specific WNM search and start budgets (resolved for focused recovery)
 
 **Status: the focused single-condition searches are settled for all four
 currently implemented objectives.** Likelihood and bias-weighted CRPS use
@@ -25,7 +30,13 @@ seed 0, artifact bounds, 500 iterations, `ftol=1e-9`, `gtol=1e-6`, and JAX
 float32. The generic continuous optimizer's default of 8 starts remains a
 placeholder and has not become a universal production default.
 
-On the likelihood development budget panel, 16 starts had two material misses,
+These choices are validated in the focused recovery harness, but the public
+fitter still admits WNM only through `--search continuous`. Routing the selected
+density and smoothed-expectation cache strategies into that entry point remains
+a prerequisite for like-for-like real-data fits; multi-condition/shared-
+`sd_spat` search is outside what this single-condition panel settled.
+
+**Historical selection path.** On the likelihood development budget panel, 16 starts had two material misses,
 32 reached the 0.001-NLL gate on every dataset, and 64 only reduced
 sub-threshold gaps while nearly doubling median CPU time. That gate result held
 only against a union best without a 32-start BADS arm,
@@ -39,14 +50,14 @@ fixed feature-step schedule, 0.5 spatial zoom, and 1-degree stopping rule. The
 JAX-BADS pilot used only four starts on the representative panel and a budget
 of 500 evaluations / 100 iterations; BBZ uses eight curated starts and, for
 three parameters, defaults to 1,500 evaluations / 300 iterations. PyBADS was
-not tested at all. Therefore the earlier comparison does not rule out any of
+not tested at all. Therefore the earlier comparison did not rule out any of
 those three approaches.
 
-Use the same 32 deterministic dispersed starts for PyBADS, JAX-BADS, and
-L-BFGS-B in the primary comparison, so optimizer family is not confounded with
-start coverage. Retain the eight-start JAX-BADS run separately as a
+The corrected comparison used the same 32 deterministic dispersed starts for
+PyBADS, JAX-BADS, and L-BFGS-B, so optimizer family was not confounded with
+start coverage. It retained the eight-start JAX-BADS run separately as a
 BBZ-production-count diagnostic. The hierarchy has no start-count setting, so
-it alone is compared at a fixed configuration while every rival was equalized;
+it alone was compared at a fixed configuration while every rival was equalized;
 its failure mode is lattice alignment, and the analogue of a multistart budget
 would be jittered lattice offsets. No such arm has been built.
 
@@ -152,7 +163,8 @@ panels add two results that must not be conflated: moving from 16 to 64 starts
 barely changes empirical-target parameter recovery, while the noise-free
 hard-case sweep shows that continuous search still misses a known optimum. The
 former says the observed density-recovery failure is not explained by starts;
-the latter says the optimizer is not yet adequate.
+the latter says continuous multistart alone is not an adequate density reference.
+This motivated the cached search selected above.
 
 On the corrected 40 hardest `range_n10000` density cases, refitted against a
 noise-free target, 16, 64, and 256 starts missed the known optimum in 30, 18,
@@ -160,19 +172,16 @@ and 7 cases respectively. Median time per fit rose from 2.2 to 7.1 to 27.2
 seconds. Even the largest tested budget is therefore not a reference solution,
 and the generic 8-start default is below every measured arm.
 
-There should be no universal budget chosen from density alone. On development
-groups, compare each retained objective through a common WNM scorer against an
-appropriate hierarchical, cached, dense, or profiled reference, then freeze the
-simplest search that meets predeclared optimization-gap, reliability, and runtime
-criteria. Likelihood and bias-weighted CRPS are the priority parameter-recovery
-cases; curve-search recovery is still tested but is expected to be weaker. The
-surface NN keeps its deployed search and is compared as a legacy pipeline; it does
-not need matching WNM search implementations.
+The completed comparisons confirm that there is no universal budget. The
+objective-specific choices at the start of this section are frozen for the
+focused panel. The surface NN keeps its deployed search as the legacy comparator;
+it does not need matching WNM search implementations.
 
-## 2. float64 for the continuous search (conditional during recovery R2)
+## 2. float64 for the continuous search (diagnostic resolved; adoption deferred)
 
-Recorded in `TODO.md` item 3. The repo runs JAX at float32, which floors
-convergence near 1e-8 relative; recovery of a known optimum lands at 1.5e-7.
+Originally recorded in `TODO.md` item 3. The repo runs JAX at float32, which
+floors convergence near 1e-8 relative; recovery of a known optimum lands at
+1.5e-7.
 Whether that costs anything scientifically is only answerable by the recovery
 panel, and adopting x64 would change the surface backend's arithmetic too, so it
 cannot be switched on unilaterally.
@@ -255,7 +264,7 @@ discarded at accumulation time, so any corpus re-run made before the change
 produces another mu2-less corpus. If a re-run happens for another reason,
 retaining column 22 costs almost nothing then.
 
-## 5. Plot outputs for a mixture fit (deferred until the recovery gate)
+## 5. Direct prediction and plot outputs for a mixture fit (partly open)
 
 `create_unified_subject_plots` and `plot_pdf_slices` recompute curves, moments
 and SDs through the surface optimizer. They now refuse a mixture artifact rather
@@ -268,10 +277,11 @@ analytically; the two agree to about 9e-05 degrees on the golden fixture, the
 residual being the 2-degree grid's approximation error rather than the analytic
 value's. Recorded here in case a reviewer expects one implementation.
 
-**Still open, but intentionally deferred**: neither plotting entry point can yet
-*run* on a mixture fit. Both refuse a WNM artifact rather than crashing. Direct
-prediction needed to score recovery remains in scope; presentation wiring does
-not.
+**Still open**: neither plotting entry point can yet *run* on a mixture fit. Both
+refuse a WNM artifact rather than crashing. Direct prediction is one current R6
+prerequisite for representative real-data comparison; selected-search routing
+and the bounds policy in item 3 are the others. Presentation-only wiring remains
+deferred.
 
 The curve computations a mixture plot needs now exist:
 `shared.prediction.mixture_plot_curves` produces all four curve families (bias,
@@ -328,13 +338,14 @@ do not produce.
 
 - **Averaged surfaces**: retained (2026-09-06), so mu2 and `surface_browser`
   keep their existing path.
-- **Surface NN**: retired at step 7, after every downstream artifact has been
-  regenerated on K12.
+- **Surface NN**: scheduled for retirement at step 7, after every downstream
+  artifact has been regenerated on K12; it remains load-bearing today.
 - **Declared domain**: `sd_feat [2.5, 200]`, `sd_spat [5, 200]`,
   `feat_diff [0.5, 180]`.
 - **First actual-DM recovery data design**: n=100, single condition, zero motor
   noise, 12 fixed truth tuples, five response seeds, and nested 180/450/900 trials
-  uniformly allocated over 2:2:180 dissimilarity. Broader panels wait for this one.
+  uniformly allocated over 2:2:180 dissimilarity. This focused panel is complete;
+  broader panels remain deferred.
 - **`n_samples` is the parameter**: exactly two production artifacts at a time,
   one per observer model, selected through `shared.surrogate`; other checkpoints
   remain reachable by name.

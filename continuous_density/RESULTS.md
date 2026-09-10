@@ -1,8 +1,18 @@
 # Continuous-density prototype results
 
+This file preserves the initial forward-representation experiments. The
+trajectory-trained K12 checkpoint and the later transition/recovery evidence
+supersede its checkpoint-selection status; see `AUDIT_SUMMARY.md`,
+`TRANSITION_AUDIT.md`, and the objective-specific `*FINDINGS.md` files. As of
+2026-09-10, the focused actual-DM recovery comparison is complete for all four
+retained objectives. Representative real-data comparison and direct WNM
+prediction integration remain open, as do public routing for the selected
+objective-specific searches and the comparison-bounds decision.
+
 Results below are from the 100-observation simulator and production checkpoint,
 using fresh off-grid raw simulations. Artifacts are in
-`/workspaces/demixing_model/results/continuous_density/`; they are not committed.
+`$DEMIXING_ARTIFACT_ROOT/continuous_density/`; they are not shipped with the
+repository or expected in a normal checkout.
 
 ## Primary result
 
@@ -83,7 +93,7 @@ trajectory MAE was 0.241° for production versus 0.501° for the conditional
 density. Thus the direct model is better overall but does smooth away part of a
 specific strong repulsive trough. Separate three-way grid and averaged figures
 for every d′ level are under
-`results/continuous_density/uev_raw100k_vs_models/`.
+`$DEMIXING_ARTIFACT_ROOT/continuous_density/uev_raw100k_vs_models/`.
 
 Response variability was compared as circular SD from the same first circular
 moment. The conditional density had 0.223° MAE and 0.364° RMSE, versus 0.309°
@@ -130,9 +140,11 @@ The augmentation did not trade away broad likelihood accuracy. On the common
 100k raw references, scattered-point NLL improved from 3.530510 to 3.530404
 (paired difference -0.000106, 95% CI ±0.000054; 62.0% case wins), while
 difficult-trajectory NLL improved from 3.866589 to 3.866315 (-0.000273,
-95% CI ±0.000068; 70.8% case wins). The selected artifact is
-`wnmix_k12_lowdprime_balanced_aug.pkl`; narrower unequal-only augmentations were
-rejected because they moved the worst response-SD error to uncovered regimes.
+95% CI ±0.000068; 70.8% case wins). The artifact selected at this intermediate
+stage was `wnmix_k12_lowdprime_balanced_aug.pkl`; it was later superseded by
+`wnmix_k12_trajectory_design_large.pkl`. Narrower unequal-only augmentations
+were rejected because they moved the worst response-SD error to uncovered
+regimes.
 
 ## Remaining approximation error
 
@@ -152,6 +164,10 @@ rejected because they moved the worst response-SD error to uncovered regimes.
   by changing the density representation.
 
 The prototype therefore succeeds as a direct continuous likelihood
-representation, but the current production model should remain untouched until
-empirical fits and parameter recovery are compared across datasets and the
-2° lower-domain limitation is resolved if zero/one-degree trials must be used.
+representation. The focused actual-DM recovery comparison has since been
+completed: WNM is supported by likelihood and BWCRPS, while density and smoothed
+expectation are weak parameter-identification objectives for both model
+families. The surface NN remains the deployed default until representative
+real-data fits, direct prediction, downstream regeneration, and the remaining
+transition gates are complete. The 2° lower-domain limitation must also be
+resolved if zero/one-degree trials are required.

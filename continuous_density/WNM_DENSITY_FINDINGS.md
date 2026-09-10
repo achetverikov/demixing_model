@@ -2,6 +2,8 @@
 
 Artifact paths and analysis scripts named below are relative to
 `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`.
+Generated artifacts are external and are not shipped with or expected in a
+normal checkout.
 
 ## Decision
 
@@ -61,6 +63,19 @@ bands. Held out, the small bias-SD advantage disappears and surface is clearly
 better for asymmetry in the 120--180 degree band. No conclusion here is based
 on mean bias pooled across dissimilarities.
 
+## Target-alignment follow-up
+
+The empirical density curve is constructed through a wrapped KDE, whereas the
+current WNM branch uses analytic signed mass. A later diagnostic applied the
+same KDE operator to both branches. On development this reduced large-error
+tails without shifting typical parameter recovery. On the frozen held-out
+panel, matched-KDE WNM and the existing surface pipeline had global joint
+log-RMSE 1.305 and 1.306; their paired difference was inconclusive. The matched
+variant is therefore viable but not a demonstrated recovery improvement. It
+remains diagnostic until a production search is selected for that operator; see
+`DENSITY_ALIGNMENT_FINDINGS.md` and
+`DENSITY_MATCHED_KDE_HELDOUT_FINDINGS.md`.
+
 ## Artifacts
 
 - `wnm_density_development_panel_cpu_v1/`: common-rescored SciPy, JAX-BADS,
@@ -72,6 +87,6 @@ on mean bias pooled across dissimilarities.
 - `probe_wnm_density_lattice.py`, `assemble_density_lattice.py`, and
   `compare_wnm_surface_density.py`: pinned runners and analyses.
 
-Next, apply the same optimizer-panel logic to `smoothed_exp`. Test continuous
-search first; reuse the log curve lattice only if it improves coverage or
-throughput there.
+The subsequent smoothed-expectation optimizer and alignment stages are complete;
+see `WNM_SMOOTHED_EXP_FINDINGS.md` and
+`SMOOTHED_EXP_ALIGNMENT_FINDINGS.md`.
