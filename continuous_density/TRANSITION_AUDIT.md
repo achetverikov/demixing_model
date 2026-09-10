@@ -487,7 +487,7 @@ global optimizer. Full parameter and cross-score tables are written by
 - Resolve `OPEN_DECISIONS.md` item 3 and state whether both families share one
   fitting box or retain their artifact-specific bounds.
 
-### R6. Validate the direct prediction path needed by the analyses — minimum representative path completed
+### R6. Validate the direct prediction path needed by the analyses — completed
 
 The recovery and real-data comparisons must use WNM predictions directly rather
 than route them through a sampled surface. Complete and test the direct WNM branch
@@ -498,12 +498,16 @@ averaged-surface/mu2 path.
 This is prediction correctness needed for the scientific comparison. Presentation
 features and browser integration remain deferred.
 
-For the representative run, `export_wnm_fit_curves.py` now predicts bias,
-matched asymmetry, and circular SD directly from the fitted mixture and writes
-CSV plus condition plots after validating the fit/checkpoint fingerprint. It
-does not reconstruct or sample an NN surface. The broader shared prediction
-command, distributional output, report-order integration, and motor-on plotting
-remain work before full rollout.
+For the representative run, `export_wnm_fit_curves.py` predicts bias, matched
+asymmetry, and circular SD directly from the fitted mixture and writes CSV plus
+condition plots after validating the fit/checkpoint fingerprint.
+`create_unified_subject_plots.py` now uses the same analytic path for standard
+subject plots, summary plots and CSVs, exact report-order pooling, and PDF
+slices, including fitted motor noise. It restores density-curve and matmul
+settings from the fingerprint, preserves surrogate identity in exports, and
+processes observed-design operators in bounded chunks. Its 1,440 representative
+curve rows agree bit for bit with the dedicated exporter and are accepted by
+the downstream comparison parser.
 
 ## Deferred stages
 
@@ -512,8 +516,8 @@ a small fix required to run the direct-prediction or real-data analysis safely.
 
 ### Presentation and exploratory interfaces
 
-- Unified subject-plot WNM routing.
-- PDF-slice plotting.
+- The separate legacy `plot_pdf_slices.py` entry point (the production PDF-slice
+  path in `create_unified_subject_plots.py` already supports WNM).
 - `surface_browser` on-demand K12 views.
 - Demo and publication-specific plotting scripts.
 - General plot/export refactors unrelated to recovery outputs.

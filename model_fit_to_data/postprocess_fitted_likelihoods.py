@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 import warnings
 from pathlib import Path
 import shutil
@@ -23,6 +24,10 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 try:
     from grid_based_multi_condition_optimizer_jax_loops import (
@@ -38,9 +43,6 @@ except ModuleNotFoundError:
     )
 from shared.config import config
 from shared.utils import filter_data_for_fitting
-
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Motor-noise density floor (B1 floor-aware reproduction gate).
 #
@@ -526,6 +528,54 @@ def wnm_cell_log_probability(predictor, fit_row: pd.Series, feat_diff_deg, bias_
     return np.log(np.maximum(mass, np.finfo(np.float64).tiny))
 
 
+def _score_fit_row_wnm(predictor, scored, data_source, fit_row, circ_space):
+    """Rescore one fit against the wrapped-normal mixture."""
+    feat_diff = scored["feat_diff_model_deg"].to_numpy(float)
+    bias = scored["bias_model_deg"].to_numpy(float)
+    loglik_density_model_deg = wnm_trial_log_density(
+        predictor, fit_row, feat_diff, bias)
+    model_bin_width_deg = float(config.mu1_bias_step)
+    bin_width_deg = physical_bin_width_deg(circ_space)
+
+    scored["loglik_density_model_deg"] = loglik_density_model_deg
+    scored["nll_density_model_deg"] = -loglik_density_model_deg
+    scored["loglik_mass"] = loglik_density_model_deg + np.log(model_bin_width_deg)
+    scored["nll_mass"] = -scored["loglik_mass"]
+    scored["loglik_density_deg"] = scored["loglik_mass"] - np.log(bin_width_deg)
+    scored["nll_density_deg"] = scored["nll_mass"] + np.log(bin_width_deg)
+    scored["loglik_cell_probability"] = wnm_cell_log_probability(
+        predictor, fit_row, feat_diff, bias)
+    scored["bin_width_deg"] = bin_width_deg
+    scored["loglik_convention"] = "continuous_at_observation"
+    for column in ("subject", "experiment", "condition", "optimizer"):
+        scored[f"fit_{column}" if column != "optimizer" else "optimizer"] = fit_row[column]
+    for column in ("sd_feat1", "sd_feat2", "sd_spat", "sd_motor"):
+        scored[column] = float(fit_row[column])
+    scored["prepared_data_source"] = data_source
+
+    rescored_nll_density_model_deg = -float(jax.ops.segment_sum(
+        jnp.asarray(loglik_density_model_deg, dtype=jnp.float32),
+        jnp.zeros(len(loglik_density_model_deg), dtype=jnp.int32),
+        num_segments=1)[0])
+    stored_nll = float(fit_row["eval_likelihood_loss"])
+    per_trial_nll = float(scored["nll_density_model_deg"].sum())
+    check = {
+        "subject": fit_row["subject"], "experiment": fit_row["experiment"],
+        "condition": fit_row["condition"], "optimizer": fit_row["optimizer"],
+        "stored_eval_likelihood_loss": stored_nll,
+        "rescored_nll_density_model_deg": rescored_nll_density_model_deg,
+        "per_trial_sum_nll_density_model_deg": per_trial_nll,
+        "rescored_nll_mass": float(scored["nll_mass"].sum()),
+        "abs_diff": abs(rescored_nll_density_model_deg - stored_nll),
+        "per_trial_sum_abs_diff": abs(per_trial_nll - stored_nll),
+        "n_obs_scored": int(len(scored)),
+        "n_floor_trials": 0,
+        "model_bin_width_deg": model_bin_width_deg,
+        "bin_width_deg": bin_width_deg,
+    }
+    return scored, check
+
+
 def score_fit_row(
     optimizer: GridBasedMultiConditionOptimizer,
     data_sources: list[tuple[str, pd.DataFrame]],
@@ -657,6 +707,9 @@ def postprocess(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFrame]:
     from shared.prediction import predictor_from_surrogate
 
     family = _surrogate.detect_family(checkpoint_path)
+    _, fingerprint = _surrogate.find_run_fingerprint(fits_csv)
+    matmul_precision = (fingerprint or {}).get(
+        "continuous_spec", {}).get("matmul_precision", "default")
     if family == _surrogate.FAMILY_WNM:
         optimizer = predictor_from_surrogate(
             _surrogate.load_surrogate(checkpoint_path=checkpoint_path))
@@ -670,20 +723,21 @@ def postprocess(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFrame]:
 
     score_rows = []
     checks = []
-    for _, fit_row in fit_rows.iterrows():
-        scored, check = score_fit_row(
-            optimizer=optimizer,
-            data_sources=data_sources,
-            fit_row=fit_row,
-            exp_col=args.exp_col,
-            subject_col=args.subject_col,
-            condition_col=args.condition_col,
-            x_col=args.x_col,
-            y_col=args.y_col,
-            circ_space=args.circ_space,
-        )
-        score_rows.append(scored)
-        checks.append(check)
+    with jax.default_matmul_precision(matmul_precision):
+        for _, fit_row in fit_rows.iterrows():
+            scored, check = score_fit_row(
+                optimizer=optimizer,
+                data_sources=data_sources,
+                fit_row=fit_row,
+                exp_col=args.exp_col,
+                subject_col=args.subject_col,
+                condition_col=args.condition_col,
+                x_col=args.x_col,
+                y_col=args.y_col,
+                circ_space=args.circ_space,
+            )
+            score_rows.append(scored)
+            checks.append(check)
 
     out = pd.concat(score_rows, ignore_index=True) if score_rows else pd.DataFrame()
     checks_dt = pd.DataFrame(checks)

@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import matplotlib.pyplot as plt
+import jax
 import numpy as np
 import pandas as pd
 
@@ -45,6 +46,8 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
     predictor = predictor_from_surrogate(
         surrogate.load_surrogate(checkpoint_path=checkpoint))
     feat_grid = np.asarray(config.create_grid("feat_diff"), dtype=np.float32)
+    density_curve_spec = payload["density_curve_spec"]
+    matmul_precision = payload["continuous_spec"]["matmul_precision"]
 
     rows = []
     for condition, result in results.items():
@@ -57,11 +60,14 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
             if key not in result:
                 continue
             parameters = np.asarray(result[key], dtype=float)
-            curves = mixture_plot_curves(
-                predictor, parameters[None, :3], feat_grid,
-                sd_motor_by_row=[parameters[3]],
-                feature_operators=operator[None, :, :],
-                density_bandwidths=[bandwidth])
+            with jax.default_matmul_precision(matmul_precision):
+                curves = mixture_plot_curves(
+                    predictor, parameters[None, :3], feat_grid,
+                    sd_motor_by_row=[parameters[3]],
+                    emp_density_weights_sd=density_curve_spec["emp_density_weights_sd"],
+                    density_smoothing_sigma=density_curve_spec["density_smoothing_sigma"],
+                    feature_operators=operator[None, :, :],
+                    density_bandwidths=[bandwidth])
             for index, x_model in enumerate(feat_grid):
                 rows.append({
                     "condition": condition, "optimizer": method,

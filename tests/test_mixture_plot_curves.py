@@ -29,8 +29,9 @@ for path in (ROOT, ROOT / "model_fit_to_data"):
 from shared import surrogate  # noqa: E402
 from shared.config import config  # noqa: E402
 from shared.prediction import (  # noqa: E402
-    mixture_plot_curves, predictor_from_surrogate)
+    mixture_plot_curves, pooled_bias_weighted_crps, predictor_from_surrogate)
 from shared.utils import gaussian_curve_smoother  # noqa: E402
+import create_unified_subject_plots as subject_plots  # noqa: E402
 
 ARTIFACT = surrogate.WNM_DEFAULTS[20]
 pytestmark = pytest.mark.skipif(not ARTIFACT.exists(),
@@ -56,6 +57,29 @@ def _weights(n_rows, n_feat, n_bins=18):
         for index in range(n_bins):
             weights[row, index, min(index * 5, n_feat - 1)] = 1.0
     return weights
+
+
+def _stored_result(feat_grid, params):
+    operator = np.eye(len(feat_grid), dtype=np.float32)
+    data = np.array([[2.0, -3.0], [10.0, 4.0], [20.0, 1.0]], dtype=np.float32)
+    return {
+        "condition": "S#exp#condition",
+        "data_df": data,
+        "density_fitted_params": np.asarray(params, dtype=np.float32),
+        "density_loss": 1.0,
+        "density_evaluation_losses": {},
+        "empirical_curves": {
+            "target_bias": np.zeros(45),
+            "bias_weights": np.ones(45),
+            "target_density": np.zeros(len(feat_grid)),
+            "matched_density_target": np.zeros(len(feat_grid)),
+            "target_bias_curve": np.zeros(len(feat_grid)),
+            "bias_feat_indices": np.arange(0, len(feat_grid), 2),
+            "density_feat_grid": feat_grid,
+            "feature_operator": operator,
+            "density_bandwidth": 7.5,
+        },
+    }
 
 
 def test_every_curve_the_plots_draw_is_produced(predictor, feat_grid):
@@ -203,3 +227,62 @@ def test_the_narrow_corner_is_representable(predictor, feat_grid):
     for name in ("bias", "asymmetry", "sd"):
         assert np.all(np.isfinite(bundle[name])), name
     assert np.min(bundle["sd"]) < 25.0
+
+
+def test_standard_subject_pipeline_uses_direct_matched_wnm_curves(predictor, feat_grid):
+    params = np.array([25.0, 40.0, 30.0, 12.0])
+    result = _stored_result(feat_grid, params)
+    subjects = {"S": {"exp": [{
+        "noise_condition": "condition", "result": result,
+    }]}}
+    prepared = subject_plots.prepare_all_subjects_data(
+        subjects, predictor,
+        {"emp_density_weights_sd": 20.0, "density_smoothing_sigma": None})
+    got = prepared["S"]["experiments"]["exp"]["optimizer_curves"][
+        "condition"]["density"]
+
+    bin_weights = subject_plots.compute_feat_bin_weights(
+        result["data_df"][:, 0], feat_grid)[None, :, :]
+    expected = mixture_plot_curves(
+        predictor, params[None, :3], feat_grid,
+        bin_weights=bin_weights, sd_motor_by_row=[params[3]],
+        feature_operators=result["empirical_curves"]["feature_operator"][None, :, :],
+        density_bandwidths=[7.5])
+    for actual_name, expected_name in (
+            ("bias", "bias"), ("asymmetry", "asymmetry"),
+            ("predicted_sd", "sd"), ("predicted_sd_pooled", "pooled_sd")):
+        np.testing.assert_array_equal(np.asarray(got[actual_name]), expected[expected_name][0])
+    assert prepared["S"]["experiments"]["exp"]["surrogate_identity"][
+        "surrogate_family"] == "wnm"
+
+
+def test_standard_pipeline_pools_report_orders_from_exact_wnm_cell_masses(
+        predictor, feat_grid):
+    first_params = np.array([25.0, 40.0, 30.0, 12.0])
+    second_params = np.array([40.0, 25.0, 30.0, 0.0])
+    first = _stored_result(feat_grid, first_params)
+    second = _stored_result(feat_grid, second_params)
+    second["data_df"] = np.array(
+        [[4.0, 2.0], [12.0, -5.0], [22.0, 3.0]], dtype=np.float32)
+    subjects = {"S": {
+        "color_2_first": [{"noise_condition": "low", "result": first}],
+        "color_2_second": [{"noise_condition": "low", "result": second}],
+    }}
+    prepared = subject_plots.prepare_all_subjects_data(
+        subjects, predictor,
+        {"emp_density_weights_sd": 20.0, "density_smoothing_sigma": None})
+    got_first = prepared["S"]["experiments"]["color_2_first"]["parameters"][
+        "low"]["pooled_bwcrps"]["density"]
+    got_second = prepared["S"]["experiments"]["color_2_second"]["parameters"][
+        "low"]["pooled_bwcrps"]["density"]
+
+    probabilities = subject_plots._mixture_probability_surfaces(
+        predictor, np.stack([first_params[:3], second_params[:3]]),
+        [first_params[3], second_params[3]], feat_grid)
+    bias_grid = np.asarray(config.create_grid("mu1_bias"))
+    difference = np.abs(bias_grid[:, None] - bias_grid[None, :])
+    expected = pooled_bias_weighted_crps(
+        probabilities, [first["data_df"], second["data_df"]], feat_grid,
+        np.minimum(difference, 360.0 - difference), 20.0)
+    assert got_first == pytest.approx(expected)
+    assert got_second == pytest.approx(expected)

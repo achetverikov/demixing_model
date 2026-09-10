@@ -17,6 +17,8 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -98,3 +100,26 @@ def test_the_fingerprint_is_found_from_a_nested_fits_file(tmp_path):
     moved = nested / "fitted_parameters.csv"
     moved.write_text("subject\n")
     assert P.infer_checkpoint_path(moved, None) == WNM
+
+
+def test_wnm_fit_rows_export_both_likelihood_conventions(monkeypatch):
+    scored = pd.DataFrame({
+        "feat_diff_model_deg": [2.0, 4.0],
+        "bias_model_deg": [-1.0, 3.0],
+    })
+    fit = pd.Series({
+        "subject": "S10", "experiment": "color_2", "condition": "low - low",
+        "optimizer": "likelihood", "sd_feat1": 20.0, "sd_feat2": 30.0,
+        "sd_spat": 10.0, "sd_motor": 0.0, "eval_likelihood_loss": 3.0,
+    })
+    monkeypatch.setattr(P, "wnm_trial_log_density",
+                        lambda *_: np.array([-1.0, -2.0]))
+    monkeypatch.setattr(P, "wnm_cell_log_probability",
+                        lambda *_: np.array([-0.8, -1.8]))
+
+    out, check = P._score_fit_row_wnm(object(), scored, "prepared.csv", fit, 360)
+
+    assert out["loglik_convention"].unique().tolist() == ["continuous_at_observation"]
+    np.testing.assert_array_equal(out["loglik_cell_probability"], [-0.8, -1.8])
+    assert check["rescored_nll_density_model_deg"] == pytest.approx(3.0)
+    assert check["n_floor_trials"] == 0

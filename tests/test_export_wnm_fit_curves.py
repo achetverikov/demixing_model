@@ -29,7 +29,14 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
 
     monkeypatch.setattr(export_module, "read_fingerprint_sidecar", lambda _: {
         "digest": "run-digest",
-        "payload": {"surrogate_family": "wnm", "checkpoint_sha256": "digest"},
+        "payload": {
+            "surrogate_family": "wnm", "checkpoint_sha256": "digest",
+            "density_curve_spec": {
+                "emp_density_weights_sd": 15.0,
+                "density_smoothing_sigma": 6.0,
+            },
+            "continuous_spec": {"matmul_precision": "highest"},
+        },
     })
     monkeypatch.setattr(export_module, "file_sha256", lambda _: "digest")
     monkeypatch.setattr(export_module.surrogate, "load_surrogate", lambda **_: object())
@@ -40,6 +47,8 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
     def fake_curves(_predictor, params, feat_grid, **kwargs):
         np.testing.assert_array_equal(kwargs["feature_operators"], operator[None, :, :])
         np.testing.assert_array_equal(kwargs["density_bandwidths"], [7.5])
+        assert kwargs["emp_density_weights_sd"] == 15.0
+        assert kwargs["density_smoothing_sigma"] == 6.0
         assert params.shape == (1, 3)
         assert feat_grid.shape == (2,)
         return {

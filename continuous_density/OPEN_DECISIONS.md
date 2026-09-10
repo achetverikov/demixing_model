@@ -297,12 +297,13 @@ discarded at accumulation time, so any corpus re-run made before the change
 produces another mu2-less corpus. If a re-run happens for another reason,
 retaining column 22 costs almost nothing then.
 
-## 5. Direct prediction and plot outputs for a mixture fit (partly open)
+## 5. Direct prediction and plot outputs for a mixture fit (resolved for production reports)
 
-`create_unified_subject_plots` and `plot_pdf_slices` recompute curves, moments
-and SDs through the surface optimizer. They now refuse a mixture artifact rather
-than crashing; step 4c is intended to route them through the shared prediction
-layer after recovery.
+`create_unified_subject_plots` now detects the fitted surrogate family from the
+run fingerprint. WNM bias, matched density asymmetry, circular SD, pooled SD,
+report-order BWCRPS, and PDF slices are computed directly through the analytic
+predictor; it never reconstructs an NN surface. The surface branch remains
+golden-tested against its historical arithmetic.
 
 **Status**: the pooled-SD estimator is shared and the surface path is verified
 bit-identical, including at the clamp. The mixture reaches the same estimator
@@ -310,47 +311,27 @@ analytically; the two agree to about 9e-05 degrees on the golden fixture, the
 residual being the 2-degree grid's approximation error rather than the analytic
 value's. Recorded here in case a reviewer expects one implementation.
 
-**Representative comparison path completed:**
+The dedicated representative path,
 `model_fit_to_data/export_wnm_fit_curves.py` reads a fingerprinted WNM fit and
 exports direct analytic bias, matched density-asymmetry, and circular-SD curves
 plus per-condition plots. It validates the checkpoint digest and never
 reconstructs an NN surface. The color-2 representative run exported 1,440 curve
-rows and four PNGs alongside the paired comparison.
-
-**Still open:** the older general-purpose `create_unified_subject_plots` and
-`plot_pdf_slices` entry points do not yet run on a mixture fit. That broader
-presentation wiring remains deferred; it is no longer a blocker for inspecting
-the representative production comparison.
+rows and four PNGs alongside the paired comparison. The standard exporter now
+produces the same 1,440 fitted-curve values bit for bit and records the surrogate
+identity in both CSVs.
 
 The curve computations a mixture plot needs now exist:
 `shared.prediction.mixture_plot_curves` produces all four curve families (bias,
 smoothed asymmetry, circular SD, pooled SD), and `pooled_bias_weighted_crps`
 takes probabilities from either family.
 
-**One thing the wiring must supply that the helper cannot check.** The asymmetry
-curve is smoothed here exactly as the density objective smooths its target, so
-`emp_density_weights_sd` and `density_smoothing_sigma` have to be forwarded from
-the *fit's own settings*. A fit run at one sigma and plotted at the helper's
-default shows a curve the fit never optimised, and nothing in the plot says so.
-The caller holds the fit record; the helper has no way to detect the mismatch,
-which makes this a call-site obligation rather than something a test of the
-helper can cover.
-
-What remains is wiring, and it is
-awkward for a reason worth recording rather than discovering again:
-`prepare_all_subjects_data` is a 400-line function of which only ~15 lines are
-surface-specific. Those 15 sit in the middle, so a family branch around them
-means either re-indenting the block or extracting it, and the rest of the
-function -- the mapping back to (condition, optimizer), the empirical curves, the
-report-order handling -- is shared and must not move.
-
-**Approach when it is picked up**: extract the surface-specific span into a
-helper verbatim, golden-record its outputs on a real subject *first*, add the
-mixture sibling, then require the surface outputs unchanged. Not an in-place
-re-indent. An earlier routing commit in this stage changed a clamp while
-re-writing surrounding code and moved a plotted number by 37 degrees with every
-golden test still green; the same shape of mistake is available here and the
-function is much larger.
+The call sites restore `emp_density_weights_sd`, `density_smoothing_sigma`, and
+matmul precision from the fit fingerprint. Observed-design operators and KDE
+bandwidths come from each stored fit result. Curve work is chunked so a full
+corpus does not stack every 90-by-90 operator in memory, and exact reporting
+cell masses are materialized only for report-order pairs. The separate legacy
+`plot_pdf_slices.py` script is still surface-only; the production PDF-slice path
+inside `create_unified_subject_plots.py` supports both families.
 
 ## 6. The pooled-SD clamp is inert at its upper bound (found 2026-09-06)
 
