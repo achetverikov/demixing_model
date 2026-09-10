@@ -11,9 +11,15 @@ Ordered by when the plan needs them settled.
 
 ## 1. Objective-specific WNM search and start budgets (active in recovery R2)
 
-**Status: the focused single-condition likelihood search is settled on 32-start
-serial L-BFGS-B (see the 120-dataset panel below); the other retained
-objectives are still open.** The earlier held-out run used
+**Status: the focused single-condition searches are settled for all four
+currently implemented objectives.** Likelihood and bias-weighted CRPS use
+32-start serial L-BFGS-B. Density uses the 80-by-64 log curve cache followed by
+one continuous polish. Smoothed expectation uses the same cache, polishes eight
+distinct minima, and conditionally runs the hierarchy when the cache and SciPy
+canonical losses differ by more than 0.01. The alternative matched-KDE density
+operator remains diagnostic rather than a production objective; its completed
+32-start fits do not by themselves select a production search for that new
+operator. The earlier held-out run used
 serial SciPy L-BFGS-B with 32 deterministic log-space Latin-hypercube starts,
 seed 0, artifact bounds, 500 iterations, `ftol=1e-9`, `gtol=1e-6`, and JAX
 float32. The generic continuous optimizer's default of 8 starts remains a
@@ -82,6 +88,45 @@ important BWCRPS result is that the objective prefers the fitted parameters
 over the truth on essentially every dataset, by about 153 times the spread
 between arms, so for this objective the search choice is close to irrelevant
 beside the objective's own displacement from truth.
+
+The frozen BWCRPS choice was confirmed once on the 60 held-out datasets. WNM
+beat the surface-NN parameter fit after both were rescored through the common
+WNM evaluator on all 60 datasets; median common-score difference was -0.00794.
+Median joint log-RMSE was 0.269 versus 0.345 for the surface fit, and factor-
+1.5 recovery was 50.0% versus 43.3%. Curve metrics were mixed, so this is
+supporting evidence for the primary distributional and parameter criteria, not
+a claim of uniform curve superiority. Full results are in
+`WNM_BWCRPS_OPTIMIZER_FINDINGS.md` and the external recovery artifact it names.
+
+For the current density operator, the selected cache-plus-polish search reached
+the common-score gate on the complete development panel and was frozen before
+the 60 held-out fits. A separate target-alignment panel showed that matched KDE
+does not shift typical parameter recovery relative to the current operator, but
+does reduce large-error tails. On held-out data its global joint log-RMSE was
+1.305, versus 1.306 for the existing surface pipeline; the paired median
+difference was inconclusive. This makes it a viable alternative pipeline, not a
+demonstrated recovery improvement. Detailed results remain with the external
+recovery artifact.
+
+For smoothed expectation, the cache/eight-polish/conditional-hierarchy rule was
+within 0.001 of the union best on every development and held-out dataset. WNM
+improved held-out mean-bias prediction across most non-near-zero dissimilarity
+bands, but parameter recovery was worse than for the surface NN and spread
+recovery was weak, as expected for a mean-only objective. JAX-BADS was included
+in the development panel and added no production win beyond the selected
+combination. This recovery comparison uses the current mismatched operator: the
+empirical curve is feature-smoothed, while the fitted model curve is pointwise.
+The completed development alignment diagnostic improves WNM median log-RMSE
+from 0.730 to 0.637 and removes the paired surface advantage, but all-parameter
+factor-1.5 recovery remains only 23.3%. The frozen held-out matched-WNM run
+without truth starts is complete. Its median/global log-RMSE is 1.130/1.239,
+versus 0.981/1.248 for current WNM under the same 32-start SciPy search and
+0.970/1.149 for the existing surface NN. Neither paired difference is
+conclusive; the development parameter gain therefore does not generalize, even
+though matched truth is closer to the empirical curve on 73.3% of held-out
+datasets. Use the matched operator for WNM target consistency, but retain
+smoothed expectation as a weak parameter-recovery objective. A matched surface
+refit is needed only for strict model-family attribution.
 
 The complete 120-dataset development L-BFGS-B run finished with at least 24
 converged starts per dataset. Detailed protocol and results are stored under

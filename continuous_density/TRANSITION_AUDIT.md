@@ -268,7 +268,7 @@ comparator correction, so they remain descriptive rather than a new prospective
 confirmation. n=20, multi-condition, and motor-noise extensions are deferred
 until this focused panel works.
 
-### R2. Establish optimization quality separately by objective — likelihood settled
+### R2. Establish optimization quality separately by objective — completed
 
 All candidate solutions for an objective must be reevaluated through one common
 WNM scorer. Record best loss, gaps to the best available reference, boundary hits,
@@ -299,7 +299,16 @@ narrow cases because its one-degree absolute feature lattice is too coarse near
 the lower bound. Detailed traces and thresholds are recorded in the external
 recovery artifact.
 
-### R3. Complete WNM closed-loop recovery — likelihood complete
+For density, an 80-by-64 log curve cache plus one continuous polish was selected
+and frozen held out. For smoothed expectation, the same cache with eight
+distinct polishes and a conditional hierarchy reached the common-score gate on
+all development and held-out datasets. The smoothed-expectation comparison
+included BBZ JAX-BADS; it supplied no production win beyond the selected rule.
+The matched-KDE density variant remains a diagnostic target: its 32-start run
+does not supersede the search selection for the currently implemented density
+objective.
+
+### R3. Complete WNM closed-loop recovery — completed
 
 - Run likelihood and bias-weighted-CRPS recovery first; these are the strongest
   parameter-recovery tests.
@@ -319,7 +328,34 @@ datasets recovered all three parameters within a factor of 1.5, with median
 per-dataset joint log-RMSE 0.150. Broad/weak cases remained hardest. This is a
 finite-sample result from the selected 32-start search, whose optimization
 quality is now independently supported by the corrected development comparison.
-It does not replace the pending BWCRPS and curve-objective analyses.
+The corresponding BWCRPS development and held-out analyses are now complete.
+On the 60 held-out datasets, WNM had the lower common WNM BWCRPS score than the
+surface-NN fit on all cases; median joint log-RMSE was 0.269 versus 0.345 and
+factor-1.5 recovery was 50.0% versus 43.3%. Curve metrics remained mixed, so
+the result supports the primary distributional and parameter criteria without
+claiming a uniform curve-level win.
+
+Density and smoothed-expectation recovery are also complete. Density-summary
+parameter recovery is weak for both WNM and the surface pipeline. Aligning both
+branches with the same KDE operator reduces the WNM's large-error tail but does
+not shift typical recovery; held-out global joint log-RMSE is 1.305 for matched
+WNM and 1.306 for the existing surface pipeline. Prediction-equivalence checks
+show genuine non-identifiability in narrow and reversed regimes, but materially
+wrong selected distributions in parts of the broad/weak and ordinary regimes.
+Smoothed expectation supports WNM mean-bias prediction away from near-zero
+dissimilarity, while its parameters and spread remain weakly identified. Its
+empirical curve applies a 20-degree feature kernel but its model curve is
+pointwise. The completed development alignment diagnostic applies the same
+operator to model complex moments, improves median log-RMSE from 0.730 to 0.637,
+and removes the paired surface advantage. All-parameter factor-1.5 recovery
+remains only 23.3%, so weak identification persists. The frozen 60-dataset
+held-out matched-WNM run without truth starts is complete. Matched WNM has
+median/global log-RMSE 1.130/1.239, versus 0.981/1.248 for current WNM under the
+same 32-start SciPy search and 0.970/1.149 for the existing surface NN. The
+paired differences are inconclusive, and the development parameter gain does
+not generalize. Matched truth is nevertheless closer to the empirical curve on
+73.3% of held-out datasets, supporting the matched operator for curve semantics
+while leaving smoothed expectation a weak parameter-recovery objective.
 
 On the already-inspected held-out tuples, 70.0% recovered all parameters within
 a factor of 1.5, with median per-dataset joint log-RMSE 0.140. Recovery rose from
@@ -327,7 +363,7 @@ a factor of 1.5, with median per-dataset joint log-RMSE 0.140. Recovery rose fro
 the selected 32-start search, not a fresh prospective confirmation: the tuples
 had already been inspected before the corrected development comparison.
 
-### R4. Run paired recovery from the actual DM observer — likelihood complete
+### R4. Run paired recovery from the actual DM observer — completed
 
 Generate the main synthetic panel with the actual DM observer simulator, not WNM
 or the surface NN. Fit every dataset with both:

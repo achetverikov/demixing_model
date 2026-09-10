@@ -79,11 +79,37 @@ over-weighted the cases where the hierarchy fails, exactly as the 24-dataset
 likelihood subset did. The hierarchy is still last on every axis here, but by a
 small margin rather than a categorical one.
 
+## Held-out confirmation
+
+After the development-only choice was frozen, the selected 32-start serial
+L-BFGS-B run was executed once on all 60 held-out datasets. Every fit had at
+least 29 of 32 converged starts (the median was 32), and the largest per-start
+rescore discrepancy was `4.7e-4`.
+
+The WNM winner was then compared with the already-fitted surface-NN arm by
+rescoring both parameter vectors through the same WNM BWCRPS evaluator. WNM had
+the lower common score on all 60 datasets, with median WNM-minus-surface
+difference `-0.00794` (Q25 `-0.0421`, Q75 `-0.00437`). The advantage was present
+at 180, 450, and 900 trials and in all four regimes, although it was smallest
+in the broad cases.
+
+Parameter recovery moved in the same direction: median joint log-RMSE was
+`0.2693` for WNM versus `0.3454` for the surface fit, and factor-1.5 recovery
+was 50.0% versus 43.3%. Curve recovery remained mixed. WNM's median CCC/RMSE
+was `0.423/0.271` versus `0.375/0.277` for mean bias, `0.223/0.860` versus
+`0.102/0.991` for bias SD, and `0.351/0.0544` versus `0.369/0.0518` for
+asymmetry. Thus the held-out result supports WNM on the primary distributional
+and parameter criteria without claiming a uniform curve-level win.
+
+The generated rows and summaries are under
+`$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/wnm_bwcrps_scipy32_heldout_cpu_v1/`.
+The surface comparison uses the WNM scorer for both arms; the surface model's
+native BWCRPS values are not used as a cross-family score.
+
 ## What this does not establish
 
-Selection used development datasets only; the held-out `_2` tuples remain
-unopened for BWCRPS. The comparison covers three arms at one start count on one
-frozen n=100 single-condition panel with motor noise fixed at zero. The
-finite-sample reading of the displacement rests on three trial counts at one
-sample size and would be better supported by a large-sample or expected-target
-diagnostic, which has not been run.
+The comparison covers one frozen n=100 single-condition panel with motor noise
+fixed at zero. The finite-sample reading of the objective's displacement rests
+on three trial counts at one sample size and would be better supported by a
+large-sample or expected-target diagnostic, which has not been run. Multi-
+condition, motor-noise, and real-data confirmation remain open.
