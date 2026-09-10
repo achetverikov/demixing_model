@@ -25,6 +25,7 @@ from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 import numpy as np
+from scipy.special import ndtr
 
 from shared.config import config
 from shared.utils import (_compute_empirical_density_asymmetry_core,
@@ -67,6 +68,9 @@ class FittingTargets:
     density_target_var: np.ndarray
     density_degenerate: np.ndarray
     density_bandwidth: tuple
+    feature_operator: jnp.ndarray
+    matched_density_target: jnp.ndarray
+    matched_density_degenerate: np.ndarray
     near_constant_warnings: tuple
 
 
@@ -171,6 +175,37 @@ def build_fitting_targets(condition_datasets, feat_diff_grid, d_circ_matrix,
     bandwidths = resolve_density_bandwidths(all_bias_values, density_bandwidth_rule,
                                             density_bandwidth_mode)
 
+    def feature_operator(feat_diff_vals):
+        feat = np.asarray(feat_diff_vals)
+        grid = np.asarray(feat_diff_grid)
+        weights = np.exp(-0.5 * ((grid[:, None] - feat[None, :])
+                                 / emp_density_weights_sd) ** 2)
+        weights /= weights.sum(axis=1, keepdims=True)
+        indices = np.rint((feat - grid[0]) / config.feat_diff_step).astype(int)
+        # Match the existing surface trial-index contract. Production fitting
+        # filters into the model domain before target construction, but small
+        # simulation/plotting fixtures historically pass 0-degree dummy rows.
+        # Those rows clamp to the nearest surface column; rejecting them here
+        # would make a new WNM-only target field break unchanged surface paths.
+        indices = np.clip(indices, 0, len(grid) - 1)
+        assignment = np.zeros((len(feat), len(grid)))
+        assignment[np.arange(len(feat)), indices] = 1.0
+        return weights, weights @ assignment
+
+    operators = []
+    matched_density = []
+    for values, bandwidth in zip(dataframes, bandwidths):
+        trial_weights, operator = feature_operator(values[:, 0])
+        bias = np.asarray(values[:, 1])
+        shifts = np.arange(-8, 9) * 360.0
+        def arc_probability(low, high):
+            return np.sum(
+                ndtr((high + shifts[:, None] - bias[None, :]) / bandwidth)
+                - ndtr((low + shifts[:, None] - bias[None, :]) / bandwidth), axis=0)
+        soft_sign = arc_probability(0.0, 180.0) - arc_probability(-180.0, 0.0)
+        operators.append(operator)
+        matched_density.append(trial_weights @ soft_sign)
+
     def density_curve(feat_diff_vals, bias_vals, kernel_bw):
         _, asymmetry_values = _compute_empirical_density_asymmetry_core(
             feat_diff_vals, bias_vals, feat_diff_grid,
@@ -240,5 +275,8 @@ def build_fitting_targets(condition_datasets, feat_diff_grid, d_circ_matrix,
         density_target_var=density_target_var,
         density_degenerate=density_degenerate,
         density_bandwidth=tuple(float(b) for b in bandwidths),
+        feature_operator=jnp.asarray(np.stack(operators), dtype=jnp.float32),
+        matched_density_target=jnp.asarray(np.stack(matched_density), dtype=jnp.float32),
+        matched_density_degenerate=np.var(np.stack(matched_density), axis=1) < 1e-10,
         near_constant_warnings=tuple(warnings),
     )

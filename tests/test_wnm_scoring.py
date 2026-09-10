@@ -198,6 +198,41 @@ def test_the_two_density_objectives_are_different_objectives(predictor, targets,
                           rtol=1e-3)
 
 
+def test_density_uses_the_matched_kde_and_observed_design_operator(
+        predictor, d_circ, datasets):
+    one = _targets({next(iter(datasets)): next(iter(datasets.values()))}, d_circ)
+    grid = config.create_grid("feat_diff")
+    rows = S.condition_rows(PARAMS[0], PARAMS[1], PARAMS[-1], grid)
+    raw = predictor.signed_arc_asymmetry(
+        rows, validate=False, sd_motor=one.density_bandwidth[0])
+    predicted = one.feature_operator[0] @ raw
+    expected = _compute_curve_losses(
+        predicted[None, :], one.matched_density_target[0][None, :],
+        loss_type="ccc", is_angular=False)[0]
+    got = _score("density", predictor, one, d_circ,
+                 [PARAMS[0], PARAMS[1], PARAMS[-1]])
+    assert float(got) == pytest.approx(float(expected), rel=1e-6)
+
+
+def test_smoothed_exp_pools_complex_moments_on_the_observed_design(
+        predictor, d_circ, datasets):
+    one = _targets({next(iter(datasets)): next(iter(datasets.values()))}, d_circ)
+    grid = config.create_grid("feat_diff")
+    rows = S.condition_rows(PARAMS[0], PARAMS[1], PARAMS[-1], grid)
+    mean, resultant = predictor.mean_and_resultant(rows, validate=False)
+    radians = jnp.radians(mean)
+    operator = one.feature_operator[0]
+    predicted = jnp.degrees(jnp.arctan2(
+        operator @ (resultant * jnp.sin(radians)),
+        operator @ (resultant * jnp.cos(radians))))
+    expected = _compute_curve_losses(
+        predicted[None, :], one.target_bias_curve[0][None, :],
+        loss_type="mse", is_angular=True)[0]
+    got = _score("smoothed_exp", predictor, one, d_circ,
+                 [PARAMS[0], PARAMS[1], PARAMS[-1]])
+    assert float(got) == pytest.approx(float(expected), rel=1e-6)
+
+
 # ---------------------------------------------------------------------------
 # Motor noise reaches every score
 # ---------------------------------------------------------------------------

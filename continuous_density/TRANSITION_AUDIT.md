@@ -32,9 +32,10 @@ comparisons against the simulation corpus show that it is the more faithful
 forward representation. The focused actual-DM recovery panel now supports WNM
 under likelihood and bias-weighted CRPS; density and smoothed expectation give
 weak parameter recovery for both families even after target-alignment checks.
-The unresolved transition questions are representative real-data performance,
-public routing for the selected objective-specific WNM searches, comparison
-bounds, and completion of the direct WNM prediction path.
+The first representative real-data comparison, public routing for the selected
+common WNM search, the comparison-bounds decision, and a direct fitted-WNM curve
+export are now complete. Broader production rollout and the general-purpose
+plotting entry points remain unresolved.
 
 The transition built much of the low-level WNM machinery across loaders,
 prediction operations, every historical objective, optimization, provenance,
@@ -48,11 +49,9 @@ counted as implementation growth. At least 49 defects are explicitly recorded
 across the audit/fix commits, several of which changed fitted or reported
 numbers.
 
-The immediate work is now R5--R6: public routing for the selected WNM searches,
-the minimum direct-prediction support and bounds decision needed for paired
-representative real-data fits, then those fits. Presentation-only plotting,
-browser work, rollout, regeneration, and removal of the surface NN remain
-deferred.
+The immediate R5 representative fit is complete and the minimum R6 output
+needed to inspect it is available. Presentation-only plotting, browser work,
+rollout, regeneration, and removal of the surface NN remain deferred.
 
 ## Current implementation status
 
@@ -84,16 +83,17 @@ deferred.
 
 ### Partial or not yet completed
 
-- The recovery harnesses can evaluate WNM with objective-specific hierarchy,
-  cache, JAX-BADS, and continuous searches, but those selected search strategies
-  are not all integrated into the public fitter. It still couples WNM to
-  `--search continuous`.
+- The rejected/diagnostic objective-specific hierarchy, cache, and JAX-BADS
+  searches remain recovery-only. The selected common 64-start batched port is
+  integrated into the public fitter through `--search continuous`.
 - The direct prediction command identifies WNM artifacts but still constructs
   the surface-only optimizer, so it does not yet provide a working WNM prediction
   path.
 - On the actual-DM n=100 panel, paired development/held-out surface comparisons
-  are complete for all four objectives. Broader n=20, multi-condition, and motor
-  recovery extensions and representative real-data comparisons remain.
+  are complete for all four objectives. A four-condition, 2,330-trial
+  representative color-2 real-data comparison is also complete. Broader n=20,
+  multi-condition recovery, motor extensions, and additional real-data panels
+  remain.
 - Unified subject plots and PDF slices explicitly reject WNM. This is acceptable
   during the recovery stage and is deferred below.
 - `surface_browser`, demos, external fit scripts, the comparison pipeline, model
@@ -452,7 +452,23 @@ especially for nearly flat targets, rather than showing uniform dominance. It
 cannot serve as prospective optimizer confirmation because it was inspected
 before the corrected development-only search selection.
 
-### R5. Run paired representative real-data fits — pending R6, search routing, and bounds
+### R5. Run paired representative real-data fits — first panel completed
+
+The first panel used subject S10 from `data_color_comb_color2_two_subjects.csv`,
+four conditions and 2,330 retained trials, with motor noise fixed at zero. WNM
+used the K12 n=20 artifact and the selected 64-start batched port; the surface
+baseline used `model_epoch1425_10ktrain_20samples.pkl` and its deployed
+hierarchical search. Both completed all four retained objectives.
+
+Both sets of fitted parameters were then evaluated through the same selected
+WNM scorer. WNM had the lower common loss for likelihood (9812.5701 versus
+9814.9429), BWCRPS (73.0669 versus 73.2619), and matched smoothed expectation
+(11.3554 versus 11.8579). The surface-derived density parameters were lower on
+matched density (1.7438 versus 1.7883). The latter is a real residual search
+qualification: the WNM density fit had 61/64 converged starts and a wide spread,
+so the production search must retain all endpoints and cannot be described as a
+global optimizer. Full parameter and cross-score tables are written by
+`compare_wnm_surface_fits.py`.
 
 - Fit the same representative datasets, rows, conditions, outlier policy, and
   motor policy with WNM and with the deployed surface-NN baseline.
@@ -471,7 +487,7 @@ before the corrected development-only search selection.
 - Resolve `OPEN_DECISIONS.md` item 3 and state whether both families share one
   fitting box or retain their artifact-specific bounds.
 
-### R6. Validate the direct prediction path needed by the analyses — current
+### R6. Validate the direct prediction path needed by the analyses — minimum representative path completed
 
 The recovery and real-data comparisons must use WNM predictions directly rather
 than route them through a sampled surface. Complete and test the direct WNM branch
@@ -481,6 +497,13 @@ averaged-surface/mu2 path.
 
 This is prediction correctness needed for the scientific comparison. Presentation
 features and browser integration remain deferred.
+
+For the representative run, `export_wnm_fit_curves.py` now predicts bias,
+matched asymmetry, and circular SD directly from the fitted mixture and writes
+CSV plus condition plots after validating the fit/checkpoint fingerprint. It
+does not reconstruct or sample an NN surface. The broader shared prediction
+command, distributional output, report-order integration, and motor-on plotting
+remain work before full rollout.
 
 ## Deferred stages
 

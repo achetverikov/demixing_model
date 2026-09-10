@@ -193,6 +193,14 @@ def test_empty_input_raises_rather_than_returning_empty_targets(golden):
         _build({})
 
 
+def test_matched_operator_preserves_surface_clamp_for_dummy_feature_rows():
+    """WNM-only targets must not reject legacy surface initialization fixtures."""
+    targets = _build({"dummy": np.zeros((4, 2), dtype=np.float32)})
+    operator = np.asarray(targets.feature_operator[0])
+    np.testing.assert_allclose(operator[:, 0], 1.0, atol=1e-7)
+    np.testing.assert_allclose(operator[:, 1:], 0.0, atol=1e-7)
+
+
 # ---------------------------------------------------------------------------
 # The call site, not just the helper
 # ---------------------------------------------------------------------------

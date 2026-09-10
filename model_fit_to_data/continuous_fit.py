@@ -16,20 +16,23 @@ starts ran, how far apart they finished, and which bounds the winner sits on.
 A lattice search has no analogue of the first two, and a benchmark that compared
 backends without them would be comparing a single number from each.
 
-Nothing here decides whether gradients are the right production search. That is
-the recovery panel's job, and the start budget this runs at is a placeholder
-until that panel selects one -- see ``TODO.md`` item 3.
+The recovery panel selected one production policy for all retained objectives:
+64 deterministic starts through the batched JAX L-BFGS-B port, evaluated as two
+sequential batches of 32 in float32 with ``highest`` matmul precision.
 """
 from __future__ import annotations
 
 import time
 from typing import Dict, Optional, Sequence
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import numpy as _np
 
 from continuous_optimizer import (build_bounds, condition_parameter_layout,
+                                  DEFAULT_MATMUL_PRECISION, DEFAULT_N_STARTS,
+                                  OPTIMIZER_VERSION,
                                   minimize_continuous)
 from shared import surrogate as surrogate_module
 from wnm_scoring import MEAN_ONLY_METHODS, SUPPORTED_METHODS, score_all_conditions, \
@@ -42,7 +45,8 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
                    density_smoothing_sigma: Optional[float] = None,
                    corr_weight: float = 0.25, condition_trials=None,
                    sd_motor: float = 0.0, fit_motor: bool = False,
-                   sd_motor_bounds=(0.1, 50.0), n_starts: int = 8, seed: int = 0,
+                   sd_motor_bounds=(0.1, 50.0), n_starts: int = DEFAULT_N_STARTS,
+                   seed: int = 0,
                    verbosity: int = 1) -> Dict:
     """Bounded multistart gradient fit, in the shape the other backends return.
 
@@ -55,7 +59,7 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
             every target array's first axis follows.
         objective: one of ``wnm_scoring.SUPPORTED_METHODS``.
         condition_trials: ``[(feat_diff, bias), ...]`` for trial-summed objectives.
-        n_starts: **provisional**; see the module docstring.
+        n_starts: deterministic multistart count; production uses 64.
 
     Returns:
         The ``fit_hierarchical_grid`` shape, plus ``loss_spread``, ``at_bound``,
@@ -133,18 +137,23 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
             density_target_var=np.asarray(targets.density_target_var)[index][None],
             density_degenerate=np.asarray(targets.density_degenerate)[index][None],
             density_bandwidth=(targets.density_bandwidth[index],),
+            feature_operator=targets.feature_operator[index][None, :, :],
+            matched_density_target=targets.matched_density_target[index][None, :],
+            matched_density_degenerate=np.asarray(
+                targets.matched_density_degenerate)[index][None],
             near_constant_warnings=(),
         )
         one_params = [parameters[2 * index], parameters[2 * index + 1], sd_spat]
         if fit_motor:
             one_params.append(fitted_motor)
-        per_condition = score_all_conditions(
-            objective, predictor, one, jnp.asarray(one_params), fit_motor=fit_motor,
-            curve_losses=curve_losses, energy_score=energy_score,
-            d_circ_matrix=d_circ_matrix, feat_diff_grid=feat_diff_grid,
-            emp_density_weights_sd=emp_density_weights_sd,
-            density_smoothing_sigma=density_smoothing_sigma, corr_weight=corr_weight,
-            condition_trials=trials)
+        with jax.default_matmul_precision(DEFAULT_MATMUL_PRECISION):
+            per_condition = score_all_conditions(
+                objective, predictor, one, jnp.asarray(one_params), fit_motor=fit_motor,
+                curve_losses=curve_losses, energy_score=energy_score,
+                d_circ_matrix=d_circ_matrix, feat_diff_grid=feat_diff_grid,
+                emp_density_weights_sd=emp_density_weights_sd,
+                density_smoothing_sigma=density_smoothing_sigma, corr_weight=corr_weight,
+                condition_trials=trials)
         condition_results[name] = {
             'condition_name': name,
             'sd_feat1': float(parameters[2 * index]),
@@ -155,8 +164,7 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
 
     if verbosity > 0:
         print("=== CONTINUOUS GRADIENT SEARCH ===")
-        print(f"Objective: {objective} | conditions: {n_conditions} | starts: {n_starts} "
-              f"(provisional budget)")
+        print(f"Objective: {objective} | conditions: {n_conditions} | starts: {n_starts}")
         print(f"Best loss {fit.loss:.6f} | spread across converged starts "
               f"{fit.loss_spread:.3e} | "
               f"{sum(s.success for s in fit.starts)}/{n_starts} converged")
@@ -183,9 +191,9 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
         'n_starts': int(n_starts),
         'n_converged': int(sum(s.success for s in fit.starts)),
         'start_losses': [float(s.loss) for s in fit.starts],
-        # Losses alone cannot say whether the winner was a start that converged
-        # or one that merely stopped, nor which starts railed. Only converged
-        # starts can win, but the record has to show that rather than assert it.
+        # Losses alone cannot say whether the winner converged or stopped at a
+        # finite endpoint, nor which starts railed. The port's canonical winner
+        # is the best finite rescore; statuses keep that distinction visible.
         'start_outcomes': [
             {'start': [float(v) for v in s.start],
              'solution': [float(v) for v in s.solution],
@@ -217,7 +225,7 @@ class ContinuousEngine:
                  emp_density_weights_sd: float, density_smoothing_sigma=None,
                  density_bandwidth_rule: str = "sj", density_bandwidth_mode: str = "pooled",
                  corr_weight: float = 0.25, skip_motor_noise: bool = True,
-                 n_starts: int = 8, seed: int = 0):
+                 n_starts: int = DEFAULT_N_STARTS, seed: int = 0):
         import jax.numpy as _jnp
         from fitting_targets import build_fitting_targets
         from shared.config import config
@@ -329,13 +337,14 @@ class ContinuousEngine:
         """Every objective's loss per condition, at fixed parameters."""
         from wnm_scoring import evaluate_condition_losses
 
-        return evaluate_condition_losses(
-            self.predictor, self.targets, params_by_condition, fitting_methods,
-            curve_losses=self._curve_losses, energy_score=self._energy_score,
-            d_circ_matrix=self.D_circ_matrix, feat_diff_grid=self.feat_diff_grid,
-            emp_density_weights_sd=self.emp_density_weights_sd,
-            density_smoothing_sigma=self.density_smoothing_sigma,
-            corr_weight=self.corr_weight, condition_trials=self._trials())
+        with jax.default_matmul_precision(DEFAULT_MATMUL_PRECISION):
+            return evaluate_condition_losses(
+                self.predictor, self.targets, params_by_condition, fitting_methods,
+                curve_losses=self._curve_losses, energy_score=self._energy_score,
+                d_circ_matrix=self.D_circ_matrix, feat_diff_grid=self.feat_diff_grid,
+                emp_density_weights_sd=self.emp_density_weights_sd,
+                density_smoothing_sigma=self.density_smoothing_sigma,
+                corr_weight=self.corr_weight, condition_trials=self._trials())
 
     def search_spec(self) -> Dict:
         """The settings that produced the parameters, for the run fingerprint.
@@ -354,7 +363,7 @@ class ContinuousEngine:
         bounds = surrogate_module.search_bounds(self.predictor.domain)
         defaults = inspect.signature(minimize_continuous).parameters
         return {
-            "method": "L-BFGS-B",
+            "method": "BatchedLbfgsb",
             "parameterisation": "log",
             "n_starts": int(self.n_starts),
             "seed": int(self.seed),
@@ -363,5 +372,9 @@ class ContinuousEngine:
             "max_iterations": int(defaults["max_iterations"].default),
             "tolerance": float(defaults["tolerance"].default),
             "gradient_tolerance": float(defaults["gradient_tolerance"].default),
+            "batch_size": int(defaults["batch_size"].default),
+            "dtype": str(defaults["dtype"].default),
+            "matmul_precision": str(defaults["matmul_precision"].default),
+            "optimizer_version": OPTIMIZER_VERSION,
             "motor": "searched" if not self.skip_motor_noise else "fixed_zero",
         }

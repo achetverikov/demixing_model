@@ -23,6 +23,12 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
+# Keep the documented ``python model_fit_to_data/fit_model_to_data.py`` entry
+# point usable without requiring callers to manufacture PYTHONPATH.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -53,6 +59,7 @@ except ModuleNotFoundError:  # imported as `model_fit_to_data.fit_model_to_data`
         write_fingerprint_sidecar,
     )
 from continuous_fit import ContinuousEngine
+from continuous_optimizer import DEFAULT_N_STARTS
 from shared import prediction as prediction_module
 from shared import surrogate
 from shared.utils import filter_data_for_fitting, resolve_input_path, resolve_results_path
@@ -500,6 +507,13 @@ def process_subject(
         }
         for i, cond in enumerate(condition_datasets)
     }
+    if isinstance(optimizer, ContinuousEngine):
+        for i, cond in enumerate(condition_datasets):
+            empirical_curves[cond].update({
+                'matched_density_target': optimizer.targets.matched_density_target[i],
+                'feature_operator': optimizer.targets.feature_operator[i],
+                'density_bandwidth': optimizer.targets.density_bandwidth[i],
+            })
 
     method_results = {}
     method_task = None
@@ -587,7 +601,7 @@ def process_subject(
             # in the saved table says whether the search or the objective chose
             # the answer. Absent for the lattice backends, which have no analogue.
             for field in ('loss_spread', 'n_converged', 'n_starts', 'at_bound',
-                          'start_losses'):
+                          'start_losses', 'start_outcomes', 'search_settings'):
                 if field in opt:
                     entry[f'{method}_{field}'] = opt[field]
         condition_results[cond_key] = entry
@@ -652,7 +666,7 @@ def run_fitting(
     results_dir: str = 'results',
     circ_space: int = 360,
     search: str = 'hierarchical',
-    continuous_starts: int = 8,
+    continuous_starts: int = DEFAULT_N_STARTS,
     continuous_seed: int = 0,
     curve_cache_root: Optional[str] = None,
     curve_cache_step: float = 1.0,
@@ -808,7 +822,11 @@ def run_fitting(
         existing_results, completed = {}, set()
 
     log("Initializing optimizer...", "bold cyan")
-    dummy = jnp.asarray(np.random.uniform(-180, 180, (100, 2)))
+    dummy_rng = np.random.default_rng(0)
+    dummy = jnp.asarray(np.column_stack([
+        dummy_rng.uniform(_cfg.feat_diff_range[0], _cfg.feat_diff_range[1], 100),
+        dummy_rng.uniform(-180.0, 180.0, 100),
+    ]))
     status = None
     if USE_RICH:
         status = console.status("[bold cyan]Loading model and compiling optimizer[/]", spinner="dots")
@@ -1009,11 +1027,9 @@ if __name__ == '__main__':
                              'gradients. The default is unchanged so every existing invocation '
                              'keeps its current behaviour and the switch is visible in the '
                              'command line that produced a result.')
-    parser.add_argument('--continuous-starts', type=int, default=8,
-                        help='Multistart count for --search continuous. PROVISIONAL: this budget '
-                             'materially decides the answer on multimodal objectives and is '
-                             'selected on the parameter-recovery panel, not by taste. See '
-                             'TODO.md item 3.')
+    parser.add_argument('--continuous-starts', type=int, default=DEFAULT_N_STARTS,
+                        help='Multistart count for --search continuous (production: 64, run as '
+                             'two sequential batches of 32).')
     parser.add_argument('--continuous-seed', type=int, default=0,
                         help='Seed for --search continuous starting points. Recorded in the run '
                              'fingerprint, since the same seed must give the same starts for two '

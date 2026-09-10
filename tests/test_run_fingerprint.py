@@ -238,8 +238,10 @@ def _common(**overrides):
 
 GRID = {"shared_grid_size": 20, "feat_grid_size": 20, "min_grid_step": 0.5,
         "zoom_factor": 0.5}
-CONTINUOUS = {"n_starts": 8, "seed": 0, "parameterisation": "log",
-              "bounds": [[2.5, 200.0], [5.0, 200.0]], "method": "L-BFGS-B"}
+CONTINUOUS = {"n_starts": 64, "seed": 0, "parameterisation": "log",
+              "bounds": [[2.5, 200.0], [5.0, 200.0]], "method": "BatchedLbfgsb",
+              "optimizer_version": "jax-lbfgsb@0350da1", "batch_size": 32,
+              "dtype": "float32", "matmul_precision": "highest"}
 
 
 def test_a_continuous_run_records_its_settings_and_omits_the_grid_schedule():
@@ -250,7 +252,7 @@ def test_a_continuous_run_records_its_settings_and_omits_the_grid_schedule():
         search_backend="continuous", surrogate_family="wnm",
         continuous_spec=CONTINUOUS, **_common())
 
-    assert payload["continuous_spec"]["n_starts"] == 8
+    assert payload["continuous_spec"]["n_starts"] == 64
     assert payload["continuous_spec"]["seed"] == 0
     assert payload["continuous_spec"]["bounds"] == [[2.5, 200.0], [5.0, 200.0]]
     for absent in ("grid_spec", "feat_step_schedule", "param_bounds", "refinement_spec"):
@@ -266,12 +268,16 @@ def test_the_two_backends_cannot_share_a_digest():
     assert rf.fingerprint_digest(continuous) != rf.fingerprint_digest(hierarchical)
 
 
-def test_the_start_budget_and_seed_are_part_of_the_identity():
+def test_the_optimizer_configuration_is_part_of_the_identity():
     """Two runs at different budgets are different fits, not resumable halves."""
     base = rf.compute_run_fingerprint(
         search_backend="continuous", surrogate_family="wnm",
         continuous_spec=CONTINUOUS, **_common())
-    for changed in ({**CONTINUOUS, "n_starts": 16}, {**CONTINUOUS, "seed": 1}):
+    for changed in ({**CONTINUOUS, "n_starts": 32}, {**CONTINUOUS, "seed": 1},
+                    {**CONTINUOUS, "optimizer_version": "jax-lbfgsb@future"},
+                    {**CONTINUOUS, "batch_size": 16},
+                    {**CONTINUOUS, "dtype": "float64"},
+                    {**CONTINUOUS, "matmul_precision": "default"}):
         other = rf.compute_run_fingerprint(
             search_backend="continuous", surrogate_family="wnm",
             continuous_spec=changed, **_common())
@@ -291,13 +297,17 @@ def test_the_distributional_objectives_are_versioned_per_family():
     """The surface backend reads a trial's density at its grid cell's centre; the
     mixture evaluates at the observation. One version string for both would make
     a head-to-head information criterion compare different conventions."""
-    methods = ["density", "expectation", "likelihood", "crps", "balanced_crps"]
+    methods = ["density", "expectation", "smoothed_exp", "likelihood", "crps",
+               "balanced_crps"]
     surface = rf.objective_versions_for("surface_nn", methods)
     wnm = rf.objective_versions_for("wnm", methods)
 
-    # Curve objectives are the same computation on both sides.
-    for shared in ("density", "expectation"):
+    # Raw expectation retains the shared legacy computation. Density uses the
+    # recovery-selected matched KDE/operator only for WNM.
+    for shared in ("expectation",):
         assert surface[shared] == wnm[shared]
+    assert surface["density"] != wnm["density"]
+    assert surface["smoothed_exp"] != wnm["smoothed_exp"]
     # Distributional ones are not.
     for differing in ("likelihood", "crps", "balanced_crps"):
         assert surface[differing] != wnm[differing]

@@ -87,6 +87,30 @@ def predicted_asymmetry_curve(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_
         validate=False, sd_motor=sd_motor)
 
 
+def predicted_matched_density_curve(predictor, sd_feat1, sd_feat2, sd_spat,
+                                    feat_diff_grid, feature_operator,
+                                    density_bandwidth, sd_motor=None):
+    """Signed mass after the empirical KDE and observed-design operators."""
+    rows = condition_rows(sd_feat1, sd_feat2, sd_spat, feat_diff_grid)
+    effective_motor = predictor.sd_motor if sd_motor is None else sd_motor
+    smoothing_sd = jnp.hypot(jnp.asarray(effective_motor), density_bandwidth)
+    raw = predictor.signed_arc_asymmetry(
+        rows, validate=False, sd_motor=smoothing_sd)
+    return feature_operator @ raw
+
+
+def predicted_matched_mean_bias(predictor, sd_feat1, sd_feat2, sd_spat,
+                                feat_diff_grid, feature_operator, sd_motor=None):
+    """Circular mean after pooling model first moments on the observed design."""
+    rows = condition_rows(sd_feat1, sd_feat2, sd_spat, feat_diff_grid)
+    mean, resultant = predictor.mean_and_resultant(
+        rows, validate=False, sd_motor=sd_motor)
+    radians = jnp.radians(mean)
+    real = feature_operator @ (resultant * jnp.cos(radians))
+    imaginary = feature_operator @ (resultant * jnp.sin(radians))
+    return jnp.degrees(jnp.arctan2(imaginary, real))
+
+
 def validate_feature_grid(feat_diff_grid, predictor=None):
     """Check the fixed feature grid once, before any fitting.
 
@@ -191,17 +215,27 @@ def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_fe
     feat_diff_grid = jnp.asarray(feat_diff_grid)
 
     if method in ("density", "density_legacy"):
-        if bool(np.asarray(targets.density_degenerate)[condition_index]):
+        is_matched = method == "density"
+        degenerate = (targets.matched_density_degenerate if is_matched
+                      else targets.density_degenerate)
+        if bool(np.asarray(degenerate)[condition_index]):
             raise ValueError(
                 f"condition {targets.condition_names[condition_index]!r} has a constant "
                 "density target; a density objective cannot be fit against it. This is "
                 "scoped to the density objectives -- likelihood and CRPS are unaffected.")
-        predicted = predicted_asymmetry_curve(
-            predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid,
-            emp_density_weights_sd, density_smoothing_sigma, sd_motor=sd_motor)
-        target = targets.target_density[condition_index]
-        loss_type = "ccc" if method == "density" else "combined"
-        extra = ccc_or_combined_kwargs if method == "density_legacy" else {}
+        if is_matched:
+            predicted = predicted_matched_density_curve(
+                predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid,
+                targets.feature_operator[condition_index],
+                targets.density_bandwidth[condition_index], sd_motor=sd_motor)
+            target = targets.matched_density_target[condition_index]
+        else:
+            predicted = predicted_asymmetry_curve(
+                predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid,
+                emp_density_weights_sd, density_smoothing_sigma, sd_motor=sd_motor)
+            target = targets.target_density[condition_index]
+        loss_type = "ccc" if is_matched else "combined"
+        extra = ccc_or_combined_kwargs if not is_matched else {}
         return curve_losses(predicted[None, :], target[None, :],
                             loss_type=loss_type, is_angular=False, **extra)[0]
 
@@ -215,8 +249,9 @@ def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_fe
                             weights=targets.bias_weights[condition_index][None, :])[0]
 
     if method == "smoothed_exp":
-        predicted = predicted_mean_bias(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid,
-                                        sd_motor=sd_motor)
+        predicted = predicted_matched_mean_bias(
+            predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid,
+            targets.feature_operator[condition_index], sd_motor=sd_motor)
         return curve_losses(predicted[None, :],
                             targets.target_bias_curve[condition_index][None, :],
                             loss_type="mse", is_angular=True)[0]

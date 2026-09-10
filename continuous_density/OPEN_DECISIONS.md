@@ -3,9 +3,9 @@
 Current status updated: 2026-09-10.
 
 Unresolved choices and evidence thresholds, recorded here instead of burying
-them in implementation notes. The focused recovery decisions in items 1--2 are
-resolved and retained for provenance. Item 3 affects production comparison;
-items 4--6 remain deferred or low priority.
+them in implementation notes. The focused recovery decisions in items 1--3 are
+resolved and retained for provenance; items 4--6 remain deferred or low
+priority.
 
 Generated evidence referenced through `$DEMIXING_ARTIFACT_ROOT` is external and
 is not shipped with or expected in a normal checkout.
@@ -34,11 +34,13 @@ cache/composite. The executive decision accepts those misses for cross-
 objective consistency. These are search losses against empirical objectives,
 not corresponding deficits in paired truth-curve CCC or parameter recovery.
 
-This policy is frozen in the focused recovery harness, but the public
-fitter still admits WNM only through `--search continuous`. Routing the selected
-matched operators and the common 64-start search into that entry point
-remains a prerequisite for like-for-like real-data fits; multi-condition/shared-
-`sd_spat` search is outside what this single-condition panel settled.
+This policy is now routed through the public `--search continuous` fitter for
+all four retained objectives. The public run records all 64 endpoints and their
+statuses, executes two sequential batches of 32, and fingerprints the pinned
+port version, batch size, dtype, and matmul policy. The first four-condition
+real-data fit completed successfully; its matched-density start spread and the
+paired result below preserve the remaining multi-condition sensitivity rather
+than treating 64 starts as proof of a global optimum.
 
 **Historical selection path.** On the likelihood development budget panel, 16 starts had two material misses,
 32 reached the 0.001-NLL gate on every dataset, and 64 only reduced
@@ -181,8 +183,8 @@ median runtime, but the four misses mean the selection rule remains open. A
 complete 64-start port run did not fix any composite miss; all four evade the
 cache-versus-continuous disagreement trigger.
 
-`continuous_optimizer.minimize_continuous` defaults to a placeholder `n_starts`.
-The budget materially decides the answer:
+`continuous_optimizer.minimize_continuous` now defaults to the selected 64
+starts. The evidence that made the budget scientifically material remains:
 
 - three-condition synthetic fixture, 6 starts, all converged: loss spread 1.03
   (start losses 0.96 to 2.00)
@@ -204,10 +206,10 @@ and 7 cases respectively. Median time per fit rose from 2.2 to 7.1 to 27.2
 seconds. Even the largest tested budget is therefore not a reference solution,
 and the generic 8-start default is below every measured arm.
 
-The completed comparisons confirm that there is no universal budget. The
-objective-specific choices at the start of this section are frozen for the
-focused panel. The surface NN keeps its deployed search as the legacy comparator;
-it does not need matching WNM search implementations.
+The completed comparisons confirm that the common 64-start budget does not make
+every landscape equally easy. That selected consistency policy is frozen for
+the focused panel. The surface NN keeps its deployed search as the legacy
+comparator; it does not need matching WNM search implementations.
 
 ## 2. Numerical precision for the continuous search (resolved)
 
@@ -260,13 +262,14 @@ reduction order. Keeping float32 arrays but setting matmul precision to
 120 development datasets. Global float64 adoption is therefore unnecessary;
 the frozen GPU likelihood rule is full-float32 (`highest`) matmuls.
 
-## 3. Fitting bounds versus the corpus hull (needed before any production WNM fit)
+## 3. Fitting bounds versus the corpus hull (resolved)
 
-The mixture is trained over `sd_feat` down to 2.5, and the WNM search bounds
-already use that: `continuous_fit` derives them from the artifact's declared
-domain, so a `--search continuous` run does search down to 2.5 today. What is
-undecided is the *surface* backend's box, which the plan still describes as the
-production fitting box, and whether the two should be stated as one policy.
+**Decision, 2026-09-10:** retain family-specific validated domains as the
+production policy. WNM uses feature-SD bounds `[2.5, 200]`; the deployed
+surface NN retains `[5, 200]`; both use spatial-SD bounds `[5, 200]`. Comparisons
+must name the boxes and report boundary hits. They do not clip WNM to the NN's
+box, because access to the validated narrow-density range is a capability of
+the replacement model rather than an optimizer confound.
 
 The production box and the corpus hull are not nested:
 
@@ -276,20 +279,14 @@ sd_feat2   box [5, 200]   hull [2.5351, 199.9541]   box exceeds by 0.046
 sd_spat    box [5, 200]   hull [5.0018, 200.0000]   box below by 0.0018
 ```
 
-The declared domain accepts this (user decision, 2026-09-06: "that tiny
-extrapolation is fine on both ends"), and the packager caps outward overhang at
-5 degrees. What is *not* decided is whether the production fitting bounds should
-now open `sd_feat` down to 2.5 for real fits. Doing so is what makes the
-narrow-density coverage usable; not doing so leaves the surrogate's main
-advantage unreachable in production.
-
-**Decision needed**: whether the surface backend's [5, 200] and the mixture's
-[2.5, 200] should be described as one production policy or two, and whether any
-comparison between the families must hold the box fixed. As it stands a
-head-to-head run gives the mixture a wider search than the network, which is a
-real advantage of the surrogate but not a like-for-like comparison of searches.
-The plan says wider bounds are separate work, but it was written before the
-corpus hull was measured.
+The declared domain accepts the small hull overhang (user decision, 2026-09-06:
+"that tiny extrapolation is fine on both ends"), and the packager caps outward
+overhang at 5 degrees. The representative color-2 fit exercised the new policy:
+WNM likelihood and BWCRPS selected a 2.5-degree feature boundary in one
+condition. Clipping both families to 5 degrees would therefore change the
+deployed WNM answer, not merely make a cosmetic comparison. The paired report
+records each family's own boundary solutions and evaluates both parameter sets
+through one common WNM scorer.
 
 ## 4. mu2 and the (mu1, mu2) joint (deferred, unscheduled)
 
@@ -313,11 +310,17 @@ analytically; the two agree to about 9e-05 degrees on the golden fixture, the
 residual being the 2-degree grid's approximation error rather than the analytic
 value's. Recorded here in case a reviewer expects one implementation.
 
-**Still open**: neither plotting entry point can yet *run* on a mixture fit. Both
-refuse a WNM artifact rather than crashing. Direct prediction is one current R6
-prerequisite for representative real-data comparison; selected-search routing
-and the bounds policy in item 3 are the others. Presentation-only wiring remains
-deferred.
+**Representative comparison path completed:**
+`model_fit_to_data/export_wnm_fit_curves.py` reads a fingerprinted WNM fit and
+exports direct analytic bias, matched density-asymmetry, and circular-SD curves
+plus per-condition plots. It validates the checkpoint digest and never
+reconstructs an NN surface. The color-2 representative run exported 1,440 curve
+rows and four PNGs alongside the paired comparison.
+
+**Still open:** the older general-purpose `create_unified_subject_plots` and
+`plot_pdf_slices` entry points do not yet run on a mixture fit. That broader
+presentation wiring remains deferred; it is no longer a blocker for inspecting
+the representative production comparison.
 
 The curve computations a mixture plot needs now exist:
 `shared.prediction.mixture_plot_curves` produces all four curve families (bias,

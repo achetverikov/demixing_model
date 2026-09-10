@@ -152,6 +152,29 @@ def test_the_asymmetry_curve_carries_the_density_target_smoother(predictor, feat
     assert not np.allclose(bundle["asymmetry"][0], np.asarray(raw))
 
 
+def test_selected_curve_operators_are_applied_directly(predictor, feat_grid):
+    operators = np.stack([np.eye(len(feat_grid), dtype=np.float32)] * len(PARAMS))
+    bandwidths = np.asarray([5.0, 7.0, 9.0])
+    bundle = mixture_plot_curves(
+        predictor, PARAMS, feat_grid, feature_operators=operators,
+        density_bandwidths=bandwidths)
+    rows = jnp.column_stack([
+        jnp.full(len(feat_grid), PARAMS[0, 0]),
+        jnp.full(len(feat_grid), PARAMS[0, 1]),
+        jnp.full(len(feat_grid), PARAMS[0, 2]),
+        jnp.asarray(feat_grid)])
+    expected = predictor.signed_arc_asymmetry(
+        rows, validate=False, sd_motor=bandwidths[0])
+    np.testing.assert_allclose(bundle["asymmetry"][0], expected, rtol=1e-6)
+
+
+def test_selected_curve_inputs_must_be_paired(predictor, feat_grid):
+    operators = np.stack([np.eye(len(feat_grid), dtype=np.float32)] * len(PARAMS))
+    with pytest.raises(ValueError, match="supplied together"):
+        mixture_plot_curves(predictor, PARAMS, feat_grid,
+                            feature_operators=operators)
+
+
 def test_the_smoother_width_follows_the_empirical_weights(predictor, feat_grid):
     default = mixture_plot_curves(predictor, PARAMS, feat_grid)
     wider = mixture_plot_curves(predictor, PARAMS, feat_grid,

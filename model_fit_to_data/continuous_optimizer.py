@@ -8,13 +8,9 @@ that -- its density, moments and signed-arc asymmetry are closed forms, and the
 production CCC loss is a smooth function of them -- so the whole path from
 parameters to loss has a gradient.
 
-This module is one candidate, not a replacement. Whether gradients beat the
-lattice searches is an empirical question about accuracy and cost on held-out
-recovery cases, and prior exploration on the old objective found multistart
-gradients winning a single-condition case while missing a multi-condition
-solution the hierarchical search found. Nothing here presumes the outcome; it
-exists so the comparison can be run on equal terms -- same surrogate, same
-targets, same bounds, same scorer.
+The recovery panel selected this as the WNM production search: 64 deterministic
+starts evaluated with the pinned batched JAX L-BFGS-B port as two sequential
+batches of 32. The surface backend retains its hierarchical lattice search.
 
 Design notes that are not free choices:
 
@@ -28,15 +24,14 @@ Design notes that are not free choices:
   distinguishes "this objective has one basin" from "this search got lucky", and
   it is the quantity the search comparison needs. It is not small here: a
   three-condition fixture gave a spread of 1.03 across six converged starts. The
-  start budget is therefore a setting with scientific consequences, deferred to
-  the recovery panel rather than guessed at now; ``n_starts`` defaults to a
-  placeholder until that panel selects one.
+  start budget is therefore a setting with scientific consequences. The frozen
+  production value is 64 and is part of the run fingerprint.
 
 **Precision.** The repo runs JAX in its default float32 everywhere, and the
 surface backend's deployed numbers were produced that way, so this module does
 *not* enable x64 -- doing so globally would change those numbers, and doing so
 locally is not something JAX supports. Values and gradients are therefore
-computed in float32 and widened at the SciPy boundary. That sets a floor on the
+computed in float32. That sets a floor on the
 achievable tolerance: float32 carries about seven decimal digits, so a
 convergence test tighter than roughly 1e-8 relative is testing arithmetic noise
 and will report a converged run whose last few digits are meaningless. The
@@ -44,12 +39,9 @@ defaults below are chosen against that floor rather than copied from a textbook,
 and the benchmark records ``loss_spread`` so a search that is merely stalling on
 noise is distinguishable from one that agrees across starts.
 
-Whether that floor costs anything scientifically is open, and it is the parameter
-recovery panel that settles it, not a microbenchmark: see ``TODO.md`` item 3 and
-step 5 of the transition plan, which schedule an x64 arm against an otherwise
-identical float32 one. Do not enable x64 here in the meantime -- it is a global
-JAX flag, so it would change the surface backend's arithmetic and with it every
-parity fixture the transition rests on.
+The recovery panel selected float32 with ``highest`` matmul precision. Do not
+enable x64 here: it is a global JAX flag, so it would also change the surface
+backend's arithmetic and invalidate its parity fixtures.
 """
 from __future__ import annotations
 
@@ -59,7 +51,14 @@ from typing import Callable, Optional, Sequence
 import jax
 import jax.numpy as jnp
 import numpy as np
-from scipy.optimize import minimize
+from jax_lbfgsb import BatchedLbfgsb, CONVERGED_FTOL, CONVERGED_PGTOL
+
+
+OPTIMIZER_VERSION = "jax-lbfgsb@0350da1"
+DEFAULT_N_STARTS = 64
+DEFAULT_BATCH_SIZE = 32
+DEFAULT_DTYPE = "float32"
+DEFAULT_MATMUL_PRECISION = "highest"
 
 
 @dataclass(frozen=True)
@@ -153,7 +152,10 @@ def _bound_report(solution: np.ndarray, bounds: np.ndarray, names: Sequence[str]
 
 
 def minimize_continuous(objective: Callable, bounds: Sequence[tuple],
-                        names: Sequence[str], n_starts: int = 8, seed: int = 0,
+                        names: Sequence[str], n_starts: int = DEFAULT_N_STARTS,
+                        seed: int = 0, batch_size: int = DEFAULT_BATCH_SIZE,
+                        dtype: str = DEFAULT_DTYPE,
+                        matmul_precision: str = DEFAULT_MATMUL_PRECISION,
                         max_iterations: int = 500, tolerance: float = 1e-9,
                         gradient_tolerance: float = 1e-6,
                         jit: bool = True) -> ContinuousFit:
@@ -166,23 +168,17 @@ def minimize_continuous(objective: Callable, bounds: Sequence[tuple],
         bounds: ``(low, high)`` per parameter, in natural units. All must be
             strictly positive, since the search works in log space.
         names: parameter names, for boundary reporting.
-        n_starts: multistart count. **Provisional.** The default is a placeholder,
-            not a selected value: on a three-condition fixture the density
-            objective's loss spread across six converged starts was 1.03, with
-            start losses from 0.96 to 2.00, so the budget materially decides the
-            answer and cannot be set by taste. It is chosen on development cases
-            in the parameter-recovery panel and frozen there before any held-out
-            scoring (TODO.md item 3; transition plan steps 3 and 5). Until then,
-            do not report a run's parameters as though the budget behind them had
-            been justified.
+        n_starts: deterministic multistart count; production uses 64.
         seed: makes the starts reproducible; recorded in the result.
+        batch_size: starts per sequential accelerator batch; production uses 32.
+        dtype: optimizer and objective array dtype; production uses float32.
+        matmul_precision: JAX matmul precision policy; production uses highest.
         max_iterations: per start.
         tolerance: L-BFGS-B ``ftol``, the relative reduction in the objective
             below which a start stops. Floored by float32 arithmetic; see the
             module docstring.
         gradient_tolerance: L-BFGS-B ``gtol``, on the projected gradient.
-        jit: compile the value-and-gradient. Off is useful when debugging a
-            gradient, since the traceback then points at real lines.
+        jit: retained for API compatibility. ``BatchedLbfgsb`` always uses JIT.
 
     Returns:
         :class:`ContinuousFit`, carrying every start's outcome, not just the best.
@@ -199,40 +195,54 @@ def minimize_continuous(objective: Callable, bounds: Sequence[tuple],
     if np.any(bounds[:, 0] >= bounds[:, 1]):
         bad = [names[i] for i in np.flatnonzero(bounds[:, 0] >= bounds[:, 1])]
         raise ValueError(f"empty bounds for {bad}")
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be at least 1, got {batch_size}")
+    if dtype != DEFAULT_DTYPE:
+        raise ValueError(f"production continuous search requires dtype='float32', got {dtype!r}")
+    if matmul_precision != DEFAULT_MATMUL_PRECISION:
+        raise ValueError(
+            "production continuous search requires matmul_precision='highest'; default GPU "
+            "TF32 changed the likelihood basin in validation")
+    if not jit:
+        raise ValueError("BatchedLbfgsb is a JIT optimizer; jit=False is not supported")
 
     def in_log(log_params):
         return objective(jnp.exp(log_params))
 
-    value_and_grad = jax.value_and_grad(in_log)
-    if jit:
-        value_and_grad = jax.jit(value_and_grad)
-
-    def scipy_objective(log_params):
-        # float32 inside JAX (see the module docstring), widened here because
-        # L-BFGS-B works in float64 and will otherwise mix precisions silently.
-        value, gradient = value_and_grad(jnp.asarray(log_params, dtype=jnp.float32))
-        value = float(value)
-        gradient = np.asarray(gradient, dtype=np.float64)
-        if not np.isfinite(value) or not np.all(np.isfinite(gradient)):
-            # Handing L-BFGS-B a NaN makes it wander and then report success, so
-            # the run looks converged while the answer is the last finite point
-            # it happened to visit. Steer away from the region instead.
-            return np.inf, np.zeros_like(gradient)
-        return value, gradient
-
-    log_bounds = list(zip(np.log(bounds[:, 0]), np.log(bounds[:, 1])))
+    array_dtype = jnp.float32
+    solver = BatchedLbfgsb(
+        in_log,
+        jnp.asarray(np.log(bounds[:, 0]), dtype=array_dtype),
+        jnp.asarray(np.log(bounds[:, 1]), dtype=array_dtype),
+        maxiter=max_iterations, ftol=tolerance, gtol=gradient_tolerance)
+    starts = dispersed_starts(bounds, n_starts, seed)
     outcomes = []
-    for start in dispersed_starts(bounds, n_starts, seed):
-        result = minimize(scipy_objective, np.log(start), jac=True, method="L-BFGS-B",
-                          bounds=log_bounds,
-                          options={"maxiter": max_iterations, "ftol": tolerance,
-                                   "gtol": gradient_tolerance})
-        solution = np.exp(result.x)
-        outcomes.append(StartOutcome(
-            start=start, solution=solution, loss=float(result.fun),
-            success=bool(result.success), status=str(result.message),
-            n_iterations=int(result.nit), n_evaluations=int(result.nfev),
-            at_bound=_bound_report(solution, bounds, names)))
+    with jax.default_matmul_precision(matmul_precision):
+        for first in range(0, n_starts, batch_size):
+            batch_starts = starts[first:first + batch_size]
+            result = solver.run(jnp.asarray(np.log(batch_starts), dtype=array_dtype))
+            natural = jnp.clip(jnp.exp(result.x),
+                               jnp.asarray(bounds[:, 0], dtype=array_dtype),
+                               jnp.asarray(bounds[:, 1], dtype=array_dtype))
+            solutions = np.asarray(jax.device_get(natural), dtype=np.float64)
+            # Natural-unit clipping is needed because exp(log(high)) can round a
+            # float32 endpoint just outside its declared scientific bound. Keep
+            # every stored loss tied to the stored, clipped parameters.
+            losses = np.asarray(jax.device_get(jax.vmap(objective)(natural)),
+                                dtype=np.float64)
+            statuses = np.asarray(jax.device_get(result.status), dtype=np.int32)
+            iterations = np.asarray(jax.device_get(result.iterations), dtype=np.int32)
+            evaluations = np.asarray(jax.device_get(result.evaluations), dtype=np.int32)
+            messages = result.messages()
+            for index, start in enumerate(batch_starts):
+                solution = solutions[index]
+                outcomes.append(StartOutcome(
+                    start=start, solution=solution, loss=float(losses[index]),
+                    success=int(statuses[index]) in (
+                        int(CONVERGED_PGTOL), int(CONVERGED_FTOL)),
+                    status=messages[index], n_iterations=int(iterations[index]),
+                    n_evaluations=int(evaluations[index]),
+                    at_bound=_bound_report(solution, bounds, names)))
 
     finite = [o for o in outcomes if np.isfinite(o.loss)]
     if not finite:
@@ -241,12 +251,10 @@ def minimize_continuous(objective: Callable, bounds: Sequence[tuple],
             "evaluable anywhere in these bounds, which is a problem with the objective "
             "or the data rather than with the search.")
 
-    # The winner comes from the starts that actually converged. A start stopped by
-    # the iteration cap or a failed line search still carries a finite loss --
-    # the value wherever it happened to halt -- and taking the minimum over those
-    # turns a search failure into the reported scientific answer. Verified: with
-    # max_iterations=0 the old form returned a normal result whose "fit" was the
-    # loss at a starting point, with nothing converged.
+    # Keep convergence as a diagnostic, but use the port's validated canonical
+    # selection rule: minimum finite rescored loss, stable by start order. A
+    # float32 line search can report abnormal termination at a numerically good
+    # endpoint, so excluding it would not reproduce the selected search.
     successful = [o for o in finite if o.success]
     if not successful:
         raise RuntimeError(
@@ -255,7 +263,7 @@ def minimize_continuous(objective: Callable, bounds: Sequence[tuple],
             "its start halted, not a minimum, so there is no fit to report. Raise "
             "max_iterations, loosen the tolerances, or check the objective.")
 
-    best = min(successful, key=lambda o: o.loss)
+    best = min(finite, key=lambda o: o.loss)
     converged = [o.loss for o in successful]
     spread = float(max(converged) - min(converged)) if len(converged) > 1 else 0.0
 
@@ -264,8 +272,10 @@ def minimize_continuous(objective: Callable, bounds: Sequence[tuple],
         loss_spread=spread, at_bound=best.at_bound, names=tuple(names),
         settings={"n_starts": n_starts, "seed": seed, "max_iterations": max_iterations,
                   "tolerance": tolerance, "gradient_tolerance": gradient_tolerance,
-                  "parameterisation": "log", "method": "L-BFGS-B",
-                  "precision": "float32 objective, float64 optimiser",
+                  "batch_size": batch_size, "dtype": dtype,
+                  "matmul_precision": matmul_precision,
+                  "parameterisation": "log", "method": "BatchedLbfgsb",
+                  "optimizer_version": OPTIMIZER_VERSION,
                   # Recorded because the bounds come from the loaded artifact's
                   # domain: two runs with the same seed and settings but
                   # different artifacts search different boxes, and a railed

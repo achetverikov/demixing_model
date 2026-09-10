@@ -669,7 +669,8 @@ class SurfacePredictor(BiasPredictor):
 
 def mixture_plot_curves(predictor, params_by_row, feat_grid, bin_weights=None,
                         sd_motor_by_row=None, emp_density_weights_sd=20.0,
-                        density_smoothing_sigma=None):
+                        density_smoothing_sigma=None, feature_operators=None,
+                        density_bandwidths=None):
     """The four curve families the subject plots draw, for a mixture fit.
 
     The surface backend derives these by integrating its 180-row grid; the
@@ -699,6 +700,11 @@ def mixture_plot_curves(predictor, params_by_row, feat_grid, bin_weights=None,
             target, so a fit run at one sigma and plotted at another shows a
             curve the fit never optimised, with nothing in the plot to say so.
             The caller holds the fit record; this function cannot check it.
+        feature_operators: optional ``(n_rows, n_feat, n_feat)`` observed-design
+            operators. When supplied, bias and asymmetry are exactly the
+            recovery-selected fitted curves rather than legacy grid smoothing.
+        density_bandwidths: pooled-SJ bias KDE SD per row. Required together
+            with ``feature_operators`` for the matched density curve.
 
     Returns:
         ``{"bias", "asymmetry", "sd"}`` each ``(n_rows, n_feat)``, plus
@@ -718,6 +724,18 @@ def mixture_plot_curves(predictor, params_by_row, feat_grid, bin_weights=None,
         raise ValueError(
             f"{len(motors)} motor SDs for {n_rows} parameter rows; they are paired "
             "positionally, so a mismatch draws one fit's curve at another's motor noise.")
+    if (feature_operators is None) != (density_bandwidths is None):
+        raise ValueError("feature_operators and density_bandwidths must be supplied together")
+    if feature_operators is not None:
+        feature_operators = np.asarray(feature_operators, dtype=np.float32)
+        density_bandwidths = np.asarray(density_bandwidths, dtype=np.float32)
+        if feature_operators.shape != (n_rows, len(feat_grid), len(feat_grid)):
+            raise ValueError(
+                "feature_operators must have shape "
+                f"{(n_rows, len(feat_grid), len(feat_grid))}, got {feature_operators.shape}")
+        if density_bandwidths.shape != (n_rows,):
+            raise ValueError(
+                f"density_bandwidths must have shape {(n_rows,)}, got {density_bandwidths.shape}")
 
     from shared.config import config
 
@@ -739,10 +757,21 @@ def mixture_plot_curves(predictor, params_by_row, feat_grid, bin_weights=None,
         # negative sd_feat returned a NaN curve and a mis-ordered feature grid
         # returned plausible numbers, both of which a plot renders without
         # complaint. The four families share `rows`, so one check covers them.
-        mean, _ = predictor.mean_and_resultant(rows, validate=True, sd_motor=motor)
-        bias.append(np.asarray(mean))
-        asymmetry.append(np.asarray(gaussian_curve_smoother(
-            predictor.signed_arc_asymmetry(rows, validate=False, sd_motor=motor), smoothing)))
+        mean, resultant = predictor.mean_and_resultant(rows, validate=True, sd_motor=motor)
+        if feature_operators is None:
+            bias.append(np.asarray(mean))
+            asymmetry.append(np.asarray(gaussian_curve_smoother(
+                predictor.signed_arc_asymmetry(
+                    rows, validate=False, sd_motor=motor), smoothing)))
+        else:
+            operator = jnp.asarray(feature_operators[index])
+            radians = jnp.radians(mean)
+            bias.append(np.asarray(jnp.degrees(jnp.arctan2(
+                operator @ (resultant * jnp.sin(radians)),
+                operator @ (resultant * jnp.cos(radians))))))
+            kde_motor = jnp.hypot(motor, density_bandwidths[index])
+            asymmetry.append(np.asarray(operator @ predictor.signed_arc_asymmetry(
+                rows, validate=False, sd_motor=kde_motor)))
         circular_sd.append(np.asarray(
             predictor.circular_sd(rows, validate=False, sd_motor=motor)))
         if bin_weights is not None:

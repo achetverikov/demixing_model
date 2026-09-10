@@ -68,6 +68,8 @@ OBJECTIVE_VERSIONS: Dict[str, str] = {
 #: string would make a head-to-head information criterion compare numbers
 #: computed under different conventions.
 WNM_OBJECTIVE_VERSIONS: Dict[str, str] = {
+    "density": "ccc_matched_pooled_sj_kde_observed_design@1",
+    "smoothed_exp": "observed_design_complex_moment_mse@1",
     "likelihood": "trial_loglik_continuous@1",
     "crps": "crps_integrated_cells@1",
     "balanced_crps": "balanced_crps_integrated_cells@1",

@@ -192,7 +192,7 @@ def test_the_fingerprint_records_every_setting_that_moves_the_parameters(dataset
     spec = _fingerprint(out)["continuous_spec"]
     for field in ("method", "parameterisation", "n_starts", "seed", "sd_feat_bounds",
                   "sd_spat_bounds", "max_iterations", "tolerance", "gradient_tolerance",
-                  "motor"):
+                  "optimizer_version", "batch_size", "dtype", "matmul_precision", "motor"):
         assert field in spec, field
 
 
@@ -212,6 +212,9 @@ def test_the_recorded_spec_comes_from_the_engine_that_runs(dataset, tmp_path):
     assert spec["max_iterations"] == defaults["max_iterations"].default
     assert spec["tolerance"] == defaults["tolerance"].default
     assert spec["gradient_tolerance"] == defaults["gradient_tolerance"].default
+    assert spec["batch_size"] == defaults["batch_size"].default
+    assert spec["dtype"] == defaults["dtype"].default
+    assert spec["matmul_precision"] == defaults["matmul_precision"].default
 
 
 def test_search_diagnostics_reach_the_saved_results(dataset, tmp_path):
@@ -227,3 +230,5 @@ def test_search_diagnostics_reach_the_saved_results(dataset, tmp_path):
         assert np.isfinite(entry["density_loss_spread"])
         assert isinstance(entry["density_at_bound"], list)
         assert len(entry["density_start_losses"]) == 3
+        assert len(entry["density_start_outcomes"]) == 3
+        assert entry["density_search_settings"]["optimizer_version"] == "jax-lbfgsb@0350da1"

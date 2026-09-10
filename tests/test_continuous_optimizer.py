@@ -234,6 +234,15 @@ def test_every_start_is_kept_not_just_the_winner():
         assert np.isfinite(start.loss)
 
 
+def test_the_selected_production_configuration_is_recorded():
+    fit = minimize_continuous(_log_distance_objective([12.0]), [(2.5, 200.0)], ["a"])
+    assert fit.n_starts == 64
+    assert fit.settings["optimizer_version"] == "jax-lbfgsb@0350da1"
+    assert fit.settings["batch_size"] == 32
+    assert fit.settings["dtype"] == "float32"
+    assert fit.settings["matmul_precision"] == "highest"
+
+
 def test_a_multimodal_objective_shows_a_loss_spread():
     """If every start agreed here the multistart would be pointless, and a
     single-start search would be reported as equally good."""

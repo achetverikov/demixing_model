@@ -63,56 +63,28 @@ exists yet anywhere in `model_fit_to_data/`, confirmed 2026-07-17):
 - Until resolved, treat `expectation`/mean-bias RMSE results as less reliable than
   likelihood- or CRPS-style distributional objectives.
 
-## 3. Parameter recovery and search selection for the K12 transition
+## 3. Parameter recovery and search selection for the K12 transition (resolved)
 
-Open: implement replicated parameter recovery from independent DM simulator
-responses, using the existing empirical fitting targets. Forward-prediction CCC/MAE
-checks do not establish recovery of the generating noise parameters.
+The focused development and held-out recovery panels are complete. Production
+WNM fitting uses the pinned JAX L-BFGS-B port at commit `0350da1`: 64
+deterministic starts, two sequential batches of 32, float32 arrays,
+`highest` matmul precision, and seed 0. Every endpoint, convergence status,
+boundary hit, and optimizer setting is persisted and fingerprinted.
 
-Compare hierarchical, cached exhaustive density, multistart gradient, and a simple
-grid-seeded gradient search on identical K12 problems before selecting a default.
-Report parameter recovery, identifiability, held-out dissimilarity-dependent
-predictions, search failures, and cold/warm costs including cache amortization.
-Separate optimizer comparisons from K12-versus-surface-NN comparisons.
+The precision diagnostic identified default GPU TF32 matmuls—not nominal
+float32 itself—as the material source of device-dependent likelihood basins.
+`highest` matmul precision recovered the selected result without global x64,
+which would also alter the surface backend.
 
-The proposed recovery design and transition sequence are recorded with the generated
-experiment artifacts; no production optimizer replacement is selected yet.
-
-**Select the gradient start budget here, not before** (decision, 2026-09-06).
-`continuous_optimizer.minimize_continuous` defaults to a placeholder `n_starts`
-and it must not be read as a tuned value. The budget matters: on a
-three-condition fixture the density objective's loss spread across six converged
-starts was 1.03, start losses running 0.96 to 2.00, so five of six starts landed
-in worse basins and the budget, not the objective, chose the answer. Tuning it on
-whatever cases are to hand would select it on its own benchmark. Choose it on the
-development groups of the recovery panel, freeze it, then score the held-out
-groups -- and record the frozen value with the results, since a fit's parameters
-mean something different at a budget that reliably finds the basin than at one
-that does not.
-
-**Test float64 as part of the recovery panel.** The repo runs JAX in its default
-float32, so `continuous_optimizer` computes values and gradients at float32 and
-widens them only at the SciPy boundary. That floors the achievable convergence
-tolerance at roughly 1e-8 relative: recovery of a known optimum on a synthetic
-objective lands at 1.5e-7, which is the arithmetic limit rather than a search
-failure. Whether that floor costs anything *scientifically* is unknown and is a
-question only recovery can answer -- a parameter whose recovery RMSE is dominated
-by finite-trial variation will not care, while a weakly identified one on a flat
-ridge might.
-
-Run at least one recovery arm twice, identical but for `JAX_ENABLE_X64=1`, and
-compare recovered parameters, per-parameter bias/RMSE, convergence status and
-boundary hits, plus wall time and memory. Report it as its own axis, not folded
-into the search comparison.
-
-Two constraints on acting on the result. x64 is a global JAX flag, not a
-per-module one, so adopting it changes the surface backend's arithmetic too --
-either the surface parity fixtures get re-verified under x64, or adoption waits
-until that backend is retired (transition plan step 7). And if x64 does improve
-recovery, that is evidence about the objective's conditioning as much as about
-the optimizer: a parameter that only becomes recoverable at double precision is
-weakly identified, and the scientific claim resting on it should say so rather
-than quietly relying on the extra digits.
+The first paired representative real-data fit is complete for all four retained
+objectives. WNM uses feature bounds `[2.5, 200]`, the deployed surface NN keeps
+`[5, 200]`, and both use spatial bounds `[5, 200]`; boundary hits are reported.
+Common WNM rescoring favored the WNM fits on likelihood, BWCRPS, and matched
+smoothed expectation, while the surface-derived density parameters were modestly
+better on matched density. This preserves the known density basin sensitivity
+rather than overstating 64-start search as globally complete. Detailed rationale
+and remaining rollout work are in `continuous_density/OPEN_DECISIONS.md` and
+`continuous_density/TRANSITION_AUDIT.md`.
 
 ## Notes for developers
 
