@@ -486,9 +486,19 @@ aggregate score for all four objectives; it wins 51/51 groups for likelihood,
 BWCRPS, and density, and 41/51 for smoothed expectation. At the surface-fitted
 parameters, changing only the forward representation from surface NN to WNM
 raises total density loss by 12.0824 and smoothed-expectation loss by 621.7887.
-The unresolved issue is therefore the family-level forward prediction, not the
-selected 64-start optimizer. Detailed generated tables and plots are under
+The largest condition-level smoothed-expectation gap was then checked against
+100,000 actual GMM/EM solutions at every point of the 2:2:180 dissimilarity
+grid. At those surface-selected parameters, observed-design-pooled mean-curve
+RMSE was 0.388 degrees for WNM and 9.748 degrees for the surface NN; WNM was
+also closer for circular SD, density asymmetry, held-out NLL, and density L1.
+Thus this large score reversal is a surface forward-approximation error, not
+evidence that its parameterized curve is closer to the mechanistic model. One
+case does not establish corpus-average fidelity, and the selected 64-start
+optimizer retains its separately recorded local-minimum qualification. Detailed
+generated tables and plots are under
 `$DEMIXING_ARTIFACT_ROOT/csh2026_20samples_wnm/comparison_current_objectives/`.
+The actual-GMM check is under
+`$DEMIXING_ARTIFACT_ROOT/csh2026_20samples_wnm/forward_truth_check_s15_color_hv_1_high_low/`.
 
 - Fit the same representative datasets, rows, conditions, outlier policy, and
   motor policy with WNM and with the deployed surface-NN baseline.
