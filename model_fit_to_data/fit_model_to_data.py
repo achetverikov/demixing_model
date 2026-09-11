@@ -231,7 +231,8 @@ def load_data(data_path: str, outlier_col: Optional[str], include_outliers: bool
         return df
     before = len(df)
     df = df[df[outlier_col] != 1].copy()
-    log(f"Loaded {before} trials, removed {before - len(df)} outliers, {len(df)} remaining.", "cyan")
+    log(f"Loaded {before} trials, removed {before - len(df)} outliers, "
+        f"{len(df)} remaining after the outlier-flag filter.", "cyan")
     return df
 
 
@@ -734,6 +735,10 @@ def run_fitting(
     missing_cols = [c for c in required if c not in df.columns]
     if missing_cols:
         raise ValueError(f"Columns not found in CSV: {missing_cols}")
+    missing_targets = int(df[[x_col, y_col]].isna().any(axis=1).sum())
+    if missing_targets:
+        log(f"{missing_targets} rows have missing {x_col}/{y_col} values and will be "
+            "excluded during condition fitting.", "yellow")
 
     # The continuous engine is built before the fingerprint so the recorded
     # identity comes from the object that will actually run, rather than from a

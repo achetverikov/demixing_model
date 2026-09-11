@@ -12,11 +12,9 @@ optimizer -- and constructing it means loading a surface checkpoint. Targets do
 not depend on any surrogate, so requiring one to build them would have tied a
 future engine to the backend it is meant to replace. Nothing here loads a model.
 
-The definitions are deliberately *not* revised in the move. They are the
-contracts the deployed results were produced under, recorded in the transition
-plan's target inventory, and a change to any of them changes what a fit means,
-not just how fast it is reached. ``tests/test_fitting_targets.py`` holds them to
-a reference recorded from the optimizer before this module existed.
+The extracted legacy fields remain unchanged and are pinned by
+``tests/test_fitting_targets.py``. The matched density target and observed-design
+operator were added separately for the current WNM and surface objectives.
 """
 from __future__ import annotations
 
@@ -87,8 +85,9 @@ def resolve_density_bandwidths(bias_by_condition, rule: str, mode: str):
     conditions differ in error spread by construction, so the target's smoothing
     then varies along the very axis the experiment manipulates (measured up to
     3.29x within one csh2026 subject). ``'pooled'`` and ``'average'`` share one
-    bandwidth across the subject's conditions, matching what circhelp does within
-    a single ``density_asymmetry`` call. Production is pooled SJ.
+    bandwidth across the subject-by-experiment fit group's conditions, matching
+    what circhelp does within a single ``density_asymmetry`` call. Production is
+    pooled SJ.
     """
     if rule == 'silverman':
         estimate_bw = silverman_bandwidth
@@ -231,17 +230,20 @@ def build_fitting_targets(condition_datasets, feat_diff_grid, d_circ_matrix,
     density_target_var = np.var(np.asarray(target_density), axis=1)
     density_degenerate = degenerate_targets(target_density)
 
+    matched_density_array = np.stack(matched_density)
+    matched_density_var = np.var(matched_density_array, axis=1)
+    matched_density_degenerate = matched_density_var < 1e-10
     warnings = []
     for i, name in enumerate(condition_names):
         # Near-constant targets are defined but numerically unstable under CCC.
         # Warn; the refusal is at eps and nowhere else. Scale-relative, so this
         # does not fire on a genuinely small but well-resolved curve.
-        scale = float(np.max(np.abs(np.asarray(target_density)[i])))
-        if (not density_degenerate[i] and scale > 0
-                and np.sqrt(density_target_var[i]) < 1e-3 * scale):
+        scale = float(np.max(np.abs(matched_density_array[i])))
+        if (not matched_density_degenerate[i] and scale > 0
+                and np.sqrt(matched_density_var[i]) < 1e-3 * scale):
             warnings.append(
                 f"  WARNING: {name} density target is near-constant "
-                f"(sd={np.sqrt(density_target_var[i]):.2e} vs max|curve|={scale:.2e}); "
+                f"(sd={np.sqrt(matched_density_var[i]):.2e} vs max|curve|={scale:.2e}); "
                 "CCC is unstable here — treat its density fit with suspicion.")
 
     # Empirical bias distributions shared by balanced_crps and bias_weighted_crps.
@@ -276,7 +278,7 @@ def build_fitting_targets(condition_datasets, feat_diff_grid, d_circ_matrix,
         density_degenerate=density_degenerate,
         density_bandwidth=tuple(float(b) for b in bandwidths),
         feature_operator=jnp.asarray(np.stack(operators), dtype=jnp.float32),
-        matched_density_target=jnp.asarray(np.stack(matched_density), dtype=jnp.float32),
-        matched_density_degenerate=np.var(np.stack(matched_density), axis=1) < 1e-10,
+        matched_density_target=jnp.asarray(matched_density_array, dtype=jnp.float32),
+        matched_density_degenerate=matched_density_degenerate,
         near_constant_warnings=tuple(warnings),
     )

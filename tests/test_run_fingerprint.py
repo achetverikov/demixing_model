@@ -293,7 +293,7 @@ def test_a_missing_or_spurious_continuous_spec_raises():
                                    continuous_spec=CONTINUOUS, **_common())
 
 
-def test_the_distributional_objectives_are_versioned_per_family():
+def test_only_distributional_objectives_are_versioned_per_family():
     """The surface backend reads a trial's density at its grid cell's centre; the
     mixture evaluates at the observation. One version string for both would make
     a head-to-head information criterion compare different conventions."""
@@ -302,12 +302,9 @@ def test_the_distributional_objectives_are_versioned_per_family():
     surface = rf.objective_versions_for("surface_nn", methods)
     wnm = rf.objective_versions_for("wnm", methods)
 
-    # Raw expectation retains the shared legacy computation. Density uses the
-    # recovery-selected matched KDE/operator only for WNM.
-    for shared in ("expectation",):
+    # Every curve objective now shares its empirical target/operator contract.
+    for shared in ("density", "expectation", "smoothed_exp"):
         assert surface[shared] == wnm[shared]
-    assert surface["density"] != wnm["density"]
-    assert surface["smoothed_exp"] != wnm["smoothed_exp"]
     # Distributional ones are not.
     for differing in ("likelihood", "crps", "balanced_crps"):
         assert surface[differing] != wnm[differing]
@@ -316,13 +313,10 @@ def test_the_distributional_objectives_are_versioned_per_family():
         rf.objective_versions_for("mixture_of_hopes", methods)
 
 
-def test_existing_surface_fingerprints_are_unchanged():
-    """Adding the continuous fields must not force a refit of every run in
-    flight: a digest change that reflects no change in the numbers would refuse
-    exactly the resume it exists to protect."""
+def test_current_surface_fingerprint_pins_matched_curve_objectives():
     payload = rf.compute_run_fingerprint(
         search_backend="hierarchical", grid_spec=GRID, **_common())
     assert "surrogate_family" not in payload
     assert "continuous_spec" not in payload
     assert rf.fingerprint_digest(payload) == (
-        "5995fe11e4cb52e315855ac7ca95b77c60b48333c1b952f334c2225c06f644d9")
+        "d2582ef5751b03dcb0ce32a9a0021fe364122c553fe937aad4c3aef1fd2bcfa3")

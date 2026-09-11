@@ -174,10 +174,10 @@ or every new WNM gradient as correct.
 
 | Method | Definition to preserve | Existing implementation and evidence |
 |---|---|---|
-| `density` (production default) | Empirical wrapped-KDE signed-mass curve on 2:2:180; Gaussian feature weights SD 20 model degrees; pooled subject-condition SJ bias bandwidth. Model analytic sign mass followed by the existing 20-degree edge-padded feature smoother. Minimize 1−CCC over the curve, then sum condition losses. | `fit_model_to_data.DENSITY_CURVE_SPEC`; optimizer `_precompute_target_curves`; `shared.utils._compute_empirical_density_asymmetry_core`; `density_objective.ccc_loss`. Tests: `test_density_ccc_objective`, `test_density_objective_parity`, `test_density_degenerate_target_refusal`, `test_bandwidth_rules`, `test_density_kde_wrap`, `test_density_kde_resolution`. |
-| `density_legacy` | Same configured empirical target; historical weighted MSE/range plus 1−correlation. Preserve for replay, not as the new default. | `_compute_curve_losses(loss_type="combined")`; CCC regression tests demonstrate the legacy amplitude weakness. |
+| `density` (production default) | Exact wrapped-KDE signed-arc mass; Gaussian feature weights SD 20 model degrees; pooled subject-by-experiment SJ bias bandwidth. Apply the empirical observed-design operator to the model prediction and minimize 1−CCC, summing condition losses. | `fitting_targets.matched_density_target`; `wnm_scoring.predicted_matched_density_curve`; `generate_nn_matched_density_asymmetry_batch`; BBZ and DM parity tests. |
+| `density_legacy` | Legacy sampled-grid KDE target and edge-padded model smoother; historical weighted MSE/range plus 1−correlation. Preserve for replay, not as the new default. | `_compute_curve_losses(loss_type="combined")`; CCC regression tests demonstrate the legacy amplitude weakness. |
 | `expectation` | Circular mean within nearest-center 4-degree feature bins; trial-count weights within condition; angular MSE against predictions at the existing returned feature indices. | `compute_target_bias_curve_core` masks padding and returns indices/means/counts; `_compute_curve_losses` supplies angular loss. Preserve the terminal center-to-grid mapping, rather than reconstructing bins from prose. Target-specific validation is less extensive than density's; add extraction-parity fixtures. |
-| `smoothed_exp` | Trial-weighted rolling circular mean (Gaussian SD 20) versus pointwise model mean on the feature grid; unweighted angular MSE across grid locations. | `shared.utils.compute_target_bias_rolling_curve_core`, `_precompute_target_curves`, and the live scoring branch. There is currently no added 20-degree model smoother here. Preserve and document this asymmetry; do not silently replace it with a new matched-smoothing target. |
+| `smoothed_exp` | Trial-weighted rolling circular mean (Gaussian SD 20) versus model complex moments pooled through the same observed-design operator; unweighted angular MSE across grid locations. | `shared.utils.compute_target_bias_rolling_curve_core`, `wnm_scoring.predicted_matched_mean_bias`, and `generate_nn_matched_bias_curve_batch`. |
 | `likelihood` | Same cleaned trial set and model-space scaling. Historical NN score indexes grid log density; WNM point-density evaluation is a separately versioned score convention. | Hierarchical likelihood branch and `postprocess_fitted_likelihoods.score_fit_row` currently implement the reproduction contract. New continuous fit/export parity is required. |
 | `crps` | Per-trial circular-distance energy score, E[d(X,y)]−0.5 E[d(X,X′)], summed over trials. Preserve current observed-bias/feature grid indexing initially; changing that would be another score version. | Hierarchical `crps` branch and its circular-distance matrix. WNM supplies probabilities for the same cells; add direct-formula parity tests for the new call site. |
 | `balanced_crps` | Feature-local Gaussian-weighted empirical bias histograms. Weight feature locations uniformly where support exceeds 1% of median support; normalized score is 2 E[d(X,Y)]−E[d(X,X′)]. | `compute_bwcrps_condition_targets` and `bwcrps_energy_score`. Preserve the factor of two relative to the ordinary CRPS convention and the support-mask normalization. |
@@ -185,10 +185,9 @@ or every new WNM gradient as correct.
 | Circular SD | Reporting/validation quantity, not an existing independently selectable fitting objective. Preserve the small-sample empirical correction and data-weighted pooling of model distributions/moments. | `create_unified_subject_plots.compute_empirical_sd_curve`, `compute_feat_bin_weights`, pooled SD helpers; `tests/test_sd_estimators.py` contains numerical checks, some executed at module scope. |
 
 The density target has important validated implementation details: it uses real
-unpadded data, wraps the bias KDE, excludes zero and the antipode from the discrete
-sign masks, and uses `rescale_bias_for_grid` plus its existing fallback bandwidth
-floor for sub-cell KDEs. Replacing it with empirical mean(sign(bias)), a plain
-histogram sign split, or a new analytic KDE integral would change the target.
+unpadded data, exact wrapped Gaussian arc probabilities, and a shared empirical
+observed-design operator for target and prediction. The sampled-grid sign masks
+and `rescale_bias_for_grid` belong only to `density_legacy`.
 Preserve pooled/per-condition/average bandwidth choices and the SJ/Silverman
 selection, with the production default explicitly pooled SJ.
 
@@ -196,18 +195,17 @@ Workspace `bayesian_biases_zoo/tests/test_density_target_parity.py` imports the 
 DM target and tests bandwidth, wrapping, feature weights, sign conventions, and
 end-to-end curves. Keep this cross-family contract running after extraction, with
 both repositories present so an import skip cannot masquerade as validation.
-Use `test_bwcrps_parity.py` similarly. No BBZ runtime refactor is required.
+Use `test_bwcrps_parity.py` similarly. BBZ now uses the same current density and
+smoothed-mean contracts, with its scientific contract version invalidating old fits.
 
 Do not transfer the 4.1q resultant >=0.5 evaluation gate into production empirical
 fitting. The production density refusal is instead target-curve variance <1e-10,
 checked before optimization and scoped to the density objectives. Mean-only motor
 unidentifiability and non-finite/undefined moment handling remain explicit.
 
-The current empirical and predicted smoothing operations are not mathematically
-identical: empirical weights follow actual trial locations, while the model uses
-finite-grid edge-padded smoothing; the NN also inherited KDE smoothing during
-training. Preserve the established empirical target and downstream smoother, but
-require the acceptance panel to check K12 against that actual target. The raw 4.1q
+The current empirical and predicted curves use the same observed-design operator.
+The NN still inherits its 6-degree training-time feature smoothing, which is part
+of the legacy surface surrogate rather than the fitting objective. The raw 4.1q
 curve advantage alone does not validate this fitting-estimator interface.
 
 Before replacing target preparation, record arrays and per-condition scores from
@@ -305,9 +303,10 @@ approximations and gradients; agreement of empirical targets does not establish 
    outside the differentiated objective. No surface checkpoint should be required
    merely to construct empirical targets.
 
-   Score analytic WNM moments for `expectation`/`smoothed_exp`, fitting-smoothed
-   analytic asymmetry for `density`/`density_legacy`, and cell probabilities for
-   the CRPS variants. Preserve each method's target, weights, normalization, and
+   Score analytic WNM moments for `expectation`, observed-design pooled complex
+   moments for `smoothed_exp`, matched KDE/observed-design asymmetry for `density`,
+   legacy smoothed asymmetry for `density_legacy`, and cell probabilities for the
+   CRPS variants. Preserve each method's target, weights, normalization, and
    feature locations as specified in the target inventory above. Reuse
    `compute_bwcrps_condition_targets` and `bwcrps_energy_score`; do not recode them
    in the new optimizer. Route cross-objective evaluation through the same scorers.

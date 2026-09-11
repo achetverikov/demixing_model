@@ -45,13 +45,12 @@ FINGERPRINT_FILENAME = "extended_run_fingerprint.json"
 #: change to any one of them invalidates results nominally fitted under another.
 #: Bump the individual string when an objective's definition changes.
 OBJECTIVE_VERSIONS: Dict[str, str] = {
-    # 1 - CCC, with constant-target conditions excluded -- `loss_type="ccc"`.
-    "density": "ccc_excluding_constant_targets@2",
+    "density": "ccc_matched_pooled_sj_kde_observed_design@1",
     # The pre-2026-08 density objective, 0.75 * MSE/range + 0.25 * (1 - r), kept
     # so published numbers stay reproducible -- `loss_type="combined"`.
     "density_legacy": "combined_range_scaled_mse_plus_corr@1",
     "expectation": "binned_circular_mean_mse@1",
-    "smoothed_exp": "smoothed_circular_mean_mse@1",
+    "smoothed_exp": "observed_design_complex_moment_mse@1",
     "likelihood": "trial_loglik@1",
     "crps": "crps@1",
     "balanced_crps": "balanced_crps@1",
@@ -68,8 +67,6 @@ OBJECTIVE_VERSIONS: Dict[str, str] = {
 #: string would make a head-to-head information criterion compare numbers
 #: computed under different conventions.
 WNM_OBJECTIVE_VERSIONS: Dict[str, str] = {
-    "density": "ccc_matched_pooled_sj_kde_observed_design@1",
-    "smoothed_exp": "observed_design_complex_moment_mse@1",
     "likelihood": "trial_loglik_continuous@1",
     "crps": "crps_integrated_cells@1",
     "balanced_crps": "balanced_crps_integrated_cells@1",
@@ -80,10 +77,9 @@ WNM_OBJECTIVE_VERSIONS: Dict[str, str] = {
 def objective_versions_for(family: str, methods) -> Dict[str, str]:
     """Objective versions as computed by one surrogate family.
 
-    The curve objectives -- density, density_legacy, expectation, smoothed_exp --
-    are defined identically for both families: same target, same smoother, same
-    loss, only a different prediction feeding them. The distributional ones are
-    not, and get their own strings.
+    The curve objectives are defined identically for both families: same target,
+    observed-design operator and loss, with only the family prediction changing.
+    The distributional objectives have family-specific evaluation conventions.
     """
     unknown = sorted(set(methods) - set(OBJECTIVE_VERSIONS))
     if unknown:

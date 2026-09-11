@@ -97,7 +97,7 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
         "run_fingerprint_digest": sidecar["digest"], "methods": list(methods),
         **identity,
         "prediction": "direct analytic WNM; no reconstructed NN surface",
-        "density_curve": "pooled-SJ KDE plus observed-design feature operator",
+        "density_curve": "subject-experiment pooled-SJ KDE plus observed-design feature operator",
         "bias_curve": "observed-design pooled complex first moment",
     }, indent=2) + "\n")
 

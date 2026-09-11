@@ -30,7 +30,8 @@ from density_objective import degenerate_targets  # noqa: E402
 from fitting_targets import build_fitting_targets  # noqa: E402
 from grid_based_multi_condition_optimizer_jax_loops import (  # noqa: E402
     _compute_curve_losses, bwcrps_energy_score, compute_bwcrps_condition_targets,
-    compute_target_bias_curve_core)
+    compute_target_bias_curve_core, generate_nn_matched_bias_curve_batch,
+    generate_nn_matched_density_asymmetry_batch)
 from shared import surrogate  # noqa: E402
 from shared.config import config  # noqa: E402
 from shared.prediction import predictor_from_surrogate  # noqa: E402
@@ -233,6 +234,34 @@ def test_smoothed_exp_pools_complex_moments_on_the_observed_design(
     assert float(got) == pytest.approx(float(expected), rel=1e-6)
 
 
+def test_surface_curve_operators_match_the_current_wnm_semantics(
+        predictor, d_circ, datasets):
+    """A sampled WNM surface and the analytic WNM must feed the same operators."""
+    one = _targets({next(iter(datasets)): next(iter(datasets.values()))}, d_circ)
+    feat_grid = config.create_grid("feat_diff")
+    rows = S.condition_rows(PARAMS[0], PARAMS[1], PARAMS[-1], feat_grid)
+    log_surface = predictor.grid_log_density(
+        rows, grid=config.create_grid("mu1_bias"), validate=False).T[None, :, :]
+    operator = one.feature_operator[:1]
+
+    surface_bias = generate_nn_matched_bias_curve_batch(log_surface, operator)[0]
+    analytic_bias = S.predicted_matched_mean_bias(
+        predictor, PARAMS[0], PARAMS[1], PARAMS[-1], feat_grid, operator[0])
+    np.testing.assert_allclose(np.asarray(surface_bias), np.asarray(analytic_bias),
+                               atol=1e-5, rtol=1e-5)
+
+    bandwidth = one.density_bandwidth[0]
+    surface_density = generate_nn_matched_density_asymmetry_batch(
+        log_surface, operator, jnp.asarray([bandwidth]))[0]
+    analytic_density = S.predicted_matched_density_curve(
+        predictor, PARAMS[0], PARAMS[1], PARAMS[-1], feat_grid,
+        operator[0], bandwidth)
+    # The surface path integrates a 2-degree sampled density; the WNM path uses
+    # the corresponding analytic wrapped-normal arc probability.
+    np.testing.assert_allclose(np.asarray(surface_density), np.asarray(analytic_density),
+                               atol=3e-4, rtol=3e-4)
+
+
 # ---------------------------------------------------------------------------
 # Motor noise reaches every score
 # ---------------------------------------------------------------------------
@@ -305,7 +334,7 @@ def test_a_degenerate_density_target_is_refused_but_only_for_density(predictor, 
     # Bias independent of feature difference gives a near-constant signed-mass curve.
     flat = np.stack([rng.uniform(2.0, 180.0, 400), rng.normal(0.0, 40.0, 400)], axis=-1)
     targets = _targets({"flat": flat.astype(np.float32)}, d_circ)
-    if not bool(np.asarray(targets.density_degenerate)[0]):
+    if not bool(np.asarray(targets.matched_density_degenerate)[0]):
         pytest.skip("fixture did not produce a degenerate target on this build")
 
     with pytest.raises(ValueError, match="constant density target"):

@@ -136,16 +136,15 @@ empirical and predicted sides as follows:
 |---|---|---|
 | `likelihood`, `crps` | Raw trials | Pointwise NN column; no added dissimilarity smoother |
 | `expectation` | Circular means in 4° bins | NN circular mean at the matching column |
-| `smoothed_exp` | Rolling circular moments, nominal 20° Gaussian SD | Pointwise NN mean curve; no added 20° smoother |
-| `density`, `density_legacy` | Density-asymmetry curve, nominal 20° Gaussian trial weights | NN asymmetry curve with a nominal 20° Gaussian convolution |
+| `smoothed_exp` | Rolling circular moments, nominal 20° Gaussian SD | NN complex moments pooled through the same observed-design operator |
+| `density` | Exact wrapped signed mass after a pooled-SJ bias KDE and nominal 20° Gaussian trial weights | NN density convolved by the same bias KDE, then pooled through the same observed-design operator |
+| `density_legacy` | Legacy sampled-KDE density-asymmetry curve | Legacy NN asymmetry curve with a nominal 20° Gaussian convolution |
 | `balanced_crps`, `bias_weighted_crps` | Conditional empirical distributions, nominal 20° Gaussian trial weights | Pointwise NN distribution |
 
-Thus the default `density` objective does apply similar 20° dissimilarity smoothing to
-both sides. It is not exact: the NN side also inherits the upstream 6° smoother, and its
-later discrete 20° kernel has finite support and edge padding, whereas the empirical
-kernel is normalized over the available trials. Since 6° is small relative to 20°, this
-is expected to be a minor approximation, but the objectives should not all be described
-as using matched smoothing.
+Thus the current `density` and `smoothed_exp` objectives apply the identical
+empirical observed-design operator to either model family's prediction. The NN
+still inherits the upstream 6° simulation smoother because that is part of the
+legacy surface surrogate itself, not an extra fitting-objective smoother.
 
 ---
 

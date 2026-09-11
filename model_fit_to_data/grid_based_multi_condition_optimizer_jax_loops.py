@@ -32,7 +32,7 @@ except ModuleNotFoundError:  # imported as `model_fit_to_data.<module>` from the
     from model_fit_to_data.fitting_targets import build_fitting_targets
     from model_fit_to_data.run_fingerprint import effective_feat_step_schedule
 from shared.config import config
-from shared.mu1_axis import bin_indices, periodic_integral
+from shared.mu1_axis import bin_indices, periodic_integral, sign_masks
 from shared import surrogate
 from shared.prediction import legal_warmup_params
 from shared.utils import load_checkpoint, compute_single_density_asymmetry
@@ -250,6 +250,44 @@ def generate_nn_density_asymmetry_batch(log_surfaces_batch: jnp.ndarray,
         log_surf, target_feat_indices, mu1_bias_grid, apply_smoothing=True, smoothing_sigma=smoothing_sigma
     ))
     return vectorized_compute(log_surfaces_batch)
+
+
+@jax.jit
+def generate_nn_matched_bias_curve_batch(log_surfaces_batch: jnp.ndarray,
+                                         feature_operators: jnp.ndarray) -> jnp.ndarray:
+    """Pool surface first moments through each condition's observed design."""
+    probabilities = jnp.exp(log_surfaces_batch)
+    angles = jnp.radians(config.create_grid('mu1_bias'))[None, :, None]
+    real = periodic_integral(probabilities * jnp.cos(angles), axis=1)
+    imaginary = periodic_integral(probabilities * jnp.sin(angles), axis=1)
+    pooled_real = jnp.einsum('bij,bj->bi', feature_operators, real)
+    pooled_imaginary = jnp.einsum('bij,bj->bi', feature_operators, imaginary)
+    return jnp.degrees(jnp.arctan2(pooled_imaginary, pooled_real))
+
+
+@jax.jit
+def generate_nn_matched_density_asymmetry_batch(
+        log_surfaces_batch: jnp.ndarray, feature_operators: jnp.ndarray,
+        density_bandwidths: jnp.ndarray) -> jnp.ndarray:
+    """Apply the fitted target's bias KDE and observed-design operators."""
+    n_bias = log_surfaces_batch.shape[1]
+    indices = jnp.arange(n_bias) - n_bias // 2
+    angles = indices * config.mu1_bias_step
+
+    def kernel_fft(sd):
+        weights = jnp.exp(-0.5 * (angles / jnp.maximum(sd, 0.01)) ** 2)
+        weights /= jnp.sum(weights)
+        kernel = jnp.zeros(n_bias).at[indices % n_bias].set(weights)
+        return jnp.fft.fft(kernel)
+
+    probabilities = jnp.exp(log_surfaces_batch)
+    convolved = jnp.real(jnp.fft.ifft(
+        jnp.fft.fft(probabilities, axis=1)
+        * jax.vmap(kernel_fft)(density_bandwidths)[:, :, None], axis=1))
+    positive, negative = sign_masks()
+    signed = positive.astype(convolved.dtype) - negative.astype(convolved.dtype)
+    raw = jnp.sum(convolved * signed[None, :, None], axis=1) * config.mu1_bias_step
+    return jnp.einsum('bij,bj->bi', feature_operators, raw)
 
 
 def create_motor_noise_kernel_fft(sd_motor: float, n_mu1_bias: int) -> jnp.ndarray:
@@ -995,8 +1033,12 @@ class GridBasedMultiConditionOptimizer:
         self.unified_bias_weights = targets.bias_weights
         self.unified_target_density = targets.target_density
         self.unified_target_bias_curve = targets.target_bias_curve
+        self.unified_matched_density_target = targets.matched_density_target
+        self.unified_feature_operator = targets.feature_operator
+        self.unified_density_bandwidth = jnp.asarray(targets.density_bandwidth)
         self.density_target_var = targets.density_target_var
         self.density_degenerate_conditions = targets.density_degenerate
+        self.matched_density_degenerate_conditions = targets.matched_density_degenerate
         self.unified_target_d = targets.target_d
         self.unified_fd_weights = targets.fd_weights
         self.unified_bias_fd_weights = targets.bias_fd_weights
@@ -1025,7 +1067,9 @@ class GridBasedMultiConditionOptimizer:
         The rule itself lives in `density_objective.check_targets_fittable`, so
         the exhaustive backend enforces it identically.
         """
-        check_targets_fittable(self.unified_target_density, self.condition_names, fitting_method)
+        targets = (self.unified_matched_density_target if fitting_method == "density"
+                   else self.unified_target_density)
+        check_targets_fittable(targets, self.condition_names, fitting_method)
 
     def _optimize_all_conditions_hierarchical_jit(self, surfaces: jnp.ndarray,
                                                   cond_params_with_idx: jnp.ndarray,
@@ -1081,14 +1125,8 @@ class GridBasedMultiConditionOptimizer:
                                            loss_type="mse", is_angular=True, weights=weights_per_combo)
 
         elif fitting_method == "smoothed_exp":
-            # Curve-vs-curve version of "expectation": same MSE-only, angular loss, but
-            # the target is a smoothed (Gaussian rolling-mean) circular bias curve over
-            # the full feat_diff grid instead of hard 8-degree bins, and the model curve
-            # is evaluated at every grid point instead of only the bin-center indices.
-            # No correlation term and no support weighting, matching how "density" fits.
-            all_predicted_bias_curve = _generate_nn_bias_curve_batch(surfaces, jnp.arange(n_feat))
-
-            predicted_bias_curve_per_combo = all_predicted_bias_curve[surface_indices]  # Shape: (n_combos, n_feat_points)
+            predicted_bias_curve_per_combo = generate_nn_matched_bias_curve_batch(
+                surfaces[surface_indices], self.unified_feature_operator[condition_indices])
             target_bias_curve_per_combo = self.unified_target_bias_curve[condition_indices]  # Shape: (n_combos, n_feat_points)
 
             losses = _compute_curve_losses(predicted_bias_curve_per_combo, target_bias_curve_per_combo,
@@ -1096,25 +1134,24 @@ class GridBasedMultiConditionOptimizer:
 
         elif fitting_method in ("density", "density_legacy"):
             self._check_density_targets_fittable(fitting_method)
-            # Use precomputed target density curves (no function calls inside JIT)
-            # Generate density asymmetry for ALL surfaces at once: shape (n_surfaces, n_feat_points)
-            all_predicted_asymmetry = generate_nn_density_asymmetry_batch(surfaces, weights_sd=self.emp_density_weights_sd, smoothing_sigma=self.density_smoothing_sigma)
-
-            # Get predicted and target asymmetry for each parameter combination
-            predicted_asymmetry_per_combo = all_predicted_asymmetry[surface_indices]  # Shape: (n_combos, n_feat_points)
-            target_asymmetry_per_combo = self.unified_target_density[
-                condition_indices]  # Shape: (n_combos, n_feat_points)
-
             if fitting_method == "density":
+                predicted_asymmetry_per_combo = generate_nn_matched_density_asymmetry_batch(
+                    surfaces[surface_indices], self.unified_feature_operator[condition_indices],
+                    self.unified_density_bandwidth[condition_indices])
+                target_asymmetry_per_combo = self.unified_matched_density_target[condition_indices]
                 losses = _compute_curve_losses(predicted_asymmetry_per_combo, target_asymmetry_per_combo,
                                                loss_type="ccc", is_angular=False)
             else:
                 # `density_legacy` is the pre-2026-08 objective, kept solely so
                 # published numbers stay reproducible and explicable. It is not a
                 # tuning knob: `corr_weight` only reaches this branch.
-                losses = _compute_curve_losses(predicted_asymmetry_per_combo, target_asymmetry_per_combo,
-                                               loss_type="combined", is_angular=False,
-                                               corr_weight=self.corr_weight)
+                all_predicted_asymmetry = generate_nn_density_asymmetry_batch(
+                    surfaces, weights_sd=self.emp_density_weights_sd,
+                    smoothing_sigma=self.density_smoothing_sigma)
+                losses = _compute_curve_losses(
+                    all_predicted_asymmetry[surface_indices],
+                    self.unified_target_density[condition_indices],
+                    loss_type="combined", is_angular=False, corr_weight=self.corr_weight)
 
         elif fitting_method == "crps":
             # Energy score CRPS with circular distance.
