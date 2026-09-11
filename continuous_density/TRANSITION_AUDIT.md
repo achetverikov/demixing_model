@@ -32,12 +32,15 @@ comparisons against the simulation corpus show that it is the more faithful
 forward representation. The focused actual-DM recovery panel now supports WNM
 under likelihood and bias-weighted CRPS; density and smoothed expectation give
 weak parameter recovery for both families even after target-alignment checks.
-The full representative real-data comparison, public routing for the selected
-common WNM search, the comparison-bounds decision, and direct fitted-WNM curve
-exports are now complete. The matched native density and smoothed-expectation
-comparisons favor the surface NN on average, although common-WNM rescoring favors
-the WNM parameter solutions. Broader production rollout is therefore not
-cleared.
+The production optimizer integration, full 51-group CSH2026 WNM fit,
+objective-matched surface refit, comparison-bounds decision, and direct WNM
+curve/report path are complete. Native density and smoothed-expectation losses
+favor the surface NN, while common-WNM rescoring favors WNM. An actual-GMM check
+of the largest smoothed-expectation discrepancy confirms that WNM reproduces the
+mechanistic curve at both tested parameter vectors and the surface NN does not
+at its own fitted vector. That resolves the single-case attribution but not the
+corpus-average promotion question. Broader rollout is now held on a stratified
+truth check and the still-stale BBZ CSH2026 fits/exports.
 
 The transition built much of the low-level WNM machinery across loaders,
 prediction operations, every historical objective, optimization, provenance,
@@ -53,7 +56,9 @@ numbers.
 
 R5 and the production-report part of R6 are complete. The WNM direct export has
 73,440 curve rows and 204 condition plots. Presentation-only browser work,
-rollout, regeneration, and removal of the surface NN remain deferred.
+default-family promotion, and removal of the surface NN remain deferred. The
+next operational stage is the BBZ contract-3 CSH2026 refit and BMC report
+rebuild, not further optimizer development.
 
 ## Current implementation status
 
@@ -72,6 +77,10 @@ rollout, regeneration, and removal of the surface NN remain deferred.
 - WNM scoring exists for every objective currently written by the fitting
   command.
 - Likelihood postprocessing can resolve and rescore a WNM fit.
+- The public continuous fitter uses the pinned `jax-lbfgsb` port with 64
+  deterministic starts in two sequential batches of 32, float32 arrays, and
+  `highest` matmul precision; all endpoint statuses and diagnostics are saved
+  and the complete configuration is fingerprinted.
 - Initial n=20 WNM closed-loop density recovery, random-range panels, and a
   noise-free start-count sweep over hard range-panel cases have run.
 - The first actual-DM data panel is frozen and generated: n=100, single
@@ -82,24 +91,30 @@ rollout, regeneration, and removal of the surface NN remain deferred.
   recovery, loss, mean-bias, bias-SD, asymmetry, and dissimilarity-band summaries
   are saved with the runs. Density and smoothed-expectation target-alignment
   diagnostics are also complete.
+- The full n=20 CSH2026 WNM and objective-matched epoch-1500 surface fits cover
+  the same 56,511 retained trials, 51 subject-by-experiment groups, and 204
+  conditions under all four retained objectives.
+- Standard subject plots, fitted-curve exports, report-order pooling, and PDF
+  slices use direct analytic WNM prediction. The full export has 73,440 finite
+  curve rows and 204 condition plots.
+- The largest real-data forward-score discrepancy has been simulated through
+  the actual GMM at both the surface- and WNM-fitted parameter vectors.
 
 ### Partial or not yet completed
 
-- The rejected/diagnostic objective-specific hierarchy, cache, and JAX-BADS
-  searches remain recovery-only. The selected common 64-start batched port is
-  integrated into the public fitter through `--search continuous`.
-- The direct prediction command identifies WNM artifacts but still constructs
-  the surface-only optimizer, so it does not yet provide a working WNM prediction
-  path.
-- On the actual-DM n=100 panel, paired development/held-out surface comparisons
-  are complete for all four objectives. A four-condition, 2,330-trial
-  representative color-2 real-data comparison is also complete. Broader n=20,
-  multi-condition recovery, motor extensions, and additional real-data panels
-  remain.
-- Unified subject plots and PDF slices explicitly reject WNM. This is acceptable
-  during the recovery stage and is deferred below.
-- `surface_browser`, demos, external fit scripts, the comparison pipeline, model
-  defaults, production regeneration, and surface-NN retirement have not migrated.
+- BBZ implements the matched curve objectives, but its `csh2026` and
+  `csh2026_separate` fits are still the 2026-07-21 runs and their predictive
+  exports carry contract version 2. Current BMC requires version 3.
+- `bias_model_comparison/pipeline/regenerate_all_fits.sh` checks BBZ export
+  presence and fit-spec coverage but not the predictive contract version, so it
+  can incorrectly skip those stale exports. Fix this before starting the scoped
+  BBZ regeneration.
+- One extreme actual-GMM discrepancy is resolved. A small stratified set of
+  high-, medium-, and low-gap CSH2026 cases is still needed to establish average
+  forward fidelity before interpreting the native surface advantage as a
+  promotion gate.
+- Default-family promotion, comparison-report regeneration, `surface_browser`,
+  demos, broader motor/recovery extensions, and surface-NN retirement remain.
 
 ## Audit findings that remain applicable
 
@@ -259,10 +274,11 @@ This determines whether the complete WNM pipeline is at least as effective as th
 legacy production pipeline, while the within-WNM search comparisons determine
 whether a WNM failure is merely an optimization failure.
 
-## Completed recovery analyses and current critical path
+## Completed recovery analyses and next production steps
 
-R1--R4 below record the completed focused recovery stage. R5--R6 are now the
-current critical path.
+R1--R6 below record the completed recovery and integration stages. The current
+critical path is the BBZ contract-v3 refresh, rebuilt matched reports, and a
+small stratified actual-GMM validation panel before the WNM promotion decision.
 
 ### R1. Freeze the first paired recovery data design — completed
 
@@ -487,15 +503,18 @@ BWCRPS, and density, and 41/51 for smoothed expectation. At the surface-fitted
 parameters, changing only the forward representation from surface NN to WNM
 raises total density loss by 12.0824 and smoothed-expectation loss by 621.7887.
 The largest condition-level smoothed-expectation gap was then checked against
-100,000 actual GMM/EM solutions at every point of the 2:2:180 dissimilarity
-grid. At those surface-selected parameters, observed-design-pooled mean-curve
-RMSE was 0.388 degrees for WNM and 9.748 degrees for the surface NN; WNM was
-also closer for circular SD, density asymmetry, held-out NLL, and density L1.
-Thus this large score reversal is a surface forward-approximation error, not
-evidence that its parameterized curve is closer to the mechanistic model. One
-case does not establish corpus-average fidelity, and the selected 64-start
-optimizer retains its separately recorded local-minimum qualification. Detailed
-generated tables and plots are under
+two independent 100,000-run actual GMM/EM simulations at every point of the
+2:2:180 dissimilarity grid. At those surface-selected parameters, the combined
+truth gives observed-design-pooled mean-curve RMSE of 0.214 degrees for WNM and
+9.873 degrees for the surface NN. WNM was also closer for circular SD, density
+asymmetry, held-out NLL, and density L1. A separate 100,000-run simulation at
+WNM's own fitted parameters gives 0.110-degree WNM-versus-truth RMSE; the actual
+GMM and WNM curves have empirical-target MSE 2.230 and 2.225 degree-squared,
+respectively. Thus this large score reversal is a surface
+forward-approximation error, not evidence that its parameterized curve is closer
+to the mechanistic model. One case does not establish corpus-average fidelity,
+and the selected 64-start optimizer retains its separately recorded
+local-minimum qualification. Detailed generated tables and plots are under
 `$DEMIXING_ARTIFACT_ROOT/csh2026_20samples_wnm/comparison_current_objectives/`.
 The actual-GMM check is under
 `$DEMIXING_ARTIFACT_ROOT/csh2026_20samples_wnm/forward_truth_check_s15_color_hv_1_high_low/`.
@@ -541,8 +560,9 @@ the downstream comparison parser.
 
 ## Deferred stages
 
-The following work remains deferred because the completed R5 comparison did not
-meet the promotion rule.
+R1--R6 are complete. The remaining work separates into the immediate
+comparison refresh below and stages that remain deferred until the promotion
+decision.
 
 ### Presentation and exploratory interfaces
 
@@ -554,15 +574,18 @@ meet the promotion rule.
 
 ### Full downstream rollout
 
-- Rewriting all external `bias_model_comparison` fit scripts and shell orchestration.
-- Full production fit regeneration and comparison-artifact/report rebuilding.
+- Make the BMC pipeline's BBZ completion test require predictive contract 3.
+- Refit the affected BBZ density and smoothed-expectation models for `csh2026`
+  and `csh2026_separate`, then regenerate all BBZ predictive products.
+- Rebuild the BMC comparison artifact and CSH2026 reports and compare them with
+  the preserved pre-transition report backup.
 - Default-family promotion in DM.
 - Installation and user-facing documentation changes beyond concise current-status
   corrections.
 
-These begin only after recovery selects the objective-specific WNM searches and
-the paired real-data panel shows that the candidate pipeline is not worse than the
-surface-NN baseline on the relevant shared scores.
+The BBZ/BMC refresh is the immediate next stage and does not imply WNM
+promotion. Promotion follows the stratified actual-GMM fidelity summary and the
+rebuilt comparison.
 
 ### Surface-NN retirement
 
@@ -607,3 +630,9 @@ Parameter recovery need not be equally strong for every objective. In particular
 poor feature-SD recovery from a curve objective is a scientific limitation to
 report, not automatically a K12 rejection, when optimization is adequate and the
 corresponding predictive curves recover well.
+
+Current reading of the rule: items 1 and 4 are met; item 2 is resolved for the
+tested extreme case but still needs the stratified summary; item 3 cannot be
+decided from native surface curve losses alone because the checked surface curve
+does not reproduce the actual GMM at its fitted parameters. The next decision
+uses actual-GMM/common scores together with the refreshed BBZ/BMC results.
