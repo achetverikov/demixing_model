@@ -1,17 +1,17 @@
 **K12 WNM transition plan — 2026-09-06**
 
-**Current execution status (updated 2026-09-10).** This document preserves the
+**Current execution status (updated 2026-09-11).** This document preserves the
 full transition design prepared against `12f5206`; it is not a live checklist.
 `TRANSITION_AUDIT.md` records the revised execution order and current gates.
 Focused n=100 actual-DM recovery, objective-specific search selection, paired
 surface-NN comparison, and held-out analysis are complete for likelihood,
 bias-weighted CRPS, density, and smoothed expectation. Likelihood and BWCRPS
 support WNM; the two curve objectives weakly identify parameters, including
-after matched-target diagnostics. Current work is the direct WNM prediction path
-and public selected-search routing, followed by a bounds decision and the
-representative real-data comparison (audit R5--R6 and `OPEN_DECISIONS.md` item
-3). Plotting/browser integration, downstream rollout and regeneration, default
-promotion, and surface-NN retirement remain deferred. Statements below that no
+after matched-target diagnostics. Direct WNM prediction, public selected-search
+routing, the bounds decision, and the full objective-matched CSH2026 comparison
+are complete. The surface NN fits the native density and smoothed-expectation
+objectives better on average, so downstream rollout, default promotion, and
+surface-NN retirement remain deferred. Statements below that no
 recovery runner or data were found describe only the 2026-09-06 baseline.
 
 Generated evidence referenced through `$DEMIXING_ARTIFACT_ROOT` is external and

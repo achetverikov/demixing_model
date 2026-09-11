@@ -352,10 +352,10 @@ $DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k12_grouped_moment10_cvar10.pkl
 | density asymmetry | corrected to matched direct raw/model sign mass for current UEV/evaluator |
 | secondary modes and grid density discrepancy | evaluated in older reports, but affected by reporting-KDE choices and not rerun for the retained checkpoint after the asymmetry correction |
 | analytic motor noise | implemented and unit-tested; not validated in a full behavioral-fitting comparison |
-| empirical fitting demo | completed for the earlier global K=12 only; retained trajectory checkpoint has not been compared across participants/datasets |
+| empirical fitting demo | full CSH2026 comparison completed for the retained trajectory checkpoint and objective-matched surface NN |
 | focused actual-DM recovery | completed for all four retained objectives, including paired surface-NN and held-out comparisons |
 | density/smoothed-exp target alignment | completed; matched operators improve target semantics but both objectives remain weak for parameter identification |
-| selected-search routing, direct WNM prediction, bounds policy, and representative real-data panel | not completed; current transition gates R5--R6 and `OPEN_DECISIONS.md` item 3 |
+| selected-search routing, direct WNM prediction, bounds policy, and representative real-data panel | completed; the native curve-objective comparison does not clear WNM promotion |
 | replacement of production | deliberately not done |
 
 ## Known limitations and audit warnings
@@ -398,11 +398,10 @@ critical path. Item 5 reflects the current R5--R6 work.
 4. Regenerate retained-checkpoint off-grid density-asymmetry and secondary-mode
    metrics with the corrected raw statistic; do not reuse stale comparison CSV
    asymmetry fields.
-5. Route the selected objective-specific WNM searches through the fitting entry
-   point, complete direct WNM prediction, settle the comparison bounds, and then
-   run the paired representative real-data panel against the deployed surface
-   NN. The focused parameter-recovery tests are complete and should not be
-   repeated as a prerequisite.
+5. Keep the completed CSH2026 matched-objective comparison as a transition gate.
+   The selected WNM optimizer is adequate under common-WNM rescoring, but the
+   surface NN has lower native density and smoothed-expectation loss on average;
+   do not promote WNM or retire the surface backend on the current evidence.
 
 ## Reproduction entry points
 

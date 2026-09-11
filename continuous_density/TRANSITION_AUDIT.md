@@ -1,6 +1,6 @@
 # K12 transition audit and revised work plan — 2026-09-07
 
-Current status updated: 2026-09-10.
+Current status updated: 2026-09-11.
 
 ## Purpose and evidence
 
@@ -32,10 +32,12 @@ comparisons against the simulation corpus show that it is the more faithful
 forward representation. The focused actual-DM recovery panel now supports WNM
 under likelihood and bias-weighted CRPS; density and smoothed expectation give
 weak parameter recovery for both families even after target-alignment checks.
-The first representative real-data comparison, public routing for the selected
-common WNM search, the comparison-bounds decision, and a direct fitted-WNM curve
-export are now complete. Broader production rollout and the general-purpose
-plotting entry points remain unresolved.
+The full representative real-data comparison, public routing for the selected
+common WNM search, the comparison-bounds decision, and direct fitted-WNM curve
+exports are now complete. The matched native density and smoothed-expectation
+comparisons favor the surface NN on average, although common-WNM rescoring favors
+the WNM parameter solutions. Broader production rollout is therefore not
+cleared.
 
 The transition built much of the low-level WNM machinery across loaders,
 prediction operations, every historical objective, optimization, provenance,
@@ -49,8 +51,8 @@ counted as implementation growth. At least 49 defects are explicitly recorded
 across the audit/fix commits, several of which changed fitted or reported
 numbers.
 
-The immediate R5 representative fit is complete and the minimum R6 output
-needed to inspect it is available. Presentation-only plotting, browser work,
+R5 and the production-report part of R6 are complete. The WNM direct export has
+73,440 curve rows and 204 condition plots. Presentation-only browser work,
 rollout, regeneration, and removal of the surface NN remain deferred.
 
 ## Current implementation status
@@ -452,7 +454,7 @@ especially for nearly flat targets, rather than showing uniform dominance. It
 cannot serve as prospective optimizer confirmation because it was inspected
 before the corrected development-only search selection.
 
-### R5. Run paired representative real-data fits — first panel completed
+### R5. Run paired representative real-data fits — completed, promotion gate not met
 
 The first panel used subject S10 from `data_color_comb_color2_two_subjects.csv`,
 four conditions and 2,330 retained trials, with motor noise fixed at zero. WNM
@@ -469,6 +471,24 @@ qualification: the WNM density fit had 61/64 converged starts and a wide spread,
 so the production search must retain all endpoints and cannot be described as a
 global optimizer. Full parameter and cross-score tables are written by
 `compare_wnm_surface_fits.py`.
+
+The full CSH2026 comparison then refitted the epoch-1500 surface NN on the same
+56,511 retained trials and the same subject-by-experiment groups as WNM, using
+the matched pooled-SJ density target and observed-design complex-moment target.
+There are 51 paired fit groups and 204 conditions. Surface-minus-WNM native loss
+averaged -0.0500 for density (surface won 39/51 groups) and -1.3157 for smoothed
+expectation (surface won 45/51). The direction held in every experiment.
+
+This is not an objective or optimizer mismatch. Both native curve comparisons
+use the same empirical targets, observed-design operators, and loss definitions.
+When both parameter sets are instead evaluated through WNM, WNM has the lower
+aggregate score for all four objectives; it wins 51/51 groups for likelihood,
+BWCRPS, and density, and 41/51 for smoothed expectation. At the surface-fitted
+parameters, changing only the forward representation from surface NN to WNM
+raises total density loss by 12.0824 and smoothed-expectation loss by 621.7887.
+The unresolved issue is therefore the family-level forward prediction, not the
+selected 64-start optimizer. Detailed generated tables and plots are under
+`$DEMIXING_ARTIFACT_ROOT/csh2026_20samples_wnm/comparison_current_objectives/`.
 
 - Fit the same representative datasets, rows, conditions, outlier policy, and
   motor policy with WNM and with the deployed surface-NN baseline.
@@ -511,8 +531,8 @@ the downstream comparison parser.
 
 ## Deferred stages
 
-The following work should not expand while R5--R6 remain unresolved, except for
-a small fix required to run the direct-prediction or real-data analysis safely.
+The following work remains deferred because the completed R5 comparison did not
+meet the promotion rule.
 
 ### Presentation and exploratory interfaces
 

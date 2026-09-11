@@ -4,10 +4,10 @@ This file preserves the initial forward-representation experiments. The
 trajectory-trained K12 checkpoint and the later transition/recovery evidence
 supersede its checkpoint-selection status; see `AUDIT_SUMMARY.md`,
 `TRANSITION_AUDIT.md`, and the objective-specific `*FINDINGS.md` files. As of
-2026-09-10, the focused actual-DM recovery comparison is complete for all four
-retained objectives. Representative real-data comparison and direct WNM
-prediction integration remain open, as do public routing for the selected
-objective-specific searches and the comparison-bounds decision.
+2026-09-11, the focused actual-DM recovery comparison, production optimizer
+integration, direct WNM prediction, bounds decision, and full matched-objective
+CSH2026 comparison are complete. The latter does not clear WNM promotion because
+the surface NN has lower native density and smoothed-expectation loss on average.
 
 Results below are from the 100-observation simulator and production checkpoint,
 using fresh off-grid raw simulations. Artifacts are in
@@ -164,10 +164,12 @@ regimes.
   by changing the density representation.
 
 The prototype therefore succeeds as a direct continuous likelihood
-representation. The focused actual-DM recovery comparison has since been
-completed: WNM is supported by likelihood and BWCRPS, while density and smoothed
-expectation are weak parameter-identification objectives for both model
-families. The surface NN remains the deployed default until representative
-real-data fits, direct prediction, downstream regeneration, and the remaining
-transition gates are complete. The 2° lower-domain limitation must also be
-resolved if zero/one-degree trials are required.
+representation. The focused actual-DM recovery comparison supports WNM under
+likelihood and BWCRPS, while density and smoothed expectation weakly identify
+parameters for both model families. In the completed objective-matched CSH2026
+refit, common-WNM rescoring favors the WNM parameter solutions, but the surface
+NN has lower native density and smoothed-expectation loss on average. This is a
+forward-representation qualification, not evidence to abandon the selected
+batched optimizer. The surface NN therefore remains the deployed default. The
+2° lower-domain limitation must also be resolved if zero/one-degree trials are
+required.

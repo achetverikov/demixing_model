@@ -356,11 +356,14 @@ curves, and both optimizers follow that finite-sample variation. Density KDE
 alignment and smoothed-expectation feature smoothing have been tested
 explicitly. See
 [`TRANSITION_AUDIT.md`](TRANSITION_AUDIT.md) for the current gate status and the
-objective-specific `*FINDINGS.md` files for results. The remaining critical path
-is routing the selected common 64-start batched JAX L-BFGS-B policy through the
-fitting entry point, completing direct WNM prediction, settling comparison bounds, and
-then running paired representative real-data fits. Default promotion and
-surface-NN retirement have not occurred.
+objective-specific `*FINDINGS.md` files for results. The selected common
+64-start batched JAX L-BFGS-B policy is now routed through the fitting entry
+point, direct WNM prediction is complete, family-specific bounds are settled,
+and the full paired CSH2026 refit has run. Under the matched native curve
+objectives, the surface NN has lower density and smoothed-expectation loss on
+average. Common-WNM rescoring favors the WNM parameters, locating the
+discrepancy in the forward representations rather than the WNM optimizer. The
+comparison therefore does not clear default promotion or surface-NN retirement.
 
 ## Notes for developers
 
