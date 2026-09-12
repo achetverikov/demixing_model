@@ -1,0 +1,74 @@
+{
+  "protocol": "jax_lbfgsb_port_selected_search_comparison_v1",
+  "rescore_device": "cpu",
+  "split": "development",
+  "n_starts": 32,
+  "port_batch_size": 32,
+  "loss_gate": 0.001,
+  "input_sha256": "4e87402b4b45983ea970c37b76dc8ab30dab237435513e1237abe5fd4e42a01e",
+  "checkpoint_sha256": "848d9f2775e2d8dfb809037225ec80433ce56fcfa1a0284bb56513ca6ccc0d0e",
+  "code_sha256": "43c51ba5c27e9628e5d4fe77a663c596c0733132b602e7bc6b4067e76b50ee64",
+  "port_manifests": {
+    "likelihood": "165a1b71d97a42587cbc341fba99cd4b8e7f75a7ef6e0d4321835a58beb43106",
+    "bias_weighted_crps": "7653a3750499eda6ff0b09bfefb50f47b0bc8bff7bc96dc210def9b389cb94ca",
+    "density": "34091fcbaa4435768a9c9a4bdcb4d4f7d25a8989e19f9e49106a2434579bdc77",
+    "smoothed_exp": "0a29f25df762700b03dbf9b2ff0e9c169aee602498622fbae455397939b67a19"
+  },
+  "baseline_manifests": {
+    "likelihood": "ffb46f671f16f6d4fbe8d45940b439c01496ecb8ce9fcd8eaca2b92e241a7b48",
+    "bias_weighted_crps": "a6e1f9294ea2db63974afa2a2f21cdcab8c1597e9c9eea0f3a5ca95c7af03322",
+    "density": "678259bb4bc455d296b048afb05afb55255e93e0a75839d33ce0f6145e442f98",
+    "smoothed_exp": "7fd9570bd13d6ae6be4602ae829f8f2fa4db0ed1a4be2b21358456a06d3e3dbd"
+  },
+  "cache_build_manifests": {
+    "density": "8737f581c393587e3658e128f210de49d67771bd9c5218f030eb3dca37c038e9",
+    "smoothed_exp": "8317d2dd8e7d1f83b945963561f198a315ff73161178014761ef55eebc634291"
+  },
+  "outputs": {
+    "paired_results.csv": "41161bc6f8b08aa73f4fb158d0573c73c0151f76197014da360697e223fab87e",
+    "summary.csv": "b1e246315ca17c3cac9a9df0ee36b5df0ce15fd67959c5bcbc3c925c9ee57ab5",
+    "finite_winner_paired_results.csv": "66af8f1945a4d206e9a060c896d8d15c1f436147ea02784e4ebab8b16f799bef",
+    "finite_winner_summary.csv": "311dfcb81d0d0ef9a203e518f56aa3557504d88d7116179ce6be18b8b268e0c3",
+    "scaling_results.csv": "766748da8c5e6b5d29868a6998b6664e6d06203222966870dec56b4331652654",
+    "multistart_results.csv": "7f849ff84c63fd1fb5f15e54b3f8df99099a4269752e0bddaa93782434b4bba6",
+    "budget_followup.csv": "6f1a393b7785d36fe53303beabf331726edd51b2ddb812d23959d38c950fc442",
+    "density_precision_followup.csv": "87a27fbb4db7258b4465fbc6cd03bcd9295ac52ddb4613053bfd5f17dbab3389",
+    "likelihood_precision_followup.csv": "b9e45904da626c6fa150c8902db0df222b7c3ad6b3fe14bc912a82aecf2a92fb",
+    "likelihood_precision_followup_paired_results.csv": "d79d6f6609ee8ec5c4a2624bc11c06102844fc5a496f3f842d8ba846d43dd210",
+    "matmul_precision_followup.csv": "2ab9390bbd15558ba24e8aeaa96d76bc337ef41ac7d692ba3c9cb372f544ca5e",
+    "matmul_precision_followup_paired_results.csv": "b1c5bf083fc00b02abc0c56eb59bd7418d9385eca2dd541ff8029d3ba3aa12a9",
+    "current_objective_heldout_followup.csv": "01243531d37e4fe47d5b6b384b513b7f54952239082ab6b5b90f19aff0aeb488",
+    "current_objective_heldout_paired_results.csv": "f98eccb3e18c3999bfd69267b4b31627b5bcd09f15de29fbd6d41adae7e9dc2f"
+  },
+  "budget_followup_manifest": "b67ae293d80aa9e1a2ac0c19487abc9bc5209b873d989ce539f994bd465a87f9",
+  "density_followup_manifests": {
+    "float32_32": "34091fcbaa4435768a9c9a4bdcb4d4f7d25a8989e19f9e49106a2434579bdc77",
+    "float32_64": "1521b5b521df521d8906083b830122181a038e194b6c8db66a980256d444b063",
+    "float64_32": "fd00e34b0f071356c4ba87c510f64187c4934a7e22f31acfd177f3b885818e44"
+  },
+  "likelihood_followup_manifests": {
+    "float32": "165a1b71d97a42587cbc341fba99cd4b8e7f75a7ef6e0d4321835a58beb43106",
+    "mixed64": "df592258203adbf2a6515f548726d45cdd2e08ca29b1fa905d9efd8670b2b949",
+    "float32_highest": "512d7e8da8cb64c2b072b01fb1d7366ff410d01f2bf0601d8455c350090ed818"
+  },
+  "highest_matmul_manifests": {
+    "likelihood": "512d7e8da8cb64c2b072b01fb1d7366ff410d01f2bf0601d8455c350090ed818",
+    "bias_weighted_crps": "21740971f197fd263f1a4a984f794689e98f139f5b31fb5c65b6e7820861382f",
+    "density": "ccb8935b6f779f48d69ce3d72f12078b37c8300c039a469d7786e4bf6d29f896",
+    "smoothed_exp": "501cad4a342fc78e4368e3007f49054bc5b6f31134b777acfce512c59b4b28b1"
+  },
+  "current_objective_heldout_manifests": {
+    "bias_weighted_crps": {
+      "port": "e7cc71d7d705ec8a64469af1473b941e0e9d19bf5ca0d504413e483b3bf64809",
+      "selected": "44884b58f77959c650c3ffdcd5db26dc0d369daebfa2030d3f3a8be883c9163c"
+    },
+    "matched_kde_ccc": {
+      "port": "57c787f886682be71c60f43b5befa02d3826c8d09b7274fc97bc7cfb01aeba10",
+      "selected": "27f4b8e35e2c0fc07b5bf0fe9a5eb260d2edc22366c29d0dac3269ad7c9051ca"
+    },
+    "matched_smoothed_exp": {
+      "port": "f7413721d9c9bd1b6616f9349f66deb44a51daaa14baafa779a95fb6c8e5a323",
+      "selected": "56d7923402b2335a410683b90292393d97b6748c7d053d81829241b2999c44b4"
+    }
+  }
+}

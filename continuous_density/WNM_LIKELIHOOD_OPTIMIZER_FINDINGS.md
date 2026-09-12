@@ -16,9 +16,10 @@ comparisons below remain as selection provenance.
 
 All run directories and CSV file names in this document are relative to
 `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`,
-where the analysis scripts named here also live. The document is versioned with
-the code; the external artifacts it cites are not shipped with or expected in a
-normal checkout.
+where the analysis scripts named here also live. A compact snapshot of the JAX
+port manifests, summaries, and comparison tables is versioned in
+[`validation_outputs/jax_lbfgsb_port_2026-09-10/`](validation_outputs/jax_lbfgsb_port_2026-09-10/README.md).
+Full per-task records and other generated artifacts remain external.
 
 ## Comparator correction and final resolution
 

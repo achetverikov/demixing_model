@@ -1,0 +1,13 @@
+ n_datasets  median_joint_log_rmse  within_factor_1p5_rate  median_per_dataset_seconds  lattice_lower_rate  within_0p001_of_union_rate  median_loss_minus_prior_best  p90_loss_minus_prior_best  max_loss_minus_prior_best
+        120               0.905493                   0.175                   18.546421                 0.0                         1.0                  5.960464e-08               2.384186e-07                    0.00096
+
+                       method  n_datasets  within_0p001_rate      max_gap   median_gap  median_seconds  median_joint_log_rmse
+           jax-lbfgsb-port-32         120              0.975 3.206944e-02 5.960464e-08        0.143010               0.901352
+           jax-lbfgsb-port-64         120              1.000 4.172325e-07 0.000000e+00        0.281543               0.901349
+wnm_density_log80x64_polished         120              1.000 9.602904e-04 5.960464e-08       18.546421               0.905493
+
+                           strategy  n_datasets  within_0p001_rate      max_gap      p90_gap  median_gap  median_seconds  median_joint_log_rmse
+cache_plus_jax-lbfgsb-port-32_union         120                1.0 9.602904e-04 1.192093e-07         0.0       18.697369               0.901352
+cache_plus_jax-lbfgsb-port-64_union         120                1.0 3.576279e-07 5.960464e-08         0.0       18.840621               0.901349
+                    all_ports_union         120                1.0 2.980232e-07 5.960464e-08         0.0        0.422378               0.901352
+         cache_plus_all_ports_union         120                1.0 0.000000e+00 0.000000e+00         0.0       18.987070               0.901352

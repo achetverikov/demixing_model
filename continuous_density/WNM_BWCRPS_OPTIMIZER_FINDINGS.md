@@ -4,9 +4,10 @@ Date: 2026-09-08; 64-start common policy added 2026-09-10
 
 Run directories and CSV names are relative to
 `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`,
-where the analysis scripts named here also live. This document is versioned with
-the code; the external artifacts it cites are not shipped with or expected in a
-normal checkout.
+where the analysis scripts named here also live. A compact snapshot of the JAX
+port manifests, summaries, and comparison tables is versioned in
+[`validation_outputs/jax_lbfgsb_port_2026-09-10/`](validation_outputs/jax_lbfgsb_port_2026-09-10/README.md).
+Full per-task records and other generated artifacts remain external.
 
 Selection used only the 120 development datasets, following
 `WNM_BWCRPS_OPTIMIZER_PLAN.md`. At selection time the held-out tuples had not

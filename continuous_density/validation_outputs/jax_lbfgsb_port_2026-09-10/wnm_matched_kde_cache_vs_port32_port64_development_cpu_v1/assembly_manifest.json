@@ -1,0 +1,22 @@
+{
+  "protocol": "wnm_density_lattice_frozen_v1",
+  "objective": "matched_kde_ccc",
+  "split": "development",
+  "rescore_device": "cpu",
+  "source_manifest_sha256": "8ada7ee039bcf41bd0c24a5cad26273cdab9fe7ec61111f479a02f17317726c2",
+  "optimizer_panel_manifest_sha256": "6d5b5615a902f8c1b00ff58b8600816da8f1b089a87cf78f489644e1efb44320",
+  "extra_run_manifest_sha256": {
+    "jax_lbfgsb_port_matched_kde_ccc64_highest_development_gpu_v1": "0864cf6b3901d19cf0238b534a15931e85a00e5d19e98a7c1e748b99736cb600"
+  },
+  "input_sha256": "4e87402b4b45983ea970c37b76dc8ab30dab237435513e1237abe5fd4e42a01e",
+  "checkpoint_sha256": "848d9f2775e2d8dfb809037225ec80433ce56fcfa1a0284bb56513ca6ccc0d0e",
+  "code_sha256": "0293011f3db0f43767ae766b5122df3c39eec646313d4ee3b50167b78306656a",
+  "outputs": {
+    "summary.csv": "3d6c614db3ef83334814d1520aa97d9c863b149f7bafb051af756acf2ca9fbf9",
+    "comparison.csv": "8a6fe43bb77a02eb1f606e2aabb85dde97ebb145783d921eededff24abae18d1",
+    "full_panel.csv": "4f04aec179a8d67b4402c64b7c57b144cfa265e49c20506c2c43e586069a0050",
+    "method_summary.csv": "fa6f86128cf26d003a9b724e8d53461dca632a30665d568844c7b1334aae4ac7",
+    "strategy_paired.csv": "d430abae55c9589a6f34b9d0d1bbd2e50641475a013f47faa4ec11decb294407",
+    "strategy_summary.csv": "c1d2d5f63726dc2adc96f52687ebfee5b6a1718726c1dd54aff8caeddd3b7065"
+  }
+}

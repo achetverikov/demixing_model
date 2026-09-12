@@ -1,0 +1,6 @@
+run broad_3_seed1_n900__jax-lbfgsb-port__starts8.json
+run broad_3_seed1_n900__jax-lbfgsb-port__starts16.json
+run broad_3_seed1_n900__jax-lbfgsb-port__starts32.json
+run broad_3_seed1_n900__jax-lbfgsb-port__starts64.json
+run broad_3_seed1_n900__jax-lbfgsb-port__starts128.json
+wrote 5 results to /workspaces/demixing_model/results/continuous_density_4.1q/recovery/single_condition_n100/jax_lbfgsb_port_multistart_gpu_v1/likelihood/summary.csv

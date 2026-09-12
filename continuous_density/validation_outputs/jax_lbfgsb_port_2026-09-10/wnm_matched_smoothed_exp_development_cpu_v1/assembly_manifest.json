@@ -1,0 +1,29 @@
+{
+  "protocol": "wnm_smoothed_exp_optimizer_panel_v1",
+  "objective": "matched_smoothed_exp",
+  "split": "development",
+  "rescore_device": "cpu",
+  "selection": {
+    "always_run": [
+      "log80x64-multimin8",
+      "scipy-lbfgsb"
+    ],
+    "conditional_method": "surface-production-hierarchical",
+    "trigger": "abs(log80x64-multimin8 - scipy-lbfgsb) > 0.01"
+  },
+  "optimizer_manifest_sha256": "ef91af6ebbb6300dc9a45b0d9059d93ef796c9e77fe6d6302b5b6ca6b1b4303c",
+  "extra_run_manifest_sha256": {
+    "wnm_matched_smoothed_exp_jaxbads32_development_gpu_v1": "2feacb2843e88404e00e81c0c96e3775b0e56492c50e49c821b1f2f4ab09946c"
+  },
+  "cache_manifest_sha256": "41aa24b7642344e00bfc0b56859687cb7641daa417320b0f98a709697a099926",
+  "input_sha256": "4e87402b4b45983ea970c37b76dc8ab30dab237435513e1237abe5fd4e42a01e",
+  "checkpoint_sha256": "848d9f2775e2d8dfb809037225ec80433ce56fcfa1a0284bb56513ca6ccc0d0e",
+  "code_sha256": "09765839178f51de222867006fdaf3ddbd40f14270d67ade16336ec1d34e1ca7",
+  "outputs": {
+    "full_panel.csv": "8563099df2cd7058aeb347c5ce8ce3e5162aec047ea4934b9ecc5446293d7c33",
+    "method_summary.csv": "8b5b708acf05567a52de6c94c6c45f62f537f4428c11545fecd3f8737265b744",
+    "summary.csv": "6b325525b8ed8a4ea44ee34bdc362c5efaf22c1fa29a00bc3398944ba0eb14f1",
+    "selection_summary.csv": "5868de60c023b6ec9b5341966f6d6a7fbeef4fe5cadc7bf868d09d14449dff1e",
+    "strategy_paired.csv": "332289a32bf73dadaa3f684f93e551d5a62988d58a09e63e312d5b91a65250d0"
+  }
+}

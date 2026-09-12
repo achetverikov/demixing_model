@@ -1,0 +1,13 @@
+                         method  n_datasets   median_gap  p90_gap   max_gap  within_0p001_rate  wins_within_1e6  median_seconds
+             jax-lbfgsb-port-32         120 3.278255e-07 0.093777 44.397736           0.716667               72        0.280886
+                   scipy-lbfgsb         120 3.539026e-07 0.176008 44.397736           0.750000               70        5.309272
+surface-production-hierarchical         120 4.791063e-04 0.020511 14.621578           0.641667                4        2.068104
+             jax-lbfgsb-port-64         120 1.529697e-07 0.092915 44.397720           0.758333               78        0.355103
+                   bbz-jax-bads         120 9.313226e-07 0.279396 34.494987           0.700000               61        7.602629
+             log80x64-multimin8         120 7.450581e-08 0.000002  0.249110           0.966667              106        1.616106
+
+                   strategy  n_datasets  hierarchy_calls  within_0p001_rate  max_gap      p90_gap   median_gap  median_seconds  median_joint_log_rmse
+    cache_scipy_conditional         120               19           0.966667  0.24911 8.985400e-07 5.245965e-09        7.195075               0.627290
+   cache_port32_conditional         120               20           0.966667  0.24911 7.510185e-07 7.064955e-09        1.985608               0.627288
+   cache_port64_conditional         120               16           0.966667  0.24911 5.483627e-07 0.000000e+00        2.032423               0.627288
+cache_all_ports_conditional         120               14           0.966667  0.24911 4.127622e-07 0.000000e+00        2.320183               0.627288

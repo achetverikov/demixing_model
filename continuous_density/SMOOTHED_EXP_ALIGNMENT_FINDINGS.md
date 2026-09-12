@@ -4,8 +4,10 @@ Date: 2026-09-09; held-out and intermediate-curve update 2026-09-10
 
 Artifact paths and analysis scripts named below are relative to
 `$DEMIXING_ARTIFACT_ROOT/continuous_density_4.1q/recovery/single_condition_n100/`.
-Generated artifacts are external and are not shipped with or expected in a
-normal checkout.
+A compact snapshot of the JAX port manifests, summaries, and comparison tables
+is versioned in
+[`validation_outputs/jax_lbfgsb_port_2026-09-10/`](validation_outputs/jax_lbfgsb_port_2026-09-10/README.md).
+Full per-task records and other generated artifacts remain external.
 
 ## Result
 

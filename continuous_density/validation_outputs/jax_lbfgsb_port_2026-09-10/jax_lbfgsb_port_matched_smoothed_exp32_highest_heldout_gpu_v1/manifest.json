@@ -1,0 +1,154 @@
+{
+  "protocol": "wnm_objective_optimizer_benchmark_v4",
+  "objective": "matched_smoothed_exp",
+  "dtype": "float32",
+  "matmul_precision": "highest",
+  "precision": {
+    "checkpoint_and_objective": "float32",
+    "optimizer_state_and_line_search": "float32"
+  },
+  "split": "held_out",
+  "input_sha256": "4e87402b4b45983ea970c37b76dc8ab30dab237435513e1237abe5fd4e42a01e",
+  "checkpoint_sha256": "848d9f2775e2d8dfb809037225ec80433ce56fcfa1a0284bb56513ca6ccc0d0e",
+  "code_sha256": {
+    "/workspaces/demixing_model/results/continuous_density_4.1q/recovery/single_condition_n100/run_wnm_optimizer_benchmark.py": "15a7d10cba3baa937e352daa19b05b56a95e9708550c41b3520c1cabe7b7406d",
+    "/workspaces/demixing_model/demixing_model/model_fit_to_data/likelihood_search.py": "ee1aea88f5dc01ff22bb6a701b694872f2982355a45d3412ecbc191794d22bd6",
+    "/workspaces/demixing_model/demixing_model/model_fit_to_data/continuous_optimizer.py": "8b6fd29e3ae26db17685992d47d3082c4c906b6d6d470fd34a734da24a4f641a",
+    "/workspaces/demixing_model/demixing_model/model_fit_to_data/wnm_scoring.py": "15b9cc5fd9afb833df3cd5090f9a4d3771dbe48a9a5d1ab20fe61a8410766573",
+    "/workspaces/demixing_model/demixing_model/model_fit_to_data/run_fingerprint.py": "45ae886ff1aebdcbae0945cdf710cf062db1612860ecb31eba5bc3d26b40c8cd",
+    "/workspaces/demixing_model/demixing_model/shared/prediction.py": "5188c1d1511862a379a1f16811a451ae5a053e0ab86d5e4cac4c190f527233af",
+    "/workspaces/demixing_model/demixing_model/shared/config.py": "170ace073a80a842d32724db9a2e33cea110b9cc0a87175b7a6d9c96a2c33f90",
+    "/workspaces/demixing_model/demixing_model/shared/mu1_axis.py": "9cec86f33a78ef2f95e8c6b7830892f79fce003676d4d68f001cf9a398830886",
+    "/workspaces/demixing_model/demixing_model/continuous_density/wrapped_mixture_model.py": "cf985c3a5d3c3270702c1607c91017a492403b4eca5e0f5bea67539d651e0645",
+    "/workspaces/demixing_model/results/continuous_density_4.1q/recovery/single_condition_n100/run_density_alignment_recovery.py": "9b41e5cb9951656760283cb0fd31f4f7b248a5b8871ee0bb1cad27cd2e0d890f",
+    "/workspaces/demixing_model/results/continuous_density_4.1q/recovery/single_condition_n100/run_smoothed_exp_alignment_recovery.py": "9614ab0471126b78086c7e460df71456305719364d01ead1e53886dcfdd241cb",
+    "/workspaces/demixing_model/JAX_L-BFGS-B_port/src/jax_lbfgsb/__init__.py": "63a9a61567c5f1ceeafbd7d3aa3b6a8a4b1b2bf2b292211d03b5475df767b88e",
+    "/workspaces/demixing_model/JAX_L-BFGS-B_port/src/jax_lbfgsb/core.py": "a1352e8d5acdcc512a155d4b63fe0803c34d90ed77965ec0de3994a4175032d9",
+    "/workspaces/demixing_model/JAX_L-BFGS-B_port/src/jax_lbfgsb/line_search.py": "b2aeaf29bd554ba6a4b6556bf8d38ab7e12fab3169bbce52e93bf4c9db3ff59b",
+    "/workspaces/demixing_model/JAX_L-BFGS-B_port/src/jax_lbfgsb/solver.py": "4f0f2a739ab882393dc3201fea046edd13f1183e307173ae3d8055345fb7c638"
+  },
+  "methods": [
+    "jax-lbfgsb-port"
+  ],
+  "subjects": [
+    "narrow_2_seed0_n180",
+    "narrow_2_seed0_n450",
+    "narrow_2_seed0_n900",
+    "ordinary_2_seed0_n180",
+    "ordinary_2_seed0_n450",
+    "ordinary_2_seed0_n900",
+    "reversed_2_seed0_n180",
+    "reversed_2_seed0_n450",
+    "reversed_2_seed0_n900",
+    "broad_2_seed0_n180",
+    "broad_2_seed0_n450",
+    "broad_2_seed0_n900",
+    "narrow_2_seed1_n180",
+    "narrow_2_seed1_n450",
+    "narrow_2_seed1_n900",
+    "ordinary_2_seed1_n180",
+    "ordinary_2_seed1_n450",
+    "ordinary_2_seed1_n900",
+    "reversed_2_seed1_n180",
+    "reversed_2_seed1_n450",
+    "reversed_2_seed1_n900",
+    "broad_2_seed1_n180",
+    "broad_2_seed1_n450",
+    "broad_2_seed1_n900",
+    "narrow_2_seed2_n180",
+    "narrow_2_seed2_n450",
+    "narrow_2_seed2_n900",
+    "ordinary_2_seed2_n180",
+    "ordinary_2_seed2_n450",
+    "ordinary_2_seed2_n900",
+    "reversed_2_seed2_n180",
+    "reversed_2_seed2_n450",
+    "reversed_2_seed2_n900",
+    "broad_2_seed2_n180",
+    "broad_2_seed2_n450",
+    "broad_2_seed2_n900",
+    "narrow_2_seed3_n180",
+    "narrow_2_seed3_n450",
+    "narrow_2_seed3_n900",
+    "ordinary_2_seed3_n180",
+    "ordinary_2_seed3_n450",
+    "ordinary_2_seed3_n900",
+    "reversed_2_seed3_n180",
+    "reversed_2_seed3_n450",
+    "reversed_2_seed3_n900",
+    "broad_2_seed3_n180",
+    "broad_2_seed3_n450",
+    "broad_2_seed3_n900",
+    "narrow_2_seed4_n180",
+    "narrow_2_seed4_n450",
+    "narrow_2_seed4_n900",
+    "ordinary_2_seed4_n180",
+    "ordinary_2_seed4_n450",
+    "ordinary_2_seed4_n900",
+    "reversed_2_seed4_n180",
+    "reversed_2_seed4_n450",
+    "reversed_2_seed4_n900",
+    "broad_2_seed4_n180",
+    "broad_2_seed4_n450",
+    "broad_2_seed4_n900"
+  ],
+  "starts": [
+    32
+  ],
+  "seed": 0,
+  "bounds": [
+    [
+      2.5,
+      200.0
+    ],
+    [
+      2.5,
+      200.0
+    ],
+    [
+      5.0,
+      200.0
+    ]
+  ],
+  "hierarchical": {
+    "points": 9,
+    "stages": 5,
+    "batch": 512
+  },
+  "jaxopt": {
+    "iterations": 500,
+    "tolerance": 0.0001
+  },
+  "jax_lbfgsb_port": {
+    "batch_size": 32,
+    "max_iterations": 500,
+    "max_evaluations": 15000,
+    "max_linesearch": 20,
+    "tolerance": 1e-09,
+    "gradient_tolerance": 1e-06
+  },
+  "bads": {
+    "budget": 500,
+    "max_iterations": 100
+  },
+  "bbz_production_bads": {
+    "comparison_starts": [
+      32
+    ],
+    "bbz_production_start_count": 8,
+    "jax_budget": 1500,
+    "jax_max_iterations": 300,
+    "pybads_defaults": true
+  },
+  "surface_production_hierarchy": {
+    "shared_grid_size": 40,
+    "feat_grid_size": 20,
+    "min_grid_step": 1.0,
+    "zoom_factor": 0.5,
+    "batch": 512
+  },
+  "jax_enable_x64": false,
+  "devices": [
+    "cuda:0"
+  ]
+}
