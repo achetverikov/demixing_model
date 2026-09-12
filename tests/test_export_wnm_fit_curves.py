@@ -15,6 +15,7 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
     operator = np.array([[1.0, 0.0], [0.25, 0.75]], dtype=np.float32)
     results = {
         "condition one": {
+            "n_trials": 2,
             "angle_scale_to_model": 1.0,
             "empirical_curves": {
                 "feature_operator": operator,
@@ -24,6 +25,11 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
                 "prediction_coordinates": np.array([1.0, 2.0]),
             },
             "density_fitted_params": np.array([10.0, 20.0, 30.0, 0.0]),
+            "density_loss": 0.5,
+            "density_eval_density_loss": 0.5,
+            "density_eval_smoothed_exp_loss": 1.0,
+            "density_eval_likelihood_loss": 2.0,
+            "density_eval_bias_weighted_crps_loss": 3.0,
         }
     }
     with (results_dir / "extended_fit_results.pkl").open("wb") as handle:
@@ -69,6 +75,8 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
     assert len(frame) == 2
     assert frame["bias_deg"].tolist() == [3.0, 4.0]
     assert frame["dm_version"].unique().tolist() == ["wnm_k12_20samples"]
-    assert (output_dir / "wnm_fitted_curves.csv").exists()
+    assert (output_dir / "fitted_curves.csv").exists()
+    parameters = export_module.pd.read_csv(output_dir / "fitted_parameters.csv")
+    assert parameters.loc[0, "eval_likelihood_loss"] == 2.0
     assert (output_dir / "condition_one.png").exists()
     assert "direct analytic WNM" in (output_dir / "manifest.json").read_text()

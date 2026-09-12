@@ -64,6 +64,7 @@ from continuous_fit import ContinuousEngine
 from continuous_optimizer import DEFAULT_N_STARTS
 from shared import prediction as prediction_module
 from shared import surrogate
+from shared.config import DENSITY_CURVE_SPEC
 from shared.utils import filter_data_for_fitting, resolve_input_path, resolve_results_path
 
 
@@ -97,13 +98,6 @@ HIERARCHICAL_GRID_SPEC = {
 #: above: they change the fit target, so the run fingerprint has to state them,
 #: and a value the fingerprint reads from one place while the fit reads it from
 #: another can drift.
-DENSITY_CURVE_SPEC = {
-    'emp_density_weights_sd': 20.0,
-    'density_smoothing_sigma': None,
-    'density_bandwidth_mode': 'pooled',
-    'density_bandwidth_rule': 'sj',
-}
-
 try:
     from rich.console import Console
     from rich.panel import Panel

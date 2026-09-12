@@ -19,9 +19,8 @@ import numpy as np
 import pandas as pd
 
 from model_fit_to_data.run_fingerprint import file_sha256, read_fingerprint_sidecar
-from model_fit_to_data.fit_model_to_data import DENSITY_CURVE_SPEC
 from shared import surrogate
-from shared.config import config
+from shared.config import DENSITY_CURVE_SPEC, config
 from shared.prediction import mixture_plot_curves, predictor_from_surrogate
 
 SELECTED_METHODS = ("likelihood", "bias_weighted_crps", "density", "smoothed_exp")
@@ -52,8 +51,13 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
     matmul_precision = payload["continuous_spec"]["matmul_precision"]
 
     rows = []
+    parameter_rows = []
     for condition, result in results.items():
         empirical = result["empirical_curves"]
+        values = result.get("analysis_cell_values", {})
+        experiment = str(values.get("experiment_id", condition))
+        subject = str(values.get("subject_id", result.get("fit_group_id", "")))
+        source_condition = str(values.get("condition_id", condition))
         operator = np.asarray(empirical["feature_operator"])
         bandwidth = float(empirical["density_bandwidth"])
         angle_scale = float(result.get("angle_scale_to_model", 1.0))
@@ -62,6 +66,17 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
             if key not in result:
                 continue
             parameters = np.asarray(result[key], dtype=float)
+            parameter_rows.append({
+                "analysis_cell_id": condition, "experiment": experiment,
+                "subject": subject, "condition": source_condition,
+                "optimizer": method, "n_trials": result["n_trials"],
+                "sd_feat1": parameters[0], "sd_feat2": parameters[1],
+                "sd_spat": parameters[2], "sd_motor": parameters[3],
+                "loss": result[f"{method}_loss"],
+                **{f"eval_{objective}_loss": result[f"{method}_eval_{objective}_loss"]
+                   for objective in SELECTED_METHODS},
+                **result.get("bundle_identity", {}), **identity,
+            })
             with jax.default_matmul_precision(matmul_precision):
                 curves = mixture_plot_curves(
                     predictor, parameters[None, :3], feat_grid,
@@ -73,10 +88,14 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
                     operator_feature_coordinates=empirical["prediction_coordinates"])
             for index, x_model in enumerate(feat_grid):
                 rows.append({
-                    "condition": condition, "optimizer": method,
+                    "analysis_cell_id": condition, "experiment": experiment,
+                    "subject": subject, "condition": source_condition,
+                    "optimizer": method,
                     "x_model_deg": float(x_model),
                     "x_deg": float(x_model / angle_scale),
+                    "feat_diff": float(x_model / angle_scale),
                     "bias_deg": float(curves["bias"][0, index] / angle_scale),
+                    "mu_bias": float(curves["bias"][0, index] / angle_scale),
                     "density_asymmetry": float(curves["asymmetry"][0, index]),
                     "sd_deg": float(curves["sd"][0, index] / angle_scale),
                     "empirical_bias_deg": float(
@@ -93,7 +112,8 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
     if frame.empty:
         raise ValueError("no selected fitted methods found")
     output_dir.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(output_dir / "wnm_fitted_curves.csv", index=False)
+    frame.to_csv(output_dir / "fitted_curves.csv", index=False)
+    pd.DataFrame(parameter_rows).to_csv(output_dir / "fitted_parameters.csv", index=False)
     (output_dir / "manifest.json").write_text(json.dumps({
         "source_results": str(results_dir), "checkpoint": str(checkpoint),
         "run_fingerprint_digest": sidecar["digest"], "methods": list(methods),
@@ -103,7 +123,7 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
         "bias_curve": "observed-design pooled complex first moment",
     }, indent=2) + "\n")
 
-    for condition, condition_frame in frame.groupby("condition", sort=False):
+    for condition, condition_frame in frame.groupby("analysis_cell_id", sort=False):
         fig, axes = plt.subplots(1, 3, figsize=(13, 3.8), constrained_layout=True)
         for method, values in condition_frame.groupby("optimizer", sort=False):
             axes[0].plot(values.x_deg, values.bias_deg, label=method)

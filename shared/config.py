@@ -5,6 +5,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Tuple
 
+
+DENSITY_CURVE_SPEC = {
+    "emp_density_weights_sd": 20.0,
+    "density_smoothing_sigma": None,
+    "density_bandwidth_mode": "pooled",
+    "density_bandwidth_rule": "sj",
+}
+
 @dataclass
 class Config:
     surfaces_folder: str = './likelihood_surfaces_10k'
