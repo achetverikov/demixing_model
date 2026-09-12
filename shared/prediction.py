@@ -740,6 +740,11 @@ def mixture_plot_curves(predictor, params_by_row, feat_grid, bin_weights=None,
         density_bandwidths = np.asarray(density_bandwidths, dtype=np.float32)
         operator_grid = (feat_grid if operator_feature_coordinates is None else
                          jnp.asarray(operator_feature_coordinates, dtype=jnp.float32))
+        _, feature_high = predictor.domain["feat_diff"]
+        if float(jnp.min(operator_grid)) <= 0 or float(jnp.max(operator_grid)) > feature_high:
+            raise ValueError(
+                "observed-design coordinates must be positive and no greater than "
+                f"{feature_high:g}")
         if feature_operators.shape != (n_rows, len(feat_grid), len(operator_grid)):
             raise ValueError(
                 "feature_operators must have shape "
@@ -782,7 +787,7 @@ def mixture_plot_curves(predictor, params_by_row, feat_grid, bin_weights=None,
                 jnp.full(operator_grid.shape, float(sd_spat), jnp.float32),
                 operator_grid], axis=-1)
             operator_mean, operator_resultant = predictor.mean_and_resultant(
-                operator_rows, validate=True, sd_motor=motor)
+                operator_rows, validate=False, sd_motor=motor)
             radians = jnp.radians(operator_mean)
             bias.append(np.asarray(jnp.degrees(jnp.arctan2(
                 operator @ (operator_resultant * jnp.sin(radians)),
