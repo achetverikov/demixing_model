@@ -335,6 +335,7 @@ class ContinuousEngine:
         self.n_conditions = 0
         self._solver_cache = {}
         self.sub_support_summary = {"trial_count": 0, "minimum": None}
+        self.bundle_identity = None
 
     def update_dataset(self, condition_datasets, *, prediction_capacity=None):
         """Rebuild the empirical targets for one subject's conditions."""
@@ -369,6 +370,41 @@ class ContinuousEngine:
         }
         for warning in self.targets.near_constant_warnings:
             print(warning)
+
+    def update_compiled(self, group, shared_targets, manifest):
+        """Install one upstream-compiled fit group without deriving empirical data."""
+        try:
+            from compiled_bundle import fitting_targets_from_compiled
+        except ModuleNotFoundError:
+            from model_fit_to_data.compiled_bundle import fitting_targets_from_compiled
+
+        self.targets = fitting_targets_from_compiled(group, shared_targets)
+        self.condition_names = tuple(group.analysis_cell_ids)
+        self.n_conditions = len(self.condition_names)
+        self.condition_datasets = {
+            cell_id: np.column_stack((
+                group.coordinate_model_deg[group.trial_condition_index == index],
+                group.bias_model_deg[group.trial_condition_index == index],
+            ))
+            for index, cell_id in enumerate(self.condition_names)
+        }
+        self.sub_support_summary = {
+            "trial_count": int(np.sum(group.coordinate_model_deg < self.predictor.domain["feat_diff"][0])),
+            "minimum": (float(group.coordinate_model_deg.min())
+                        if np.any(group.coordinate_model_deg < self.predictor.domain["feat_diff"][0])
+                        else None),
+        }
+        self.bundle_identity = {
+            "bundle_id": manifest["bundle_id"],
+            "canonical_trial_sha256": manifest["canonical_trial_sha256"],
+            "analysis_spec_sha256": manifest["analysis_spec_sha256"],
+            "population": manifest["population"],
+            "ordered_row_id_sha256": next(
+                item["ordered_signed_row_id_sha256"]
+                for item in manifest["fit_groups"]
+                if item["fit_group_id"] == group.fit_group_id),
+            "empirical_targets_sha256": manifest["products"]["shared_empirical_targets"]["sha256"],
+        }
 
     # The attribute names process_subject reads, kept identical so the loop body
     # is shared rather than duplicated.
