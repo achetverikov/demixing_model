@@ -58,6 +58,8 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
         experiment = str(values.get("experiment_id", condition))
         subject = str(values.get("subject_id", result.get("fit_group_id", "")))
         source_condition = str(values.get("condition_id", condition))
+        report_order = int(values.get("report_order", 1))
+        cell_values = json.dumps(values, sort_keys=True)
         operator = np.asarray(empirical["feature_operator"])
         bandwidth = float(empirical["density_bandwidth"])
         angle_scale = float(result.get("angle_scale_to_model", 1.0))
@@ -69,6 +71,7 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
             parameter_rows.append({
                 "analysis_cell_id": condition, "experiment": experiment,
                 "subject": subject, "condition": source_condition,
+                "report_order": report_order, "analysis_cell_values": cell_values,
                 "optimizer": method, "n_trials": result["n_trials"],
                 "sd_feat1": parameters[0], "sd_feat2": parameters[1],
                 "sd_spat": parameters[2], "sd_motor": parameters[3],
@@ -90,6 +93,7 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
                 rows.append({
                     "analysis_cell_id": condition, "experiment": experiment,
                     "subject": subject, "condition": source_condition,
+                    "report_order": report_order, "analysis_cell_values": cell_values,
                     "optimizer": method,
                     "x_model_deg": float(x_model),
                     "x_deg": float(x_model / angle_scale),
