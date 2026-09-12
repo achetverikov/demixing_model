@@ -72,6 +72,31 @@ def test_digest_is_stable_and_field_order_independent(run_files):
     assert rf.fingerprint_digest(payload) == rf.fingerprint_digest(shuffled)
 
 
+def test_compiled_fingerprint_pins_bundle_products(run_files, tmp_path):
+    _, checkpoint, _ = run_files
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "bundle.yaml").write_text("bundle_id: example\n")
+    manifest = {
+        "bundle_id": "b1", "population": "signed_bias",
+        "canonical_trial_sha256": "canonical",
+        "analysis_spec_sha256": "analysis",
+        "ordered_scored_row_id_sha256": "rows",
+        "objective_versions": {"density": "density-v1"},
+        "products": {"shared_empirical_targets": {"sha256": "targets"}},
+    }
+    payload = rf.compute_compiled_run_fingerprint(
+        bundle_path=bundle, bundle_manifest=manifest,
+        checkpoint_path=checkpoint, continuous_spec={"n_starts": 8},
+        skip_motor_noise=True,
+        evaluation_methods=["density", "smoothed_exp", "likelihood",
+                            "bias_weighted_crps"], corr_weight=0.25)
+    assert payload["bundle_id"] == "b1"
+    assert payload["empirical_targets_sha256"] == "targets"
+    changed = dict(payload, bundle_id="b2")
+    assert rf.fingerprint_digest(changed) != rf.fingerprint_digest(payload)
+
+
 @pytest.mark.parametrize("overrides", [
     {"circ_space": 180},
     {"min_trials": 40},

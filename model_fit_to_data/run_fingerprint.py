@@ -291,6 +291,44 @@ def compute_run_fingerprint(
     return payload
 
 
+def compute_compiled_run_fingerprint(
+    *, bundle_path, bundle_manifest, checkpoint_path, continuous_spec,
+    skip_motor_noise, evaluation_methods, corr_weight,
+) -> Dict[str, Any]:
+    """Identify a WNM run whose complete empirical contract is a compiled bundle."""
+    bundle_path = Path(bundle_path)
+    if bundle_manifest["population"] != "signed_bias":
+        raise ValueError("production DM-WNM fits require a signed_bias bundle")
+    motor = ({"mode": "skip"} if skip_motor_noise else {
+        "mode": "enabled",
+        "sd_motor_low": 0.1,
+        "sd_motor_hard_max": 50.0,
+        "cap_rule": "min_condition_circ_sd_x1.1_clipped_0.1_50",
+    })
+    return {
+        "schema_version": 1,
+        "input_contract": "contextual_biases_compiled_bundle",
+        "bundle_id": bundle_manifest["bundle_id"],
+        "bundle_manifest_sha256": file_sha256(bundle_path / "bundle.yaml"),
+        "canonical_trial_sha256": bundle_manifest["canonical_trial_sha256"],
+        "analysis_spec_sha256": bundle_manifest["analysis_spec_sha256"],
+        "ordered_scored_row_id_sha256": bundle_manifest["ordered_scored_row_id_sha256"],
+        "empirical_targets_sha256": bundle_manifest["products"]
+        ["shared_empirical_targets"]["sha256"],
+        "population": bundle_manifest["population"],
+        "compiled_objective_versions": dict(bundle_manifest["objective_versions"]),
+        "dm_objective_versions": objective_versions_for("wnm", evaluation_methods),
+        "checkpoint_sha256": file_sha256(checkpoint_path),
+        "surrogate_family": "wnm",
+        "search_backend": "continuous",
+        "continuous_spec": {
+            key: continuous_spec[key] for key in sorted(continuous_spec)
+        },
+        "motor": motor,
+        "corr_weight": float(corr_weight),
+    }
+
+
 def fingerprint_digest(payload: Dict[str, Any]) -> str:
     """Canonical SHA-256 digest of a fingerprint payload."""
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
