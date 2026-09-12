@@ -10,15 +10,26 @@ Usage: streamlit run main.py
 
 import streamlit as st
 import json
-# data_manager puts the repo root on sys.path, so shared.* is importable after it.
+import sys
+from pathlib import Path
+
+# Streamlit normally adds the script directory, but its test runner and direct
+# module execution do not.  Make both the browser packages and shared provider
+# explicit before importing either.
+HERE = Path(__file__).resolve().parent
+for _path in (HERE, HERE.parent):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+
 from core.data_manager import SurfaceDataManager
 from shared.config import averaged_surfaces_dir
 from components.sidebar import create_sidebar
-from tabs import SingleTab, ComparisonTab, ExpectationTab, SpaceTab, StatsTab
+from tabs import SingleTab, ComparisonTab, ExpectationTab, SpaceTab, StatsTab, WNMTab
 from browser_utils.url_state import state_manager, init_url_state_js
 
 # Tab configuration
 TABS = {
+    '🧪 WNM On-Demand': WNMTab,
     '🔍 Single Surface': SingleTab,
     '⚖️ Compare Surfaces': ComparisonTab, 
     '📈 Expectation Curves': ExpectationTab,
@@ -57,21 +68,14 @@ def main():
         else:
             st.sidebar.write("No state in URL")
     
-    st.title("🌊 Likelihood Surface Browser")
-    st.markdown("Interactive exploration of computed likelihood surfaces")
+    st.title("🌊 Demixing-model Prediction Browser")
+    st.markdown("Direct WNM predictions and stored simulated reference surfaces")
     
     # Initialize data manager
     data_manager = SurfaceDataManager()
     
     # Create sidebar and load data (pass current state)
     filtered_df = create_sidebar(data_manager, app_state)
-    
-    if filtered_df is None or len(filtered_df) == 0:
-        st.error("No surfaces found or match current filters.")
-        st.info("Expected files with pattern: surface_*.pkl")
-        return
-    
-    st.success(f"Found {len(filtered_df)} surfaces")
     
     # Create tabs and render content with state tracking
     tab_names = list(TABS.keys())
@@ -98,6 +102,20 @@ def main():
     # Render the selected tab content
     tab_name = tab_names[selected_tab_index]
     tab_class = TABS[tab_name]
+
+    if filtered_df is None:
+        # Direct WNM evaluation needs no averaged-surface artifact.  The empty
+        # frame keeps that tab available while the stored-surface tabs retain
+        # their existing minimum-surface checks.
+        filtered_df = []
+    if len(filtered_df) == 0:
+        if tab_class is not WNMTab:
+            st.error("No surfaces found or match current filters.")
+            st.info("Expected files with pattern: surface_*.pkl")
+            return
+        st.info("No stored reference surfaces found; direct WNM evaluation is available.")
+    else:
+        st.success(f"Found {len(filtered_df)} stored reference surfaces")
     
     st.markdown(f"### {tab_name}")
     tab_handler = tab_class(data_manager, filtered_df)

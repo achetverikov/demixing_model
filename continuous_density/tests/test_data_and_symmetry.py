@@ -170,6 +170,20 @@ def test_resumable_shard_helpers_verify_and_assemble(tmp_path):
     assert not list(tmp_path.glob('.*.tmp'))
 
 
+def test_resumable_shards_are_bound_to_simulation_code(tmp_path):
+    from continuous_density import generate_training_data as gen
+
+    first = tmp_path / 'first.py'
+    second = tmp_path / 'second.py'
+    first.write_text('VALUE = 1\n')
+    second.write_text('VALUE = 2\n')
+    before = gen._code_digest((first, second))
+    assert before == gen._code_digest((second, first))
+
+    second.write_text('VALUE = 3\n')
+    assert gen._code_digest((first, second)) != before
+
+
 def test_load_explicit_design_file(tmp_path):
     from continuous_density import generate_training_data as gen
 

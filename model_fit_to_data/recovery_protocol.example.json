@@ -1,0 +1,37 @@
+{
+  "schema": "wnm_recovery_protocol/1",
+  "surrogate": {
+    "family": "wnm",
+    "n_samples": 20
+  },
+  "objectives": [
+    "likelihood",
+    "expectation",
+    "smoothed_exp",
+    "density",
+    "density_legacy",
+    "crps",
+    "balanced_crps",
+    "bias_weighted_crps"
+  ],
+  "n_starts": 64,
+  "seed": 20260911,
+  "n_replicates": 3,
+  "trial_counts": [400, 2000],
+  "fit_motor": false,
+  "target": {
+    "emp_density_weights_sd": 20.0,
+    "density_smoothing_sigma": null,
+    "density_bandwidth_rule": "sj",
+    "density_bandwidth_mode": "pooled",
+    "corr_weight": 0.25
+  },
+  "cases": [
+    {
+      "name": "crossed_feature_noise",
+      "condition_feature_sds": [[15.0, 45.0], [60.0, 20.0]],
+      "sd_spat": 25.0,
+      "sd_motor": 0.0
+    }
+  ]
+}

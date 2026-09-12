@@ -11,7 +11,9 @@ import numpy as np
 from abc import ABC, abstractmethod
 
 from core.plotting import plot_surface, plot_3d, compare_surfaces, compare_expectations
+from core.plotting import plot_wnm_curves, plot_wnm_density
 from core.surface_selector import SurfaceSelector, SingleSurfaceSelector
+from core.wnm_view import evaluate_predictor, load_wnm_predictor
 from components.sidebar import show_surface_info, show_debug_info
 from browser_utils.url_state import state_manager
 
@@ -34,6 +36,62 @@ class BaseTab(ABC):
             st.warning(f"Need at least {min_count} surface(s). Current: {len(self.filtered_df)}")
             return False
         return True
+
+
+@st.cache_resource
+def _cached_wnm_predictor(n_samples):
+    return load_wnm_predictor(n_samples)
+
+
+class WNMTab(BaseTab):
+    """Continuous WNM view, with stored surfaces retained as references."""
+
+    def render(self):
+        st.header("On-demand wrapped-mixture prediction")
+        st.markdown(
+            "Evaluate the packaged WNM directly at continuous noise parameters. "
+            "A stored averaged surface can be selected as an empirical reference; "
+            "it is not used to construct the WNM prediction.")
+        n_samples = st.selectbox("Observer samples", (20, 100), key="wnm_n_samples")
+        predictor = _cached_wnm_predictor(n_samples)
+        modes = (["Continuous input", "Stored-surface reference"]
+                 if len(self.filtered_df) else ["Continuous input"])
+        mode = st.radio(
+            "Parameters", modes,
+            horizontal=True, key="wnm_parameter_mode")
+
+        reference = None
+        if mode == "Stored-surface reference":
+            rows = self.filtered_df.reset_index(drop=True)
+            selected = st.selectbox(
+                "Reference surface", range(len(rows)),
+                format_func=lambda i: (
+                    f"sf1={rows.iloc[i].sd_feat1:.1f}, "
+                    f"sf2={rows.iloc[i].sd_feat2:.1f}, sp={rows.iloc[i].sd_spat:.1f}"
+                ), key="wnm_reference_surface")
+            row = rows.iloc[selected]
+            parameters = (row.sd_feat1, row.sd_feat2, row.sd_spat)
+            reference = self.data_manager.load_surface(row)
+            feat_diff = reference.feat_diff_grid if reference is not None else None
+        else:
+            columns = st.columns(3)
+            parameters = []
+            for column, name in zip(columns, ("sd_feat1", "sd_feat2", "sd_spat")):
+                low, high = predictor.domain[name]
+                with column:
+                    parameters.append(st.number_input(
+                        name, min_value=float(low), max_value=float(high),
+                        value=float(np.sqrt(low * high)), step=0.5,
+                        key=f"wnm_{name}"))
+            parameters = tuple(parameters)
+            feat_diff = None
+
+        view = evaluate_predictor(predictor, parameters, feat_diff=feat_diff)
+        st.caption(
+            f"{view.identity['dm_version']} · n={view.identity['surrogate_n_samples']} · "
+            f"sf1={parameters[0]:.2f}, sf2={parameters[1]:.2f}, sp={parameters[2]:.2f}")
+        st.plotly_chart(plot_wnm_density(view, reference), use_container_width=True)
+        st.plotly_chart(plot_wnm_curves(view), use_container_width=True)
 
 
 class SingleTab(BaseTab):

@@ -45,6 +45,24 @@ def _design_digest(design: np.ndarray) -> str:
     return hashlib.sha256(np.ascontiguousarray(design).view(np.uint8)).hexdigest()
 
 
+def _code_digest(paths=None) -> str:
+    """Digest every in-repository source that can change generated shards."""
+    root = Path(__file__).resolve().parents[1]
+    paths = paths or (
+        Path(__file__),
+        root / 'continuous_density' / 'design.py',
+        root / 'continuous_density' / 'sim_interface.py',
+        root / 'surface_computation' / 'jax_fit_main.py',
+        root / 'surface_computation' / 'jax_fit_functions.py',
+    )
+    digest = hashlib.sha256()
+    for path in sorted(map(Path, paths), key=lambda item: str(item.resolve())):
+        content = path.read_bytes()
+        digest.update(len(content).to_bytes(8, 'big'))
+        digest.update(content)
+    return digest.hexdigest()
+
+
 def _chunk_ranges(size: int, chunk_size: int):
     return [(start, min(start + chunk_size, size))
             for start in range(0, size, chunk_size)]
@@ -212,6 +230,7 @@ def main():
     shard_dir.mkdir(parents=True, exist_ok=True)
     signature = {
         'format_version': 2,
+        'simulation_code_sha256': _code_digest(),
         'design_sha256': _design_digest(design),
         'n_rows': len(design), 'n_simulations': args.n_simulations,
         'n_samples': args.n_samples, 'fix_weights': args.fix_weights,

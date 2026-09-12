@@ -135,14 +135,57 @@ The included models were trained on circular 360° model geometry over `sd_feat1
 
 Averaged surfaces are intermediate files produced by the original simulations. They are **not included in the repository and are not currently available as downloads**. You do not need them to fit data or generate the standard predictions described above. They are needed only to inspect the simulation output directly, study the secondary mixture component, or retrain the model.
 
-If surfaces are available locally, point the tools at their artifact root:
+The browser can evaluate the packaged wrapped-normal mixture (WNM) directly at
+continuous parameter values. It does not need averaged surfaces for this view:
+
+```bash
+streamlit run surface_browser/main_app.py
+```
+
+If averaged surfaces are available locally, point the browser at their artifact
+root to enable the stored-surface views and compare a direct WNM prediction with
+the simulated surface at the same parameter triple:
 
 ```bash
 DEMIXING_ARTIFACT_ROOT=/path/to/artifacts \
   streamlit run surface_browser/main_app.py
 ```
 
-The surface browser is intended for researchers who already generated or received these files. If compressed files are used, the selected directory must be writable because the browser extracts individual surfaces as needed.
+The stored-surface views are intended for researchers who already generated or
+received these files. If compressed files are used, the selected directory must
+be writable because the browser extracts individual surfaces as needed. The WNM
+view evaluates the packaged model directly; it never reads a corpus-derived or
+interpolated surface.
+
+### Standardized WNM recovery
+
+`model_fit_to_data/standardized_recovery.py` runs the maintained closed-loop
+parameter-recovery protocol. It generates each simulated dataset once, fits all
+requested objectives from the same deterministic starts, canonically rescores
+each fit under every supported objective, and writes parameter and
+dissimilarity-stratified curve tables. Copy
+`model_fit_to_data/recovery_protocol.example.json`, adjust the cases and trial
+counts, then run:
+
+```bash
+JAX_PLATFORMS=cpu python model_fit_to_data/standardized_recovery.py \
+  --protocol model_fit_to_data/recovery_protocol.example.json \
+  --out /path/to/artifacts/recovery/run_name
+```
+
+The output manifest records the normalized protocol, WNM artifact identity,
+checkpoint digest, optimizer identity, and a digest of every relevant source
+file. Whole-fit checkpoints are resumed only when those identities still match.
+The artifact includes run, long-form parameter, parameter-summary, and curve
+tables plus standardized parameter-recovery and curve-comparison plots.
+The default `wnm_closed_loop` source draws from WNM itself. For recovery against
+the actual simulator, set `dataset_source.kind` to `npz` and provide a directory
+of simulator outputs named by the protocol pattern; each file contains `c0`,
+`c1`, ... arrays of `[feature_difference, bias]` trials. Both sources then pass
+through the identical targets, starts, fits, rescoring, tables, and plots.
+Full recovery artifacts belong outside the repository under
+`$DEMIXING_ARTIFACT_ROOT`; the JSON file in the repository is a protocol example,
+not a completed panel.
 
 The complete research pipeline is:
 
