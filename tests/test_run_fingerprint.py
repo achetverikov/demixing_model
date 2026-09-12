@@ -90,9 +90,12 @@ def test_compiled_fingerprint_pins_bundle_products(run_files, tmp_path):
         checkpoint_path=checkpoint, continuous_spec={"n_starts": 8},
         skip_motor_noise=True,
         evaluation_methods=["density", "smoothed_exp", "likelihood",
-                            "bias_weighted_crps"], corr_weight=0.25)
+                            "bias_weighted_crps"], corr_weight=0.25,
+        density_curve_spec={"emp_density_weights_sd": 20.0,
+                            "density_smoothing_sigma": None})
     assert payload["bundle_id"] == "b1"
     assert payload["empirical_targets_sha256"] == "targets"
+    assert payload["density_curve_spec"]["emp_density_weights_sd"] == 20.0
     changed = dict(payload, bundle_id="b2")
     assert rf.fingerprint_digest(changed) != rf.fingerprint_digest(payload)
 

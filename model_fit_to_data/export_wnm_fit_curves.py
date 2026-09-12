@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from model_fit_to_data.run_fingerprint import file_sha256, read_fingerprint_sidecar
+from model_fit_to_data.fit_model_to_data import DENSITY_CURVE_SPEC
 from shared import surrogate
 from shared.config import config
 from shared.prediction import mixture_plot_curves, predictor_from_surrogate
@@ -47,7 +48,7 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
         surrogate.load_surrogate(checkpoint_path=checkpoint))
     identity = predictor.identity().as_dict()
     feat_grid = np.asarray(config.create_grid("feat_diff"), dtype=np.float32)
-    density_curve_spec = payload["density_curve_spec"]
+    density_curve_spec = payload.get("density_curve_spec", DENSITY_CURVE_SPEC)
     matmul_precision = payload["continuous_spec"]["matmul_precision"]
 
     rows = []
@@ -68,7 +69,8 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
                     emp_density_weights_sd=density_curve_spec["emp_density_weights_sd"],
                     density_smoothing_sigma=density_curve_spec["density_smoothing_sigma"],
                     feature_operators=operator[None, :, :],
-                    density_bandwidths=[bandwidth])
+                    density_bandwidths=[bandwidth],
+                    operator_feature_coordinates=empirical["prediction_coordinates"])
             for index, x_model in enumerate(feat_grid):
                 rows.append({
                     "condition": condition, "optimizer": method,

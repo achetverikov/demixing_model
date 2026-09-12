@@ -616,6 +616,7 @@ def process_subject(
                 'matched_density_target': optimizer.targets.matched_density_target[i],
                 'feature_operator': optimizer.targets.feature_operator[i],
                 'density_bandwidth': optimizer.targets.density_bandwidth[i],
+                'prediction_coordinates': optimizer.targets.prediction_coordinates,
             })
 
     method_results = {}
@@ -1135,7 +1136,8 @@ def run_compiled_fitting(
         continuous_spec=optimizer.search_spec(),
         skip_motor_noise=skip_motor_noise,
         evaluation_methods=COMPILED_EVALUATION_METHODS,
-        corr_weight=corr_weight)
+        corr_weight=corr_weight,
+        density_curve_spec=DENSITY_CURVE_SPEC)
     Path(resolved_output).mkdir(exist_ok=True, parents=True)
     if force_refit:
         existing_results = {}

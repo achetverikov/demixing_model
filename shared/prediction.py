@@ -677,7 +677,7 @@ class SurfacePredictor(BiasPredictor):
 def mixture_plot_curves(predictor, params_by_row, feat_grid, bin_weights=None,
                         sd_motor_by_row=None, emp_density_weights_sd=20.0,
                         density_smoothing_sigma=None, feature_operators=None,
-                        density_bandwidths=None):
+                        density_bandwidths=None, operator_feature_coordinates=None):
     """The four curve families the subject plots draw, for a mixture fit.
 
     The surface backend derives these by integrating its 180-row grid; the
@@ -707,11 +707,13 @@ def mixture_plot_curves(predictor, params_by_row, feat_grid, bin_weights=None,
             target, so a fit run at one sigma and plotted at another shows a
             curve the fit never optimised, with nothing in the plot to say so.
             The caller holds the fit record; this function cannot check it.
-        feature_operators: optional ``(n_rows, n_feat, n_feat)`` observed-design
-            operators. When supplied, bias and asymmetry are exactly the
-            recovery-selected fitted curves rather than legacy grid smoothing.
+        feature_operators: optional ``(n_rows, n_feat, n_coordinates)``
+            observed-design operators. When supplied, bias and asymmetry are
+            exactly the fitted curves rather than legacy grid smoothing.
         density_bandwidths: pooled-SJ bias KDE SD per row. Required together
             with ``feature_operators`` for the matched density curve.
+        operator_feature_coordinates: exact coordinates consumed by the last
+            operator dimension. Defaults to ``feat_grid`` for grid-based runs.
 
     Returns:
         ``{"bias", "asymmetry", "sd"}`` each ``(n_rows, n_feat)``, plus
@@ -736,10 +738,12 @@ def mixture_plot_curves(predictor, params_by_row, feat_grid, bin_weights=None,
     if feature_operators is not None:
         feature_operators = np.asarray(feature_operators, dtype=np.float32)
         density_bandwidths = np.asarray(density_bandwidths, dtype=np.float32)
-        if feature_operators.shape != (n_rows, len(feat_grid), len(feat_grid)):
+        operator_grid = (feat_grid if operator_feature_coordinates is None else
+                         jnp.asarray(operator_feature_coordinates, dtype=jnp.float32))
+        if feature_operators.shape != (n_rows, len(feat_grid), len(operator_grid)):
             raise ValueError(
                 "feature_operators must have shape "
-                f"{(n_rows, len(feat_grid), len(feat_grid))}, got {feature_operators.shape}")
+                f"{(n_rows, len(feat_grid), len(operator_grid))}, got {feature_operators.shape}")
         if density_bandwidths.shape != (n_rows,):
             raise ValueError(
                 f"density_bandwidths must have shape {(n_rows,)}, got {density_bandwidths.shape}")
@@ -772,13 +776,20 @@ def mixture_plot_curves(predictor, params_by_row, feat_grid, bin_weights=None,
                     rows, validate=False, sd_motor=motor), smoothing)))
         else:
             operator = jnp.asarray(feature_operators[index])
-            radians = jnp.radians(mean)
+            operator_rows = jnp.stack([
+                jnp.full(operator_grid.shape, float(sd_feat1), jnp.float32),
+                jnp.full(operator_grid.shape, float(sd_feat2), jnp.float32),
+                jnp.full(operator_grid.shape, float(sd_spat), jnp.float32),
+                operator_grid], axis=-1)
+            operator_mean, operator_resultant = predictor.mean_and_resultant(
+                operator_rows, validate=True, sd_motor=motor)
+            radians = jnp.radians(operator_mean)
             bias.append(np.asarray(jnp.degrees(jnp.arctan2(
-                operator @ (resultant * jnp.sin(radians)),
-                operator @ (resultant * jnp.cos(radians))))))
+                operator @ (operator_resultant * jnp.sin(radians)),
+                operator @ (operator_resultant * jnp.cos(radians))))))
             kde_motor = jnp.hypot(motor, density_bandwidths[index])
             asymmetry.append(np.asarray(operator @ predictor.signed_arc_asymmetry(
-                rows, validate=False, sd_motor=kde_motor)))
+                operator_rows, validate=False, sd_motor=kde_motor)))
         circular_sd.append(np.asarray(
             predictor.circular_sd(rows, validate=False, sd_motor=motor)))
         if bin_weights is not None:

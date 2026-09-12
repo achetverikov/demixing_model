@@ -199,6 +199,20 @@ def test_selected_curve_inputs_must_be_paired(predictor, feat_grid):
                             feature_operators=operators)
 
 
+def test_observed_design_operator_can_use_exact_coordinates(predictor, feat_grid):
+    coordinates = np.array([3.25, 17.5, 44.75], dtype=np.float32)
+    operator = np.zeros((1, len(feat_grid), len(coordinates)), dtype=np.float32)
+    operator[0, 0, 0] = 1
+    operator[0, 1, 1] = 1
+    operator[0, 2, 2] = 1
+    bundle = mixture_plot_curves(
+        predictor, PARAMS[:1], feat_grid, feature_operators=operator,
+        density_bandwidths=[5.0], operator_feature_coordinates=coordinates)
+    assert bundle["bias"].shape == (1, len(feat_grid))
+    assert bundle["asymmetry"].shape == (1, len(feat_grid))
+    assert np.isfinite(bundle["bias"][0, :3]).all()
+
+
 def test_the_smoother_width_follows_the_empirical_weights(predictor, feat_grid):
     default = mixture_plot_curves(predictor, PARAMS, feat_grid)
     wider = mixture_plot_curves(predictor, PARAMS, feat_grid,

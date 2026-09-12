@@ -293,7 +293,7 @@ def compute_run_fingerprint(
 
 def compute_compiled_run_fingerprint(
     *, bundle_path, bundle_manifest, checkpoint_path, continuous_spec,
-    skip_motor_noise, evaluation_methods, corr_weight,
+    skip_motor_noise, evaluation_methods, corr_weight, density_curve_spec,
 ) -> Dict[str, Any]:
     """Identify a WNM run whose complete empirical contract is a compiled bundle."""
     bundle_path = Path(bundle_path)
@@ -324,6 +324,7 @@ def compute_compiled_run_fingerprint(
         "continuous_spec": {
             key: continuous_spec[key] for key in sorted(continuous_spec)
         },
+        "density_curve_spec": dict(density_curve_spec),
         "motor": motor,
         "corr_weight": float(corr_weight),
     }

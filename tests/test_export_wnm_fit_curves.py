@@ -21,6 +21,7 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
                 "density_bandwidth": 7.5,
                 "target_bias_curve": np.array([1.0, 2.0]),
                 "matched_density_target": np.array([0.1, 0.2]),
+                "prediction_coordinates": np.array([1.0, 2.0]),
             },
             "density_fitted_params": np.array([10.0, 20.0, 30.0, 0.0]),
         }
@@ -50,6 +51,7 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
     def fake_curves(_predictor, params, feat_grid, **kwargs):
         np.testing.assert_array_equal(kwargs["feature_operators"], operator[None, :, :])
         np.testing.assert_array_equal(kwargs["density_bandwidths"], [7.5])
+        np.testing.assert_array_equal(kwargs["operator_feature_coordinates"], [1.0, 2.0])
         assert kwargs["emp_density_weights_sd"] == 15.0
         assert kwargs["density_smoothing_sigma"] == 6.0
         assert params.shape == (1, 3)
