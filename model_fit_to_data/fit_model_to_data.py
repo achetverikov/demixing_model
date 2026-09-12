@@ -374,6 +374,50 @@ def group_conditions(
     return groups
 
 
+def _validate_continuous_feature_domain(frame, x_col, y_col, high):
+    scored = frame[y_col].notna() & np.isfinite(frame[x_col])
+    above = scored & frame[x_col].gt(high)
+    if above.any():
+        values = frame.loc[above, x_col]
+        raise ValueError(
+            f"{len(values)} signed-bias rows exceed the circular half-period/model maximum "
+            f"{high:g} (maximum {values.max():.6g})")
+
+
+def plan_continuous_prediction_capacities(subject_groups, optimizer, x_col, y_col,
+                                          angle_scale_to_model, max_span=64):
+    """Plan exact-coordinate compile shapes from this run's observed workload."""
+    from contextual_biases_database.bucketing import plan_workload_buckets
+
+    high = optimizer.predictor.domain["feat_diff"][1] / angle_scale_to_model
+    groups = []
+    for group_id, conditions in subject_groups.items():
+        coordinate_count = 0
+        n_conditions = 0
+        for frame in conditions.values():
+            _validate_continuous_feature_domain(frame, x_col, y_col, high)
+            frame = frame[frame[x_col].gt(0) & frame[x_col].lt(high)]
+            clean = filter_data_for_fitting(
+                frame, feat_diff_col=x_col, bias_col=y_col, verbose=False,
+                min_diss=0.0, max_diss=high)
+            # Current WNM objectives are fitted in signed-bias space. Direction
+            # toward context is undefined at zero and non-unique at half-period;
+            # canonical bundles encode this as an absent bias value. Apply the
+            # same population rule while legacy CSVs remain supported.
+            if len(clean) < 10:
+                continue
+            coordinates = clean[x_col].to_numpy(copy=True) * angle_scale_to_model
+            coordinate_count += len(np.unique(coordinates.astype(np.float32)))
+            n_conditions += 1
+        if n_conditions:
+            fit_motor = not optimizer.skip_motor_noise
+            signature = ("wnm-exact", n_conditions,
+                         2 * n_conditions + 1 + int(fit_motor))
+            groups.append((group_id, signature, coordinate_count))
+    assignments = plan_workload_buckets(groups, max_span=max_span)
+    return {assignment.group_id: assignment for assignment in assignments}
+
+
 def evaluate_parameter_losses(
     optimizer,
     params_by_condition: jnp.ndarray,
@@ -442,25 +486,35 @@ def process_subject(
     circ_space: int = 360,
     progress: Optional[Progress] = None,
     curve_source=None,
+    prediction_capacity: Optional[int] = None,
 ) -> Dict:
     methods_to_run = missing_methods if missing_methods is not None else methods
     log(f"\nProcessing {subject_id}: {len(subject_conditions)} condition(s)" +
         (f" (adding: {', '.join(methods_to_run)})" if missing_methods else ""), "bold cyan")
 
-    # Clamp dissimilarity in the input space to the MODEL-space grid range so the
-    # effective floor/ceiling is identical across datasets (the legacy raw-space
-    # 4/180 made the floor period-dependent: 8° model for 180° data, 4° for 360°).
-    # clip commutes with the positive angle scaling applied just below, so raw
-    # bounds = model bounds / scale == clamping model-space to feat_diff_range.
-    # See codex_audit.md report-level #3.
+    # WNM predictions are analytic at the observed coordinate, including below
+    # the old surface grid's 2-degree floor. The surface backend retains its grid
+    # clamp. Canonical bundles will make this selection upstream; this branch is
+    # the transitional reader for existing CSV inputs.
     from shared.config import config as _cfg
-    min_diss = _cfg.feat_diff_range[0] / angle_scale_to_model
-    max_diss = _cfg.feat_diff_range[1] / angle_scale_to_model
+    if isinstance(optimizer, ContinuousEngine):
+        min_diss = 0.0
+        max_diss = optimizer.predictor.domain["feat_diff"][1] / angle_scale_to_model
+    else:
+        min_diss = _cfg.feat_diff_range[0] / angle_scale_to_model
+        max_diss = _cfg.feat_diff_range[1] / angle_scale_to_model
 
     # Filter and convert each condition to a JAX array
     condition_datasets = {}
     for cond_key, cond_df in subject_conditions.items():
-        clean = filter_data_for_fitting(cond_df, feat_diff_col=x_col, bias_col=y_col, verbose=False,
+        fit_input = cond_df
+        if isinstance(optimizer, ContinuousEngine):
+            _validate_continuous_feature_domain(
+                cond_df, x_col, y_col, max_diss)
+            fit_input = cond_df[
+                cond_df[x_col].gt(0)
+                & cond_df[x_col].lt(max_diss)]
+        clean = filter_data_for_fitting(fit_input, feat_diff_col=x_col, bias_col=y_col, verbose=False,
                                         min_diss=min_diss, max_diss=max_diss)
         if len(clean) < 10:
             log(f"  Skipping {cond_key}: only {len(clean)} valid trials after filtering.", "yellow")
@@ -495,7 +549,11 @@ def process_subject(
         emp_motor_cap = float(max(0.1, min(emp_motor_cap, 50.0)))
         log(f"  Empirical motor-noise cap (min-condition error SD ×1.1): {emp_motor_cap:.1f}° (model space)", "cyan")
 
-    optimizer.update_dataset(condition_datasets)
+    if isinstance(optimizer, ContinuousEngine):
+        optimizer.update_dataset(
+            condition_datasets, prediction_capacity=prediction_capacity)
+    else:
+        optimizer.update_dataset(condition_datasets)
 
     empirical_curves = {
         cond: {
@@ -878,6 +936,13 @@ def run_fitting(
             f"(cache {curve_cache_key}).", "green")
 
     subject_groups = group_conditions(df, exp_col, subject_col, condition_col, min_trials)
+    prediction_buckets = {}
+    if continuous_engine is not None:
+        prediction_buckets = plan_continuous_prediction_capacities(
+            subject_groups, continuous_engine, x_col, y_col, angle_scale_to_model)
+        capacities = sorted({assignment.capacity for assignment in prediction_buckets.values()})
+        log(f"Exact WNM prediction capacities: {capacities} "
+            f"(observed-range-v1, maximum within-bucket span 64).", "cyan")
     n_total = min(len(subject_groups), max_subjects) if max_subjects else len(subject_groups)
     log(f"Subject x experiment groups: {n_total} | Completed: {len(completed)} | "
         f"Remaining: {n_total - len(completed)}\n", "bold")
@@ -955,6 +1020,8 @@ def run_fitting(
                     circ_space=circ_space,
                     progress=active_progress,
                     curve_source=curve_source,
+                    prediction_capacity=(prediction_buckets[subject_id].capacity
+                                         if subject_id in prediction_buckets else None),
                 )
                 existing_results.update(results)
                 n_done += 1

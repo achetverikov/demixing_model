@@ -111,6 +111,44 @@ def predicted_matched_mean_bias(predictor, sd_feat1, sd_feat2, sd_spat,
     return jnp.degrees(jnp.arctan2(imaginary, real))
 
 
+def packed_curve_loss(method, predictor, parameters, coordinates, condition_index,
+                      feature_operator, target, support, density_bandwidth, *,
+                      curve_losses, fit_motor=False):
+    """Joint exact-coordinate loss with all participant data passed dynamically.
+
+    The operator has shape ``(conditions, feature_bins, capacity)``. Padding
+    columns are exactly zero, so their legal dummy coordinate cannot contribute.
+    Keeping these arrays as explicit arguments lets one compiled optimizer serve
+    every group in the same workload-derived capacity bucket.
+    """
+    if method not in ("density", "smoothed_exp"):
+        raise ValueError(f"packed curve loss does not implement {method!r}")
+    n_conditions = feature_operator.shape[0]
+    shared_spatial = parameters[2 * n_conditions]
+    rows = jnp.column_stack((
+        parameters[2 * condition_index],
+        parameters[2 * condition_index + 1],
+        jnp.full_like(coordinates, shared_spatial),
+        coordinates,
+    ))
+    fitted_motor = parameters[2 * n_conditions + 1] if fit_motor else None
+
+    if method == "smoothed_exp":
+        moment = predictor.first_moment(rows, validate=False, sd_motor=fitted_motor)
+        pooled = jnp.einsum("cfu,u->cf", feature_operator, moment)
+        predicted = jnp.degrees(jnp.angle(pooled))
+        return jnp.sum(curve_losses(
+            predicted, target, loss_type="mse", is_angular=True, weights=support))
+
+    model_motor = fitted_motor if fit_motor else predictor.sd_motor
+    kde_motor = jnp.hypot(jnp.asarray(model_motor), density_bandwidth[condition_index])
+    predicted_raw = predictor.signed_arc_asymmetry(
+        rows, validate=False, sd_motor=kde_motor)
+    predicted = jnp.einsum("cfu,u->cf", feature_operator, predicted_raw)
+    return jnp.sum(curve_losses(
+        predicted, target, loss_type="ccc", is_angular=False))
+
+
 def validate_feature_grid(feat_diff_grid, predictor=None):
     """Check the fixed feature grid once, before any fitting.
 
@@ -224,8 +262,12 @@ def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_fe
                 "density target; a density objective cannot be fit against it. This is "
                 "scoped to the density objectives -- likelihood and CRPS are unaffected.")
         if is_matched:
+            prediction_coordinates = (
+                targets.prediction_coordinates
+                if targets.feature_coordinate_mode == "exact"
+                else feat_diff_grid)
             predicted = predicted_matched_density_curve(
-                predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid,
+                predictor, sd_feat1, sd_feat2, sd_spat, prediction_coordinates,
                 targets.feature_operator[condition_index],
                 targets.density_bandwidth[condition_index], sd_motor=sd_motor)
             target = targets.matched_density_target[condition_index]
@@ -249,12 +291,17 @@ def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_fe
                             weights=targets.bias_weights[condition_index][None, :])[0]
 
     if method == "smoothed_exp":
+        prediction_coordinates = (
+            targets.prediction_coordinates
+            if targets.feature_coordinate_mode == "exact"
+            else feat_diff_grid)
         predicted = predicted_matched_mean_bias(
-            predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid,
+            predictor, sd_feat1, sd_feat2, sd_spat, prediction_coordinates,
             targets.feature_operator[condition_index], sd_motor=sd_motor)
         return curve_losses(predicted[None, :],
                             targets.target_bias_curve[condition_index][None, :],
-                            loss_type="mse", is_angular=True)[0]
+                            loss_type="mse", is_angular=True,
+                            weights=targets.smoothed_support[condition_index][None, :])[0]
 
     if method in ("balanced_crps", "bias_weighted_crps"):
         probabilities = predicted_cell_probabilities(

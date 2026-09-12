@@ -158,13 +158,18 @@ def minimize_continuous(objective: Callable, bounds: Sequence[tuple],
                         matmul_precision: str = DEFAULT_MATMUL_PRECISION,
                         max_iterations: int = 500, tolerance: float = 1e-9,
                         gradient_tolerance: float = 1e-6,
-                        jit: bool = True) -> ContinuousFit:
+                        jit: bool = True, objective_args: tuple = (),
+                        solver_cache: Optional[dict] = None,
+                        solver_key=None) -> ContinuousFit:
     """Minimise ``objective`` over ``bounds`` with bounded L-BFGS-B in log space.
 
     Args:
         objective: JAX-traceable, taking a ``(n_params,)`` array in natural units
-            and returning a scalar loss. It must be differentiable; if it indexes
-            a grid or takes an argmin, this is the wrong search for it.
+            followed by ``objective_args`` and returning a scalar loss. It must be
+            differentiable; if it indexes a grid or takes an argmin, this is the
+            wrong search for it. Arrays that vary between participants belong in
+            ``objective_args`` rather than the closure, so equal padded shapes can
+            reuse one compilation.
         bounds: ``(low, high)`` per parameter, in natural units. All must be
             strictly positive, since the search works in log space.
         names: parameter names, for boundary reporting.
@@ -206,21 +211,29 @@ def minimize_continuous(objective: Callable, bounds: Sequence[tuple],
     if not jit:
         raise ValueError("BatchedLbfgsb is a JIT optimizer; jit=False is not supported")
 
-    def in_log(log_params):
-        return objective(jnp.exp(log_params))
+    objective_args = tuple(objective_args)
+
+    def in_log(log_params, *data):
+        return objective(jnp.exp(log_params), *data)
 
     array_dtype = jnp.float32
-    solver = BatchedLbfgsb(
-        in_log,
-        jnp.asarray(np.log(bounds[:, 0]), dtype=array_dtype),
-        jnp.asarray(np.log(bounds[:, 1]), dtype=array_dtype),
-        maxiter=max_iterations, ftol=tolerance, gtol=gradient_tolerance)
+    if solver_cache is not None and solver_key is not None and solver_key in solver_cache:
+        solver = solver_cache[solver_key]
+    else:
+        solver = BatchedLbfgsb(
+            in_log,
+            jnp.asarray(np.log(bounds[:, 0]), dtype=array_dtype),
+            jnp.asarray(np.log(bounds[:, 1]), dtype=array_dtype),
+            maxiter=max_iterations, ftol=tolerance, gtol=gradient_tolerance)
+        if solver_cache is not None and solver_key is not None:
+            solver_cache[solver_key] = solver
     starts = dispersed_starts(bounds, n_starts, seed)
     outcomes = []
     with jax.default_matmul_precision(matmul_precision):
         for first in range(0, n_starts, batch_size):
             batch_starts = starts[first:first + batch_size]
-            result = solver.run(jnp.asarray(np.log(batch_starts), dtype=array_dtype))
+            result = solver.run(jnp.asarray(np.log(batch_starts), dtype=array_dtype),
+                                *objective_args)
             natural = jnp.clip(jnp.exp(result.x),
                                jnp.asarray(bounds[:, 0], dtype=array_dtype),
                                jnp.asarray(bounds[:, 1], dtype=array_dtype))
@@ -228,8 +241,10 @@ def minimize_continuous(objective: Callable, bounds: Sequence[tuple],
             # Natural-unit clipping is needed because exp(log(high)) can round a
             # float32 endpoint just outside its declared scientific bound. Keep
             # every stored loss tied to the stored, clipped parameters.
-            losses = np.asarray(jax.device_get(jax.vmap(objective)(natural)),
-                                dtype=np.float64)
+            in_axes = (0,) + (None,) * len(objective_args)
+            losses = np.asarray(jax.device_get(
+                jax.vmap(objective, in_axes=in_axes)(natural, *objective_args)),
+                dtype=np.float64)
             statuses = np.asarray(jax.device_get(result.status), dtype=np.int32)
             iterations = np.asarray(jax.device_get(result.iterations), dtype=np.int32)
             evaluations = np.asarray(jax.device_get(result.evaluations), dtype=np.int32)

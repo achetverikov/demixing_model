@@ -35,8 +35,8 @@ from continuous_optimizer import (build_bounds, condition_parameter_layout,
                                   OPTIMIZER_VERSION,
                                   minimize_continuous)
 from shared import surrogate as surrogate_module
-from wnm_scoring import MEAN_ONLY_METHODS, SUPPORTED_METHODS, score_all_conditions, \
-    validate_feature_grid
+from wnm_scoring import (MEAN_ONLY_METHODS, SUPPORTED_METHODS, packed_curve_loss,
+                         score_all_conditions, validate_feature_grid)
 
 
 def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
@@ -47,7 +47,8 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
                    sd_motor: float = 0.0, fit_motor: bool = False,
                    sd_motor_bounds=(0.1, 50.0), n_starts: int = DEFAULT_N_STARTS,
                    seed: int = 0,
-                   verbosity: int = 1) -> Dict:
+                   verbosity: int = 1, solver_cache=None,
+                   sub_support_summary=None) -> Dict:
     """Bounded multistart gradient fit, in the shape the other backends return.
 
     Args:
@@ -100,17 +101,68 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
     bounds = build_bounds(n_conditions, bounds_by_axis["sd_feat"], bounds_by_axis["sd_spat"],
                           motor_bounds=tuple(sd_motor_bounds) if fit_motor else None)
 
-    def objective_fn(parameters):
-        return score_all_conditions(
-            objective, predictor, targets, parameters, curve_losses=curve_losses,
-            energy_score=energy_score, d_circ_matrix=d_circ_matrix,
-            feat_diff_grid=feat_diff_grid,
-            emp_density_weights_sd=emp_density_weights_sd,
-            density_smoothing_sigma=density_smoothing_sigma, corr_weight=corr_weight,
-            condition_trials=condition_trials, fit_motor=fit_motor)
+    packed = (targets.feature_coordinate_mode == "exact"
+              and objective in ("density", "smoothed_exp"))
+    if packed:
+        if objective == "density" and np.any(targets.matched_density_degenerate):
+            names_ = [targets.condition_names[index] for index in
+                      np.flatnonzero(targets.matched_density_degenerate)]
+            raise ValueError(
+                f"constant matched-density target in conditions {names_}; a density "
+                "objective cannot be fit against it")
+        packed_target = (targets.matched_density_target if objective == "density"
+                         else targets.target_bias_curve)
+        objective_args = (
+            targets.prediction_coordinates,
+            targets.prediction_condition_index,
+            targets.feature_operator,
+            packed_target,
+            targets.smoothed_support,
+            jnp.asarray(targets.density_bandwidth, dtype=jnp.float32),
+        )
+
+        def objective_fn(parameters, *data):
+            return packed_curve_loss(
+                objective, predictor, parameters, *data,
+                curve_losses=curve_losses, fit_motor=fit_motor)
+
+        solver_key = (
+            objective, n_conditions, targets.prediction_capacity, fit_motor,
+            float(sd_motor), tuple(map(tuple, bounds)), n_starts,
+        )
+    else:
+        objective_args = ()
+        solver_key = None
+
+        def objective_fn(parameters):
+            return score_all_conditions(
+                objective, predictor, targets, parameters, curve_losses=curve_losses,
+                energy_score=energy_score, d_circ_matrix=d_circ_matrix,
+                feat_diff_grid=feat_diff_grid,
+                emp_density_weights_sd=emp_density_weights_sd,
+                density_smoothing_sigma=density_smoothing_sigma, corr_weight=corr_weight,
+                condition_trials=condition_trials, fit_motor=fit_motor)
 
     started = time.time()
-    fit = minimize_continuous(objective_fn, bounds, names, n_starts=n_starts, seed=seed)
+    fit = minimize_continuous(
+        objective_fn, bounds, names, n_starts=n_starts, seed=seed,
+        objective_args=objective_args, solver_cache=solver_cache, solver_key=solver_key)
+    sub_support_summary = dict(sub_support_summary or {})
+    fit.settings.update({
+        "feature_coordinate_mode": targets.feature_coordinate_mode,
+        "prediction_coordinate_count": int(targets.prediction_coordinate_count),
+        "prediction_capacity": int(targets.prediction_capacity),
+        "prediction_padding": int(
+            targets.prediction_capacity - targets.prediction_coordinate_count),
+        "compile_bucket_policy": "observed-range-v1:max-span=64",
+        "sub_support_coordinate_policy": "exact_bounded_extrapolation",
+        "sub_support_coordinate_count": int(np.sum(
+            np.asarray(targets.prediction_coordinates)[
+                :targets.prediction_coordinate_count]
+            < predictor.domain["feat_diff"][0])),
+        "sub_support_trial_count": int(sub_support_summary.get("trial_count", 0)),
+        "sub_support_minimum": sub_support_summary.get("minimum"),
+    })
     total_time = time.time() - started
 
     parameters = np.asarray(fit.parameters)
@@ -142,6 +194,12 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
             matched_density_degenerate=np.asarray(
                 targets.matched_density_degenerate)[index][None],
             near_constant_warnings=(),
+            prediction_coordinates=targets.prediction_coordinates,
+            prediction_condition_index=targets.prediction_condition_index,
+            smoothed_support=targets.smoothed_support[index][None, :],
+            prediction_coordinate_count=targets.prediction_coordinate_count,
+            prediction_capacity=targets.prediction_capacity,
+            feature_coordinate_mode=targets.feature_coordinate_mode,
         )
         one_params = [parameters[2 * index], parameters[2 * index + 1], sd_spat]
         if fit_motor:
@@ -202,6 +260,19 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
              'at_bound': list(s.at_bound)}
             for s in fit.starts],
         'search_settings': dict(fit.settings),
+        'prediction_coordinates': {
+            'mode': targets.feature_coordinate_mode,
+            'count': int(targets.prediction_coordinate_count),
+            'capacity': int(targets.prediction_capacity),
+            'padding': int(targets.prediction_capacity - targets.prediction_coordinate_count),
+            'sub_support_policy': 'exact_bounded_extrapolation',
+            'sub_support_count': int(np.sum(
+                np.asarray(targets.prediction_coordinates)[
+                    :targets.prediction_coordinate_count]
+                < predictor.domain["feat_diff"][0])),
+            'sub_support_trial_count': int(sub_support_summary.get("trial_count", 0)),
+            'sub_support_minimum': sub_support_summary.get("minimum"),
+        },
     }
 
 
@@ -262,8 +333,10 @@ class ContinuousEngine:
         self.condition_datasets = None
         self.condition_names = ()
         self.n_conditions = 0
+        self._solver_cache = {}
+        self.sub_support_summary = {"trial_count": 0, "minimum": None}
 
-    def update_dataset(self, condition_datasets):
+    def update_dataset(self, condition_datasets, *, prediction_capacity=None):
         """Rebuild the empirical targets for one subject's conditions."""
         self.condition_datasets = condition_datasets
         self.condition_names = tuple(condition_datasets)
@@ -276,7 +349,24 @@ class ContinuousEngine:
             density_bandwidth_mode=self.density_bandwidth_mode,
             degenerate_targets=self._degenerate_targets,
             bwcrps_condition_targets=self._bwcrps_condition_targets,
-            target_bias_curve_core=self._target_bias_curve_core)
+            target_bias_curve_core=self._target_bias_curve_core,
+            feature_coordinate_mode="exact",
+            prediction_capacity=prediction_capacity)
+        low, high = self.predictor.domain["feat_diff"]
+        real = np.asarray(self.targets.prediction_coordinates)[
+            :self.targets.prediction_coordinate_count]
+        if real.min() <= 0 or real.max() > high:
+            raise ValueError(
+                f"exact signed-bias dissimilarities must be positive and no greater than "
+                f"{high:g}; got [{real.min():.6g}, {real.max():.6g}]")
+        sub_support = np.concatenate([
+            np.asarray(values)[:, 0][np.asarray(values)[:, 0] < low]
+            for values in condition_datasets.values()
+        ])
+        self.sub_support_summary = {
+            "trial_count": int(len(sub_support)),
+            "minimum": float(sub_support.min()) if len(sub_support) else None,
+        }
         for warning in self.targets.near_constant_warnings:
             print(warning)
 
@@ -331,7 +421,9 @@ class ContinuousEngine:
             corr_weight=self.corr_weight, condition_trials=self._trials(),
             sd_motor=sd_motor, fit_motor=fit_motor,
             sd_motor_bounds=(0.1, float(sd_motor_max)),
-            n_starts=self.n_starts, seed=self.seed, verbosity=verbosity)
+            n_starts=self.n_starts, seed=self.seed, verbosity=verbosity,
+            solver_cache=self._solver_cache,
+            sub_support_summary=self.sub_support_summary)
 
     def evaluate(self, params_by_condition, fitting_methods):
         """Every objective's loss per condition, at fixed parameters."""
@@ -377,4 +469,8 @@ class ContinuousEngine:
             "matmul_precision": str(defaults["matmul_precision"].default),
             "optimizer_version": OPTIMIZER_VERSION,
             "motor": "searched" if not self.skip_motor_noise else "fixed_zero",
+            "feature_coordinate_mode": "exact",
+            "compile_bucket_policy": "observed-range-v1:max-span=64",
+            "smoothed_exp_support_weighted": True,
+            "sub_support_coordinate_policy": "exact_bounded_extrapolation",
         }

@@ -207,6 +207,22 @@ def test_a_known_optimum_is_recovered_to_the_precision_floor():
     assert all(start.success for start in fit.starts)
 
 
+def test_runtime_objective_arrays_are_not_captured_in_the_solver():
+    def objective(parameters, truth):
+        return jnp.sum((jnp.log(parameters) - jnp.log(truth)) ** 2)
+
+    cache = {}
+    kwargs = dict(bounds=[(2.5, 200.0)] * 3, names=["a", "b", "c"],
+                  n_starts=6, seed=1, solver_cache=cache, solver_key=(3,))
+    first = minimize_continuous(
+        objective, objective_args=(jnp.asarray([12.0, 45.0, 30.0]),), **kwargs)
+    second = minimize_continuous(
+        objective, objective_args=(jnp.asarray([25.0, 60.0, 80.0]),), **kwargs)
+    np.testing.assert_allclose(first.parameters, [12.0, 45.0, 30.0], rtol=1e-5)
+    np.testing.assert_allclose(second.parameters, [25.0, 60.0, 80.0], rtol=1e-5)
+    assert len(cache) == 1
+
+
 def test_a_railed_solution_is_reported_rather_than_hidden():
     """Bounds are real, not a squashing function.
 

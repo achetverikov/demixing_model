@@ -486,6 +486,10 @@ class WrappedMixturePredictor(BiasPredictor):
     def mean_and_resultant(self, params, validate: bool = True, sd_motor=None):
         return self._wm.mean_and_resultant(self.distribution(params, validate, sd_motor))
 
+    def first_moment(self, params, validate: bool = True, sd_motor=None):
+        """Analytic complex first circular moment, one value per parameter row."""
+        return self._wm.circular_moment(self.distribution(params, validate, sd_motor), 1)
+
     def circular_sd(self, params, validate: bool = True, sd_motor=None):
         return self._wm.circular_sd(self.distribution(params, validate, sd_motor))
 

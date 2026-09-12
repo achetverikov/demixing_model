@@ -19,6 +19,7 @@ operator were added separately for the current WNM and surface objectives.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 import jax
 import jax.numpy as jnp
@@ -70,6 +71,12 @@ class FittingTargets:
     matched_density_target: jnp.ndarray
     matched_density_degenerate: np.ndarray
     near_constant_warnings: tuple
+    prediction_coordinates: Optional[jnp.ndarray] = None
+    prediction_condition_index: Optional[jnp.ndarray] = None
+    smoothed_support: Optional[jnp.ndarray] = None
+    prediction_coordinate_count: int = 0
+    prediction_capacity: int = 0
+    feature_coordinate_mode: str = "snap2"
 
 
 def resolve_density_bandwidths(bias_by_condition, rule: str, mode: str):
@@ -114,7 +121,9 @@ def build_fitting_targets(condition_datasets, feat_diff_grid, d_circ_matrix,
                           n_mu1_bias: int, emp_density_weights_sd: float,
                           density_bandwidth_rule: str, density_bandwidth_mode: str,
                           degenerate_targets, bwcrps_condition_targets,
-                          target_bias_curve_core) -> FittingTargets:
+                          target_bias_curve_core, *,
+                          feature_coordinate_mode: str = "snap2",
+                          prediction_capacity: Optional[int] = None) -> FittingTargets:
     """Build every empirical target from one pass over the conditions' trials.
 
     Args:
@@ -174,27 +183,36 @@ def build_fitting_targets(condition_datasets, feat_diff_grid, d_circ_matrix,
     bandwidths = resolve_density_bandwidths(all_bias_values, density_bandwidth_rule,
                                             density_bandwidth_mode)
 
+    if feature_coordinate_mode not in ("snap2", "exact"):
+        raise ValueError("feature_coordinate_mode must be 'snap2' or 'exact'")
+
     def feature_operator(feat_diff_vals):
         feat = np.asarray(feat_diff_vals)
         grid = np.asarray(feat_diff_grid)
-        weights = np.exp(-0.5 * ((grid[:, None] - feat[None, :])
-                                 / emp_density_weights_sd) ** 2)
-        weights /= weights.sum(axis=1, keepdims=True)
-        indices = np.rint((feat - grid[0]) / config.feat_diff_step).astype(int)
-        # Match the existing surface trial-index contract. Production fitting
-        # filters into the model domain before target construction, but small
-        # simulation/plotting fixtures historically pass 0-degree dummy rows.
-        # Those rows clamp to the nearest surface column; rejecting them here
-        # would make a new WNM-only target field break unchanged surface paths.
-        indices = np.clip(indices, 0, len(grid) - 1)
-        assignment = np.zeros((len(feat), len(grid)))
-        assignment[np.arange(len(feat)), indices] = 1.0
-        return weights, weights @ assignment
+        raw_weights = np.exp(-0.5 * ((grid[:, None] - feat[None, :])
+                                     / emp_density_weights_sd) ** 2)
+        support = raw_weights.sum(axis=1)
+        weights = raw_weights / support[:, None]
+        if feature_coordinate_mode == "exact":
+            coordinates, inverse = np.unique(feat, return_inverse=True)
+            operator = np.zeros((len(grid), len(coordinates)))
+            np.add.at(operator.T, inverse, weights.T)
+        else:
+            coordinates = grid
+            indices = np.rint((feat - grid[0]) / config.feat_diff_step).astype(int)
+            # Match the existing surface trial-index contract. Production fitting
+            # filters into the model domain before target construction, but small
+            # simulation/plotting fixtures historically pass 0-degree dummy rows.
+            indices = np.clip(indices, 0, len(grid) - 1)
+            assignment = np.zeros((len(feat), len(grid)))
+            assignment[np.arange(len(feat)), indices] = 1.0
+            operator = weights @ assignment
+        return weights, support, coordinates, operator
 
-    operators = []
+    operators, prediction_coordinates, supports = [], [], []
     matched_density = []
     for values, bandwidth in zip(dataframes, bandwidths):
-        trial_weights, operator = feature_operator(values[:, 0])
+        trial_weights, support, coordinates, operator = feature_operator(values[:, 0])
         bias = np.asarray(values[:, 1])
         shifts = np.arange(-8, 9) * 360.0
         def arc_probability(low, high):
@@ -203,7 +221,39 @@ def build_fitting_targets(condition_datasets, feat_diff_grid, d_circ_matrix,
                 - ndtr((low + shifts[:, None] - bias[None, :]) / bandwidth), axis=0)
         soft_sign = arc_probability(0.0, 180.0) - arc_probability(-180.0, 0.0)
         operators.append(operator)
+        prediction_coordinates.append(np.asarray(coordinates, dtype=np.float32))
+        supports.append(np.asarray(support, dtype=np.float32))
         matched_density.append(trial_weights @ soft_sign)
+
+    if feature_coordinate_mode == "exact":
+        coordinate_count = sum(map(len, prediction_coordinates))
+        capacity = coordinate_count if prediction_capacity is None else int(prediction_capacity)
+        if capacity < coordinate_count:
+            raise ValueError(
+                f"prediction_capacity={capacity} is smaller than the {coordinate_count} "
+                "exact coordinates in this fit group")
+        packed_coordinates = np.full(capacity, float(np.mean(np.asarray(feat_diff_grid))),
+                                     dtype=np.float32)
+        packed_condition_index = np.zeros(capacity, dtype=np.int32)
+        packed_operator = np.zeros(
+            (len(condition_names), len(feat_diff_grid), capacity), dtype=np.float32)
+        offset = 0
+        for index, (coordinates, operator) in enumerate(
+                zip(prediction_coordinates, operators)):
+            stop = offset + len(coordinates)
+            packed_coordinates[offset:stop] = coordinates
+            packed_condition_index[offset:stop] = index
+            packed_operator[index, :, offset:stop] = operator
+            offset = stop
+        operators_array = packed_operator
+        coordinates_array = packed_coordinates
+        condition_index_array = packed_condition_index
+    else:
+        coordinate_count = len(feat_diff_grid)
+        capacity = coordinate_count
+        operators_array = np.stack(operators)
+        coordinates_array = np.asarray(feat_diff_grid, dtype=np.float32)
+        condition_index_array = np.zeros(capacity, dtype=np.int32)
 
     def density_curve(feat_diff_vals, bias_vals, kernel_bw):
         _, asymmetry_values = _compute_empirical_density_asymmetry_core(
@@ -277,8 +327,14 @@ def build_fitting_targets(condition_datasets, feat_diff_grid, d_circ_matrix,
         density_target_var=density_target_var,
         density_degenerate=density_degenerate,
         density_bandwidth=tuple(float(b) for b in bandwidths),
-        feature_operator=jnp.asarray(np.stack(operators), dtype=jnp.float32),
+        feature_operator=jnp.asarray(operators_array, dtype=jnp.float32),
         matched_density_target=jnp.asarray(matched_density_array, dtype=jnp.float32),
         matched_density_degenerate=matched_density_degenerate,
         near_constant_warnings=tuple(warnings),
+        prediction_coordinates=jnp.asarray(coordinates_array, dtype=jnp.float32),
+        prediction_condition_index=jnp.asarray(condition_index_array, dtype=jnp.int32),
+        smoothed_support=jnp.asarray(np.stack(supports), dtype=jnp.float32),
+        prediction_coordinate_count=coordinate_count,
+        prediction_capacity=capacity,
+        feature_coordinate_mode=feature_coordinate_mode,
     )

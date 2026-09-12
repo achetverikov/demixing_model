@@ -228,10 +228,82 @@ def test_smoothed_exp_pools_complex_moments_on_the_observed_design(
         operator @ (resultant * jnp.cos(radians))))
     expected = _compute_curve_losses(
         predicted[None, :], one.target_bias_curve[0][None, :],
-        loss_type="mse", is_angular=True)[0]
+        loss_type="mse", is_angular=True,
+        weights=one.smoothed_support[0][None, :])[0]
     got = _score("smoothed_exp", predictor, one, d_circ,
                  [PARAMS[0], PARAMS[1], PARAMS[-1]])
     assert float(got) == pytest.approx(float(expected), rel=1e-6)
+
+
+@pytest.mark.parametrize("method", ["density", "smoothed_exp"])
+def test_packed_exact_loss_matches_condition_loop_without_padding(
+        method, predictor, datasets, d_circ):
+    exact = build_fitting_targets(
+        {name: jnp.asarray(values) for name, values in datasets.items()},
+        feat_diff_grid=config.create_grid('feat_diff'), d_circ_matrix=d_circ,
+        n_mu1_bias=len(config.create_grid('mu1_bias')), emp_density_weights_sd=20.0,
+        density_bandwidth_rule="sj", density_bandwidth_mode="pooled",
+        degenerate_targets=degenerate_targets,
+        bwcrps_condition_targets=compute_bwcrps_condition_targets,
+        target_bias_curve_core=compute_target_bias_curve_core,
+        feature_coordinate_mode="exact")
+    target = (exact.matched_density_target if method == "density"
+              else exact.target_bias_curve)
+    packed = S.packed_curve_loss(
+        method, predictor, jnp.asarray(PARAMS), exact.prediction_coordinates,
+        exact.prediction_condition_index, exact.feature_operator, target,
+        exact.smoothed_support, jnp.asarray(exact.density_bandwidth),
+        curve_losses=_compute_curve_losses)
+    loop = _score(method, predictor, exact, d_circ, PARAMS)
+    assert float(packed) == pytest.approx(float(loop), rel=2e-6, abs=2e-6)
+
+
+def test_exact_padding_has_zero_effect(predictor, datasets, d_circ):
+    kwargs = dict(
+        condition_datasets={name: jnp.asarray(values) for name, values in datasets.items()},
+        feat_diff_grid=config.create_grid('feat_diff'), d_circ_matrix=d_circ,
+        n_mu1_bias=len(config.create_grid('mu1_bias')), emp_density_weights_sd=20.0,
+        density_bandwidth_rule="sj", density_bandwidth_mode="pooled",
+        degenerate_targets=degenerate_targets,
+        bwcrps_condition_targets=compute_bwcrps_condition_targets,
+        target_bias_curve_core=compute_target_bias_curve_core,
+        feature_coordinate_mode="exact")
+    exact = build_fitting_targets(**kwargs)
+    padded = build_fitting_targets(
+        **kwargs, prediction_capacity=exact.prediction_coordinate_count + 64)
+    for targets_ in (exact, padded):
+        value = S.packed_curve_loss(
+            "smoothed_exp", predictor, jnp.asarray(PARAMS),
+            targets_.prediction_coordinates, targets_.prediction_condition_index,
+            targets_.feature_operator, targets_.target_bias_curve,
+            targets_.smoothed_support, jnp.asarray(targets_.density_bandwidth),
+            curve_losses=_compute_curve_losses)
+        if targets_ is exact:
+            reference = value
+    assert float(value) == pytest.approx(float(reference), rel=1e-7, abs=1e-7)
+
+
+def test_exact_wnm_evaluates_nonzero_coordinates_below_artifact_support(
+        predictor, datasets, d_circ):
+    name, values = next(iter(datasets.items()))
+    values = values.copy()
+    values[:5, 0] = 0.25
+    exact = build_fitting_targets(
+        {name: jnp.asarray(values)}, feat_diff_grid=config.create_grid('feat_diff'),
+        d_circ_matrix=d_circ, n_mu1_bias=len(config.create_grid('mu1_bias')),
+        emp_density_weights_sd=20.0, density_bandwidth_rule="sj",
+        density_bandwidth_mode="pooled", degenerate_targets=degenerate_targets,
+        bwcrps_condition_targets=compute_bwcrps_condition_targets,
+        target_bias_curve_core=compute_target_bias_curve_core,
+        feature_coordinate_mode="exact")
+    assert np.any(np.asarray(exact.prediction_coordinates) == np.float32(0.25))
+    loss = S.packed_curve_loss(
+        "density", predictor, jnp.asarray([20.0, 35.0, 22.0]),
+        exact.prediction_coordinates, exact.prediction_condition_index,
+        exact.feature_operator, exact.matched_density_target,
+        exact.smoothed_support, jnp.asarray(exact.density_bandwidth),
+        curve_losses=_compute_curve_losses)
+    assert np.isfinite(float(loss))
 
 
 def test_surface_curve_operators_match_the_current_wnm_semantics(

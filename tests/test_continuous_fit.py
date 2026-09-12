@@ -24,7 +24,7 @@ for path in (ROOT, ROOT / "model_fit_to_data"):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from continuous_fit import fit_continuous  # noqa: E402
+from continuous_fit import ContinuousEngine, fit_continuous  # noqa: E402
 from density_objective import degenerate_targets  # noqa: E402
 from fitting_targets import build_fitting_targets  # noqa: E402
 from grid_based_multi_condition_optimizer_jax_loops import (  # noqa: E402
@@ -91,6 +91,21 @@ def test_the_result_shape_matches_the_other_backends(setup):
     assert result["condition_names"] == list(setup["datasets"])
     assert set(result["shared_params"]) == {"sd_spat", "sd_motor"}
     assert len(result["stage_times"]) >= 1
+
+
+def test_engine_records_bounded_sub_support_extrapolation(setup):
+    name, values = next(iter(setup["datasets"].items()))
+    values = values.copy()
+    values[:4, 0] = 0.25
+    engine = ContinuousEngine(
+        setup["predictor"], curve_losses=_compute_curve_losses,
+        energy_score=bwcrps_energy_score, degenerate_targets=degenerate_targets,
+        bwcrps_condition_targets=compute_bwcrps_condition_targets,
+        target_bias_curve_core=compute_target_bias_curve_core,
+        emp_density_weights_sd=20.0)
+    engine.update_dataset({name: jnp.asarray(values)})
+    assert engine.sub_support_summary == {"trial_count": 4, "minimum": 0.25}
+    assert np.any(np.asarray(engine.targets.prediction_coordinates) == np.float32(0.25))
 
 
 def test_each_condition_entry_has_the_fields_downstream_reads(setup):
