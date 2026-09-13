@@ -72,6 +72,8 @@ MOTOR_NOISE_FLOOR_BAND_NATS = 6.0
 MOTOR_NOISE_FLOOR_TRIAL_NATS = float(-np.log(MOTOR_NOISE_FLOOR_EPS))
 
 FIT_META_COLS = [
+    "analysis_cell_id",
+    "fit_group_id",
     "fit_subject",
     "fit_experiment",
     "fit_condition",
@@ -80,6 +82,14 @@ FIT_META_COLS = [
     "sd_feat2",
     "sd_spat",
     "sd_motor",
+    "bundle_id",
+    "canonical_trial_sha256",
+    "analysis_spec_sha256",
+    "population",
+    "ordered_row_id_sha256",
+    "empirical_targets_sha256",
+    "dm_version",
+    "surrogate_family",
     "prepared_data_source",
 ]
 

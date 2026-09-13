@@ -84,3 +84,41 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
     assert frame.loc[0, "bundle_id"] == "bundle-test"
     assert (output_dir / "condition_one.png").exists()
     assert "direct analytic WNM" in (output_dir / "manifest.json").read_text()
+
+
+def test_compiled_likelihood_export_uses_stored_trial_coordinates(monkeypatch):
+    result = {
+        "data_df": np.array([[4.0, -2.0], [8.0, 6.0]], dtype=np.float32),
+        "ordered_row_ids": np.array(["row-a", "row-b"]),
+        "angle_scale_to_model": 2.0,
+        "circ_space": 180.0,
+        "fit_group_id": "fit-a",
+        "analysis_cell_values": {
+            "experiment_id": "exp", "subject_id": "1", "condition_id": "cond"},
+        "bundle_identity": {
+            "bundle_id": "bundle-a", "canonical_trial_sha256": "canonical",
+            "analysis_spec_sha256": "spec", "population": "signed_bias",
+            "ordered_row_id_sha256": "rows", "empirical_targets_sha256": "targets"},
+        "density_fitted_params": np.array([10.0, 20.0, 30.0, 0.0]),
+        "density_eval_likelihood_loss": 3.0,
+    }
+
+    def fake_log_density(_predictor, sd1, sd2, sd_spat, feature, bias, sd_motor):
+        assert (sd1, sd2, sd_spat, sd_motor) == (10.0, 20.0, 30.0, 0.0)
+        np.testing.assert_array_equal(feature, [4.0, 8.0])
+        np.testing.assert_array_equal(bias, [-2.0, 6.0])
+        return np.array([-1.0, -2.0])
+
+    monkeypatch.setattr(export_module, "trial_log_density", fake_log_density)
+    likelihood, checks = export_module.compiled_trial_likelihoods(
+        {"cell-a": result}, object(), {"dm_version": "wnm"}, ("density",))
+
+    assert likelihood["row_id"].tolist() == ["row-a", "row-b"]
+    assert likelihood["dissimilarity_deg"].tolist() == [2.0, 4.0]
+    assert likelihood["bias_toward_context_deg"].tolist() == [-1.0, 3.0]
+    np.testing.assert_allclose(likelihood["loglik_mass"],
+                               [-1.0 + np.log(2.0), -2.0 + np.log(2.0)])
+    np.testing.assert_allclose(likelihood["loglik_density_deg"],
+                               [-1.0 + np.log(2.0), -2.0 + np.log(2.0)])
+    assert likelihood["include_common_eval"].all()
+    assert checks.loc[0, "abs_diff"] == 0.0
