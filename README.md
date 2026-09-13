@@ -120,6 +120,26 @@ python model_fit_to_data/create_unified_subject_plots.py \
 
 Advanced users can create per-trial likelihood exports with `model_fit_to_data/postprocess_fitted_likelihoods.py`. The full fitting interface and file descriptions are documented in [Batch_Fit_Analysis_Pipeline_Documentation.md](model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md).
 
+Production WNM analyses use a compiled `contextual_biases_database` bundle so
+the fitter does not construct trial geometry, scoring populations, bandwidths,
+or empirical targets:
+
+```bash
+python model_fit_to_data/fit_model_to_data.py \
+  --bundle ../contextual_biases_database/data/bundles/<dataset>/<analysis> \
+  --checkpoint-path pretrained/wnm_k12_100samples.pkl \
+  --output-dir results/<dataset>
+python model_fit_to_data/export_wnm_fit_curves.py \
+  --results-dir results/<dataset> \
+  --checkpoint pretrained/wnm_k12_100samples.pkl \
+  --output-dir results/<dataset>/csv_exports
+```
+
+The direct exporter writes provenance-bound parameters and curves plus
+per-trial likelihoods evaluated at the compiled coordinates. It verifies that
+their summed likelihood reproduces the fitted objective under the run's recorded
+matrix-precision setting.
+
 ## What the parameters mean
 
 - **Target feature noise (`sd_feat1`):** uncertainty in the remembered feature of the item whose response is being modeled.
