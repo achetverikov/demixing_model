@@ -76,6 +76,7 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
                 "sd_feat1": parameters[0], "sd_feat2": parameters[1],
                 "sd_spat": parameters[2], "sd_motor": parameters[3],
                 "loss": result[f"{method}_loss"],
+                f"{method}_loss": result[f"{method}_loss"],
                 **{f"eval_{objective}_loss": result[f"{method}_eval_{objective}_loss"]
                    for objective in SELECTED_METHODS},
                 **result.get("bundle_identity", {}), **identity,
