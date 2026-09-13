@@ -27,6 +27,7 @@ from shared.prediction import mixture_plot_curves, predictor_from_surrogate
 from model_fit_to_data.wnm_scoring import trial_log_density
 
 SELECTED_METHODS = ("likelihood", "bias_weighted_crps", "density", "smoothed_exp")
+MAX_LIKELIHOOD_REPLAY_ABS_DIFF = 0.01
 
 
 def _safe(value):
@@ -201,10 +202,19 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
     frame = pd.DataFrame(rows)
     if frame.empty:
         raise ValueError("no selected fitted methods found")
+    with jax.default_matmul_precision(matmul_precision):
+        likelihoods, checks = compiled_trial_likelihoods(
+            results, predictor, identity, methods)
+    if not likelihoods.empty:
+        if checks["abs_diff"].max() > MAX_LIKELIHOOD_REPLAY_ABS_DIFF:
+            worst = checks.loc[checks["abs_diff"].idxmax()]
+            raise RuntimeError(
+                "compiled likelihood replay differs from the fitted objective by "
+                f"{worst['abs_diff']:.6g} in "
+                f"{worst['analysis_cell_id']}/{worst['optimizer']}")
     output_dir.mkdir(parents=True, exist_ok=True)
     frame.to_csv(output_dir / "fitted_curves.csv", index=False)
     pd.DataFrame(parameter_rows).to_csv(output_dir / "fitted_parameters.csv", index=False)
-    likelihoods, checks = compiled_trial_likelihoods(results, predictor, identity, methods)
     if not likelihoods.empty:
         write_split_trial_loglik(likelihoods, output_dir / "trial_loglik_split")
         checks.to_csv(output_dir / "trial_loglik_checks.csv", index=False)

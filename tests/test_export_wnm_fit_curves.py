@@ -16,6 +16,10 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
     results = {
         "condition one": {
             "n_trials": 2,
+            "data_df": np.array([[2.0, -1.0], [4.0, 3.0]], dtype=np.float32),
+            "ordered_row_ids": np.array(["row-1", "row-2"]),
+            "fit_group_id": "fit-one",
+            "circ_space": 360.0,
             "angle_scale_to_model": 1.0,
             "empirical_curves": {
                 "feature_operator": operator,
@@ -70,6 +74,10 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
         }
 
     monkeypatch.setattr(export_module, "mixture_plot_curves", fake_curves)
+    def fake_log_density(*_args, **_kwargs):
+        assert export_module.jax.config.jax_default_matmul_precision == "highest"
+        return np.array([-1.0, -1.0])
+    monkeypatch.setattr(export_module, "trial_log_density", fake_log_density)
     frame = export_module.export_curves(
         results_dir, checkpoint, output_dir, methods=("density",))
 
@@ -77,8 +85,9 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
     assert frame["bias_deg"].tolist() == [3.0, 4.0]
     assert frame["dm_version"].unique().tolist() == ["wnm_k12_20samples"]
     assert (output_dir / "fitted_curves.csv").exists()
+    assert (output_dir / "trial_loglik_split" / "likelihood.parquet").exists()
     parameters = export_module.pd.read_csv(output_dir / "fitted_parameters.csv")
-    assert parameters.loc[0, "fit_group_id"] == "condition one"
+    assert parameters.loc[0, "fit_group_id"] == "fit-one"
     assert parameters.loc[0, "density_loss"] == 0.5
     assert parameters.loc[0, "eval_likelihood_loss"] == 2.0
     assert parameters.loc[0, "bundle_id"] == "bundle-test"
