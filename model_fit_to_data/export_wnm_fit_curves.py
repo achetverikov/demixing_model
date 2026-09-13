@@ -55,6 +55,9 @@ def compiled_trial_likelihoods(results, predictor, identity, methods):
             log_density = np.asarray(trial_log_density(
                 predictor, *parameters[:3], jnp.asarray(data[:, 0]),
                 jnp.asarray(data[:, 1]), sd_motor=float(parameters[3])))
+            if not np.isfinite(log_density).all():
+                raise RuntimeError(
+                    f"non-finite WNM likelihood for {analysis_cell_id}/{method}")
             log_mass = log_density + np.log(float(config.mu1_bias_step))
             physical_bin_width = float(config.mu1_bias_step) / scale
             metadata = {
@@ -81,7 +84,7 @@ def compiled_trial_likelihoods(results, predictor, identity, methods):
                 "feat_diff_model_deg": data[:, 0],
                 "bias_model_deg": data[:, 1],
                 "trial_index_within_fit": np.arange(len(data), dtype=np.int64),
-                "valid_model_eval": np.isfinite(log_density),
+                "valid_model_eval": True,
                 "include_common_eval": True,
                 "loglik_density_model_deg": log_density,
                 "nll_density_model_deg": -log_density,
