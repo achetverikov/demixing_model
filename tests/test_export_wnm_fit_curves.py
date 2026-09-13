@@ -26,6 +26,7 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
             },
             "density_fitted_params": np.array([10.0, 20.0, 30.0, 0.0]),
             "density_loss": 0.5,
+            "bundle_identity": {"bundle_id": "bundle-test"},
             "density_eval_density_loss": 0.5,
             "density_eval_smoothed_exp_loss": 1.0,
             "density_eval_likelihood_loss": 2.0,
@@ -79,5 +80,7 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
     parameters = export_module.pd.read_csv(output_dir / "fitted_parameters.csv")
     assert parameters.loc[0, "density_loss"] == 0.5
     assert parameters.loc[0, "eval_likelihood_loss"] == 2.0
+    assert parameters.loc[0, "bundle_id"] == "bundle-test"
+    assert frame.loc[0, "bundle_id"] == "bundle-test"
     assert (output_dir / "condition_one.png").exists()
     assert "direct analytic WNM" in (output_dir / "manifest.json").read_text()

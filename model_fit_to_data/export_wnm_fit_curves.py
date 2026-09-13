@@ -60,6 +60,7 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
         source_condition = str(values.get("condition_id", condition))
         report_order = int(values.get("report_order", 1))
         cell_values = json.dumps(values, sort_keys=True)
+        bundle_identity = result.get("bundle_identity", {})
         operator = np.asarray(empirical["feature_operator"])
         bandwidth = float(empirical["density_bandwidth"])
         angle_scale = float(result.get("angle_scale_to_model", 1.0))
@@ -79,7 +80,7 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
                 f"{method}_loss": result[f"{method}_loss"],
                 **{f"eval_{objective}_loss": result[f"{method}_eval_{objective}_loss"]
                    for objective in SELECTED_METHODS},
-                **result.get("bundle_identity", {}), **identity,
+                **bundle_identity, **identity,
             })
             with jax.default_matmul_precision(matmul_precision):
                 curves = mixture_plot_curves(
@@ -110,7 +111,7 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
                     "sd_feat1": float(parameters[0]), "sd_feat2": float(parameters[1]),
                     "sd_spat": float(parameters[2]), "sd_motor": float(parameters[3]),
                     "density_bandwidth": bandwidth,
-                    **identity,
+                    **bundle_identity, **identity,
                 })
 
     frame = pd.DataFrame(rows)
