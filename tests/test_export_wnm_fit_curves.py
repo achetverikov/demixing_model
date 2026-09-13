@@ -78,6 +78,7 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
     assert frame["dm_version"].unique().tolist() == ["wnm_k12_20samples"]
     assert (output_dir / "fitted_curves.csv").exists()
     parameters = export_module.pd.read_csv(output_dir / "fitted_parameters.csv")
+    assert parameters.loc[0, "fit_group_id"] == "condition one"
     assert parameters.loc[0, "density_loss"] == 0.5
     assert parameters.loc[0, "eval_likelihood_loss"] == 2.0
     assert parameters.loc[0, "bundle_id"] == "bundle-test"

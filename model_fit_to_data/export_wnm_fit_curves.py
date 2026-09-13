@@ -147,7 +147,9 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
                 continue
             parameters = np.asarray(result[key], dtype=float)
             parameter_rows.append({
-                "analysis_cell_id": condition, "experiment": experiment,
+                "analysis_cell_id": condition,
+                "fit_group_id": result.get("fit_group_id", condition),
+                "experiment": experiment,
                 "subject": subject, "condition": source_condition,
                 "report_order": report_order, "analysis_cell_values": cell_values,
                 "optimizer": method, "n_trials": result["n_trials"],
@@ -170,7 +172,9 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
                     operator_feature_coordinates=empirical["prediction_coordinates"])
             for index, x_model in enumerate(feat_grid):
                 rows.append({
-                    "analysis_cell_id": condition, "experiment": experiment,
+                    "analysis_cell_id": condition,
+                    "fit_group_id": result.get("fit_group_id", condition),
+                    "experiment": experiment,
                     "subject": subject, "condition": source_condition,
                     "report_order": report_order, "analysis_cell_values": cell_values,
                     "optimizer": method,
