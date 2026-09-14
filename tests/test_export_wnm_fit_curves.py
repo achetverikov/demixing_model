@@ -2,6 +2,7 @@ import pickle
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from model_fit_to_data import export_wnm_fit_curves as export_module
 
@@ -95,6 +96,11 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
     assert parameters.loc[0, "sd_feat1_deg"] == 5.0
     assert parameters.loc[0, "eval_smoothed_exp_loss_deg2"] == 0.25
     assert parameters.loc[0, "eval_bias_weighted_crps_loss_deg"] == 1.5
+    assert parameters.loc[0, "eval_likelihood_nll_density_model_deg"] == 2.0
+    assert parameters.loc[0, "eval_likelihood_nll_density_deg"] == pytest.approx(
+        2.0 - 2.0 * np.log(2.0))
+    assert parameters.loc[0, "eval_likelihood_nll_mass"] == pytest.approx(
+        2.0 - 2.0 * np.log(2.0))
     assert frame.loc[0, "density_bandwidth_model_deg"] == 7.5
     assert frame.loc[0, "density_bandwidth_deg"] == 3.75
     assert parameters.loc[0, "bundle_id"] == "bundle-test"

@@ -180,6 +180,14 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
                     result[f"{method}_eval_bias_weighted_crps_loss"],
                 "eval_bias_weighted_crps_loss_deg":
                     result[f"{method}_eval_bias_weighted_crps_loss"] / angle_scale,
+                "eval_likelihood_nll_density_model_deg":
+                    result[f"{method}_eval_likelihood_loss"],
+                "eval_likelihood_nll_density_deg":
+                    result[f"{method}_eval_likelihood_loss"]
+                    - result["n_trials"] * np.log(angle_scale),
+                "eval_likelihood_nll_mass":
+                    result[f"{method}_eval_likelihood_loss"]
+                    - result["n_trials"] * np.log(float(config.mu1_bias_step)),
                 **bundle_identity, **identity,
             })
             with jax.default_matmul_precision(matmul_precision):
@@ -259,6 +267,8 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
             "explicit_sd_columns": "suffix _model_deg or _deg",
             "smoothed_exp_loss": "model degrees squared; physical companion suffix _deg2",
             "bias_weighted_crps_loss": "model degrees; physical companion suffix _deg",
+            "likelihood_loss": ("summed NLL density per model degree; explicit physical "
+                                "density and reporting-cell mass companions are included"),
         },
         "trial_likelihood": ("continuous density at compiled trial coordinates; "
                              "mass uses the two-model-degree reporting cell"
