@@ -213,13 +213,33 @@ def wrapped_normal_interval_probability(mu, sigma, lo: float, hi: float,
     return jnp.sum(jax.scipy.special.ndtr(upper) - jax.scipy.special.ndtr(lower), axis=-1)
 
 
-def density_asymmetry(dist, n_wraps: int = 8):
-    """Analytic mixture ``P(0 < b < 180) - P(-180 < b < 0)``."""
+def density_asymmetry(dist, n_wraps: int = 1, n_harmonics: int = 3,
+                      sigma_switch: float = SIGMA_SWITCH):
+    """Analytic mixture ``P(0 < b < 180) - P(-180 < b < 0)``.
+
+    The two semicircles partition a continuous circular distribution, so their
+    difference is ``2 * P(0 < b < 180) - 1``.  As with the log density, use the
+    spatial form where it converges fastest and a Fourier form for broad
+    components.  The latter is the expectation of the square wave
+    ``sign(sin(b))``; at the 60-degree switch three odd harmonics already put the
+    omitted terms below float32 resolution.  Clamping the inactive branch's SD
+    keeps both values and gradients finite under ``jnp.where``.
+    """
+    mu, sigma = dist['mu'], dist['sigma']
+    sigma_lo = jnp.minimum(sigma, sigma_switch)
     positive = wrapped_normal_interval_probability(
-        dist['mu'], dist['sigma'], 0.0, 180.0, n_wraps)
-    negative = wrapped_normal_interval_probability(
-        dist['mu'], dist['sigma'], -180.0, 0.0, n_wraps)
-    return jnp.sum(jnp.exp(dist['log_pi']) * (positive - negative), axis=-1)
+        mu, sigma_lo, 0.0, 180.0, n_wraps)
+    spatial = 2.0 * positive - 1.0
+
+    sigma_hi = jnp.maximum(sigma, sigma_switch)
+    n = jnp.arange(1, 2 * n_harmonics, 2, dtype=mu.dtype)
+    mu_rad = jnp.radians(mu)[..., None]
+    sigma_rad = jnp.radians(sigma_hi)[..., None]
+    fourier = (4.0 / jnp.pi) * jnp.sum(
+        jnp.sin(n * mu_rad) * jnp.exp(-0.5 * (n * sigma_rad) ** 2) / n,
+        axis=-1)
+    component_asymmetry = jnp.where(sigma >= sigma_switch, fourier, spatial)
+    return jnp.sum(jnp.exp(dist['log_pi']) * component_asymmetry, axis=-1)
 
 
 # ---------------------------------------------------------------------------

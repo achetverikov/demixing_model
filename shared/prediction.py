@@ -501,8 +501,8 @@ class WrappedMixturePredictor(BiasPredictor):
         curve; scoring one against a target built for the other changes the
         estimator.
         """
-        return self._wm.density_asymmetry(self.distribution(params, validate, sd_motor),
-                                          self.arc_wraps)
+        return self._wm.density_asymmetry(
+            self.distribution(params, validate, sd_motor))
 
     def smoothed_asymmetry_curve(self, params, smoothing_sigma, validate: bool = True, sd_motor=None):
         """The asymmetry curve as the density objective sees it.

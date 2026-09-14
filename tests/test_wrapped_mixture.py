@@ -248,3 +248,30 @@ def test_analytic_asymmetry_avoids_two_degree_grid_bias():
     coarse = 2.0 * (density[np.asarray(grid) > 0].sum()
                     - density[np.asarray(grid) < 0].sum())
     assert abs(analytic - coarse) > 0.05
+
+
+@pytest.mark.parametrize("sigma", [0.25, 12.0, 59.9, 60.0, 60.1, 200.0, 500.0])
+def test_asymmetry_hybrid_matches_high_wrap_spatial_reference(sigma):
+    dist = {"log_pi": jnp.log(jnp.asarray([[0.35, 0.65]])),
+            "mu": jnp.asarray([[-179.9, 37.0]]),
+            "sigma": jnp.asarray([[sigma, sigma * 0.7]])}
+    positive = wm.wrapped_normal_interval_probability(
+        dist["mu"], dist["sigma"], 0.0, 180.0, 16)
+    negative = wm.wrapped_normal_interval_probability(
+        dist["mu"], dist["sigma"], -180.0, 0.0, 16)
+    reference = jnp.sum(jnp.exp(dist["log_pi"]) * (positive - negative), axis=-1)
+    np.testing.assert_allclose(np.asarray(wm.density_asymmetry(dist)),
+                               np.asarray(reference), atol=3e-7, rtol=3e-7)
+
+
+def test_asymmetry_value_and_gradient_are_continuous_at_representation_switch():
+    dist = {"log_pi": jnp.zeros((1, 1)), "mu": jnp.asarray([[37.0]])}
+
+    def asymmetry(sigma):
+        return wm.density_asymmetry({**dist, "sigma": sigma[None, None]})[0]
+
+    below = jnp.float32(wm.SIGMA_SWITCH - 1e-3)
+    above = jnp.float32(wm.SIGMA_SWITCH + 1e-3)
+    assert float(jnp.abs(asymmetry(below) - asymmetry(above))) < 2e-5
+    assert float(jnp.abs(jax.grad(asymmetry)(below) -
+                         jax.grad(asymmetry)(above))) < 2e-5

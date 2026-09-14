@@ -89,7 +89,7 @@ def test_component_two_is_a_swap_not_a_sign_flip(predictor):
     # And it is genuinely a different prediction from component 1, not a no-op:
     # the asymmetric rows must disagree.
     comp1 = np.asarray(predictor.signed_arc_asymmetry(PARAMS))
-    comp2 = np.asarray(wm.density_asymmetry(swapped, predictor.arc_wraps))
+    comp2 = np.asarray(wm.density_asymmetry(swapped))
     asymmetric = np.asarray(PARAMS)[:, 0] != np.asarray(PARAMS)[:, 1]
     assert np.any(np.abs(comp1[asymmetric] - comp2[asymmetric]) > 1e-4)
     # Nor is it the negation of component 1.
@@ -342,7 +342,7 @@ def test_analytic_asymmetry_equals_dense_quadrature(sigma):
     density = np.exp(np.asarray(wm.mixture_logpdf_grid(grid, dist, 4))[0])
     x = np.asarray(grid)
     quadrature = float(density[x > 0].sum() * step - density[x < 0].sum() * step)
-    analytic = float(wm.density_asymmetry(dist, 8)[0])
+    analytic = float(wm.density_asymmetry(dist)[0])
 
     assert abs(analytic - quadrature) < 1e-4, (
         f"sigma={sigma}: analytic {analytic:.8f} vs quadrature {quadrature:.8f}")
