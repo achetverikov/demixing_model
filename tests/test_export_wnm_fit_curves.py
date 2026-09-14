@@ -19,8 +19,8 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
             "data_df": np.array([[2.0, -1.0], [4.0, 3.0]], dtype=np.float32),
             "ordered_row_ids": np.array(["row-1", "row-2"]),
             "fit_group_id": "fit-one",
-            "circ_space": 360.0,
-            "angle_scale_to_model": 1.0,
+            "circ_space": 180.0,
+            "angle_scale_to_model": 2.0,
             "empirical_curves": {
                 "feature_operator": operator,
                 "density_bandwidth": 7.5,
@@ -82,7 +82,7 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
         results_dir, checkpoint, output_dir, methods=("density",))
 
     assert len(frame) == 2
-    assert frame["bias_deg"].tolist() == [3.0, 4.0]
+    assert frame["bias_deg"].tolist() == [1.5, 2.0]
     assert frame["dm_version"].unique().tolist() == ["wnm_k12_20samples"]
     assert (output_dir / "fitted_curves.csv").exists()
     assert (output_dir / "trial_loglik_split" / "likelihood.parquet").exists()
@@ -90,6 +90,13 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
     assert parameters.loc[0, "fit_group_id"] == "fit-one"
     assert parameters.loc[0, "density_loss"] == 0.5
     assert parameters.loc[0, "eval_likelihood_loss"] == 2.0
+    assert parameters.loc[0, "model_scale"] == 2.0
+    assert parameters.loc[0, "sd_feat1_model_deg"] == 10.0
+    assert parameters.loc[0, "sd_feat1_deg"] == 5.0
+    assert parameters.loc[0, "eval_smoothed_exp_loss_deg2"] == 0.25
+    assert parameters.loc[0, "eval_bias_weighted_crps_loss_deg"] == 1.5
+    assert frame.loc[0, "density_bandwidth_model_deg"] == 7.5
+    assert frame.loc[0, "density_bandwidth_deg"] == 3.75
     assert parameters.loc[0, "bundle_id"] == "bundle-test"
     assert frame.loc[0, "bundle_id"] == "bundle-test"
     assert (output_dir / "condition_one.png").exists()

@@ -157,12 +157,29 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
                 "subject": subject, "condition": source_condition,
                 "report_order": report_order, "analysis_cell_values": cell_values,
                 "optimizer": method, "n_trials": result["n_trials"],
+                "model_scale": angle_scale,
                 "sd_feat1": parameters[0], "sd_feat2": parameters[1],
                 "sd_spat": parameters[2], "sd_motor": parameters[3],
+                "sd_feat1_model_deg": parameters[0],
+                "sd_feat2_model_deg": parameters[1],
+                "sd_spat_model_deg": parameters[2],
+                "sd_motor_model_deg": parameters[3],
+                "sd_feat1_deg": parameters[0] / angle_scale,
+                "sd_feat2_deg": parameters[1] / angle_scale,
+                "sd_spat_deg": parameters[2] / angle_scale,
+                "sd_motor_deg": parameters[3] / angle_scale,
                 "loss": result[f"{method}_loss"],
                 f"{method}_loss": result[f"{method}_loss"],
                 **{f"eval_{objective}_loss": result[f"{method}_eval_{objective}_loss"]
                    for objective in SELECTED_METHODS},
+                "eval_smoothed_exp_loss_model_deg2":
+                    result[f"{method}_eval_smoothed_exp_loss"],
+                "eval_smoothed_exp_loss_deg2":
+                    result[f"{method}_eval_smoothed_exp_loss"] / angle_scale ** 2,
+                "eval_bias_weighted_crps_loss_model_deg":
+                    result[f"{method}_eval_bias_weighted_crps_loss"],
+                "eval_bias_weighted_crps_loss_deg":
+                    result[f"{method}_eval_bias_weighted_crps_loss"] / angle_scale,
                 **bundle_identity, **identity,
             })
             with jax.default_matmul_precision(matmul_precision):
@@ -196,6 +213,17 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
                     "sd_feat1": float(parameters[0]), "sd_feat2": float(parameters[1]),
                     "sd_spat": float(parameters[2]), "sd_motor": float(parameters[3]),
                     "density_bandwidth": bandwidth,
+                    "model_scale": angle_scale,
+                    "sd_feat1_model_deg": float(parameters[0]),
+                    "sd_feat2_model_deg": float(parameters[1]),
+                    "sd_spat_model_deg": float(parameters[2]),
+                    "sd_motor_model_deg": float(parameters[3]),
+                    "sd_feat1_deg": float(parameters[0] / angle_scale),
+                    "sd_feat2_deg": float(parameters[1] / angle_scale),
+                    "sd_spat_deg": float(parameters[2] / angle_scale),
+                    "sd_motor_deg": float(parameters[3] / angle_scale),
+                    "density_bandwidth_model_deg": bandwidth,
+                    "density_bandwidth_deg": bandwidth / angle_scale,
                     **bundle_identity, **identity,
                 })
 
@@ -225,6 +253,13 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
         "prediction": "direct analytic WNM; no reconstructed NN surface",
         "density_curve": "subject-experiment pooled-SJ KDE plus observed-design feature operator",
         "bias_curve": "observed-design pooled complex first moment",
+        "angular_units": {
+            "model_scale": "model degrees per physical degree",
+            "legacy_sd_columns": "model degrees",
+            "explicit_sd_columns": "suffix _model_deg or _deg",
+            "smoothed_exp_loss": "model degrees squared; physical companion suffix _deg2",
+            "bias_weighted_crps_loss": "model degrees; physical companion suffix _deg",
+        },
         "trial_likelihood": ("continuous density at compiled trial coordinates; "
                              "mass uses the two-model-degree reporting cell"
                              if not likelihoods.empty else None),
