@@ -138,7 +138,9 @@ python model_fit_to_data/export_wnm_fit_curves.py \
 The direct exporter writes provenance-bound parameters and curves plus
 per-trial likelihoods evaluated at the compiled coordinates. It verifies that
 their summed likelihood reproduces the fitted objective under the run's recorded
-matrix-precision setting.
+matrix-precision setting. Angular parameters and scores are exported in both
+explicit 360° model units (`*_model_deg`, `*_model_deg2`) and study-scale physical
+units (`*_deg`, `*_deg2`); the unsuffixed legacy SD columns remain model degrees.
 
 ## What the parameters mean
 
