@@ -73,8 +73,9 @@ history rather than being repeated as future work here.
   replace the surface NN.
 - Distributed surface-generation locking, bundle durability, training-input,
   and retraining findings apply to the historical surface pipeline and are not
-  carried forward. The repository-local `.env` permissions issue is independent
-  and remains in `TODO.md`.
+  carried forward. The repository-local `.env` was restricted from mode `0777`
+  to `0600` without inspecting its contents; relocating and rotating its secrets
+  remains in `TODO.md`.
 - The transition handoff's predictive-contract gate is implemented. Its refit
   and report-rebuild work is represented in the repository TODOs; its proposed
   surface-versus-WNM promotion check was canceled when the surface NN became

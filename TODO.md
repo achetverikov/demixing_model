@@ -39,11 +39,10 @@ therefore requires a contract/version bump and regression fixture.
 
 ## 3. Remove the repository-local secret exposure
 
-The ignored `.env` file is still mode `0777` and contains credential-shaped
-configuration. Without reading or copying its values: move runtime secrets out
-of the repository, restrict permissions, and rotate credentials that may have
-been exposed. This is an operational security task, independent of the legacy
-surface pipeline.
+The ignored `.env` file's local permissions were restricted from `0777` to
+`0600` without reading or copying its values. Move runtime secrets out of the
+repository and rotate credentials that may have been exposed. This is an
+operational security task, independent of the legacy surface pipeline.
 
 ## Explicitly not planned
 
