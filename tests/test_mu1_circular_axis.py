@@ -1,4 +1,4 @@
-"""Executable guards for the circular mu1_bias axis (CIRCULARITY_FIX_PLAN).
+"""Executable guards for the historical circular mu1_bias-axis migration.
 
 The failure mode this migration has is *not* a crash: it is code that keeps
 running and returns a plausible wrong number.  So most tests here are written

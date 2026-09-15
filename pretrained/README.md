@@ -47,14 +47,14 @@ different model than the fit used, and are listed under Known gaps below.
 | `wnm_k12_20samples.pkl` | 12 | (128, 256, 256) | 0.25 | 20 | 90000 | continuous_density_4.1p | 3.9785 |
 | `wnm_k12_100samples.pkl` | 12 | (128, 256, 256) | 0.25 | 100 | 89000 | continuous_density_4.1o | 3.1657 |
 
-**These artifacts are not yet the production default.** `shared/surrogate.py`
-still defaults to the surface network; the transition plan
-(`continuous_density/TRANSITION_PLAN.md`) flips it after acceptance.
+The bundle-native production path uses these WNM artifacts. Some historical
+entry points still default to the surface network; their remaining cutover is
+tracked only in `TODO.md`.
 `fit_model_to_data.py --search continuous` runs them through the gradient
 backend, and the lattice backends refuse a mixture checkpoint (as the continuous
-one refuses a surface checkpoint, having no gradients to descend). What has not
-happened is promotion: the default is still the surface network, so a command
-without `--search continuous` reaches no mixture.
+one refuses a surface checkpoint, having no gradients to descend). Commands
+that reproduce the historical surface pipeline therefore remain explicit legacy
+paths rather than a second production default.
 
 **The NLL column is in-sample.** Both artifacts come from the `alldata` training
 variant, which trains on every trajectory and picks its stopping step on an

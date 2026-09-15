@@ -355,8 +355,8 @@ def prepare_condition_rows(
             f"condition={fit_row['condition']}"
         )
 
-    # Match the fitter's model-space dissimilarity clamp (see fit_model_to_data /
-    # codex_audit.md report-level #3): raw bounds = feat_diff_range / scale.
+    # Match the fitter's model-space dissimilarity clamp (see fit_model_to_data;
+    # the history log records the original audit): raw bounds = feat_diff_range / scale.
     scale = angle_scale_to_model(circ_space)
     cleaned = filter_data_for_fitting(
         subset, feat_diff_col=x_col, bias_col=y_col, verbose=False,
@@ -616,8 +616,7 @@ def score_fit_row(
     # Approximate the cell probability as density × cell width — a midpoint/rectangle
     # rule at the cell centre, NOT the exact integral of the density over the cell.
     # The log(cell width) term is a constant offset that cancels in AIC/BIC
-    # differences; "mass" here denotes this approximation. See codex_audit.md
-    # report-level #4.
+    # differences; "mass" here denotes this approximation. See HISTORY.md.
     loglik_density_model_deg = log_surface[
         scored["bias_idx"].to_numpy(int),
         scored["feat_idx"].to_numpy(int),

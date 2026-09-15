@@ -2,12 +2,13 @@
 
 This file preserves the initial forward-representation experiments. The
 trajectory-trained K12 checkpoint and the later transition/recovery evidence
-supersede its checkpoint-selection status; see `AUDIT_SUMMARY.md`,
-`TRANSITION_AUDIT.md`, and the objective-specific `*FINDINGS.md` files. As of
+supersede its checkpoint-selection status; see the repository `HISTORY.md` and
+the objective-specific `*FINDINGS.md` files. As of
 2026-09-11, the focused actual-DM recovery comparison, production optimizer
 integration, direct WNM prediction, bounds decision, and full matched-objective
-CSH2026 comparison are complete. The latter does not clear WNM promotion because
-the surface NN has lower native density and smoothed-expectation loss on average.
+CSH2026 comparison are complete. The latter did not clear the former comparative
+promotion gate; the later decision to replace the surface NN is recorded in
+`HISTORY.md`.
 
 Results below are from the 100-observation simulator and production checkpoint,
 using fresh off-grid raw simulations. Artifacts are in

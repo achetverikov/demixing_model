@@ -4,7 +4,7 @@ This is the first, diagnostic panel from transition step 5. Responses are drawn
 from the K12 mixture and fitted back with it, so there is no surrogate error: it
 cannot say whether the mixture approximates the observer, only whether the
 wiring, gradients, and objective work. The subsequent actual-DM n=100 panel is
-now complete for all four retained objectives; see `TRANSITION_AUDIT.md` and the
+now complete for all four retained objectives; see the repository `HISTORY.md` and the
 objective-specific `*FINDINGS.md` files. Statements below about what this
 precursor alone could not settle retain their original scope.
 

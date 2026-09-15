@@ -666,7 +666,7 @@ class SurfacePredictor(BiasPredictor):
         # a surface whose first moment cancels in float32 gives r near zero, and
         # 1e-10 against 1e-12 moved the answer by 37 degrees. The upper bound is
         # inert -- 1 - 1e-10 is exactly 1.0 in float32 -- which is a separate
-        # quirk, recorded as decision 6 in OPEN_DECISIONS.md rather than fixed
+        # quirk, recorded in TODO.md rather than fixed
         # here. No golden fixture goes near either bound, so nothing in the
         # recorded reference would have caught the change.
         resultant = jnp.sqrt(cosine ** 2 + sine ** 2) / jnp.where(mass > 0, mass, jnp.nan)

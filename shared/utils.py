@@ -1143,7 +1143,7 @@ def filter_data_for_fitting(data, feat_diff_col=None, bias_col=None, verbose=Tru
             are dropped. Defaults (4, 180) preserve the legacy raw-space clamp. The
             demixing fitter passes period/scale-aware bounds (feat_diff_range / scale)
             so the effective clamp is the model-space grid range for every dataset —
-            see codex_audit.md report-level #3.
+            see HISTORY.md (2026-06 to 2026-09 audit closure).
 
     Returns:
         Cleaned data in the same format as input
@@ -1306,5 +1306,4 @@ def filter_data_for_fitting(data, feat_diff_col=None, bias_col=None, verbose=Tru
         print(f"Final: {len(clean_data)} trials, feat_diff range {feat_range}, bias range {bias_range}")
     
     return clean_data
-
 

@@ -272,7 +272,7 @@ def test_the_upper_clamp_is_inert_in_float32_and_that_is_the_deployed_behaviour(
     Changing it would be a defensible fix -- an SD of zero for a distribution
     with one cell of support is arguably right, and arguably a floor is wanted --
     but it is a change to a plotted number, so it belongs in a decision, not in a
-    routing commit. Recorded in OPEN_DECISIONS.md.
+    routing commit. The remaining decision is recorded in TODO.md.
     """
     from shared.mu1_axis import mu1_grid
 

@@ -312,7 +312,7 @@ Median CCC for 32-start SciPy, whole curve against bands:
 
 ### Float64 diagnostic: the ranking is a precision artifact (2026-09-08)
 
-`OPEN_DECISIONS.md` item 2 made a targeted x64 diagnostic conditional on a key
+The transition's precision decision made a targeted x64 diagnostic conditional on a key
 likelihood or BWCRPS comparison proving precision-sensitive. This one is, so the
 diagnostic was run: `check_precision_sensitivity.py` rescores every stored winner
 of the 120-dataset panel at each combination of device and precision, writing

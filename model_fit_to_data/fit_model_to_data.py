@@ -1035,7 +1035,7 @@ def run_fitting(
                     # expected condition entries — not just one sampled condition. Include
                     # conditions that have no saved entry at all, as can happen when a
                     # condition is added after the original fit or an incomplete save omits
-                    # it. See codex_audit.md recovery #2.
+                    # it. See HISTORY.md for the original recovery audit.
                     missing = [m for m in methods
                                if not subject_existing
                                or conditions_missing

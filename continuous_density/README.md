@@ -354,16 +354,17 @@ targets well but weakly identify the generating parameters: at 450 trials the
 empirical curves can fluctuate substantially around the generating-parameter
 curves, and both optimizers follow that finite-sample variation. Density KDE
 alignment and smoothed-expectation feature smoothing have been tested
-explicitly. See
-[`TRANSITION_AUDIT.md`](TRANSITION_AUDIT.md) for the current gate status and the
-objective-specific `*FINDINGS.md` files for results. The selected common
+explicitly. See the repository `HISTORY.md` for the consolidated transition
+record and the objective-specific `*FINDINGS.md` files for results. The selected common
 64-start batched JAX L-BFGS-B policy is now routed through the fitting entry
 point, direct WNM prediction is complete, family-specific bounds are settled,
 and the full paired CSH2026 refit has run. Under the matched native curve
 objectives, the surface NN has lower density and smoothed-expectation loss on
 average. Common-WNM rescoring favors the WNM parameters, locating the
 discrepancy in the forward representations rather than the WNM optimizer. The
-comparison therefore does not clear default promotion or surface-NN retirement.
+comparison did not clear the former promotion gate. That gate was subsequently
+superseded by the decision to replace the surface NN with WNM; remaining
+production work is listed only in the repository `TODO.md`.
 
 ## Notes for developers
 

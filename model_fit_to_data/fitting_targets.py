@@ -179,7 +179,7 @@ def build_fitting_targets(condition_datasets, feat_diff_grid, d_circ_matrix,
     # would feed the repeated last-observation rows into the empirical density --
     # both as a mass clump at the last trial's coordinates and through the
     # std/quantile/n bandwidth terms. This is a one-time precompute, not part of
-    # the JIT objective, so looping costs nothing. See codex_audit.md #3.
+    # the JIT objective, so looping costs nothing. See HISTORY.md.
     bandwidths = resolve_density_bandwidths(all_bias_values, density_bandwidth_rule,
                                             density_bandwidth_mode)
 

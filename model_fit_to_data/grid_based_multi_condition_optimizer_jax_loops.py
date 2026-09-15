@@ -816,8 +816,8 @@ class GridBasedMultiConditionOptimizer:
         this does NOT skip recompilation despite what an earlier version of this
         docstring claimed. Left unmanaged, a long-running batch loop accumulates
         one compiled executable per distinct shape for the life of the process,
-        which grows host memory until it OOMs partway through a large batch (see
-        codex_audit.md investigation, 2026-07-17: crashed 38/51 subjects into a
+        which grows host memory until it OOMs partway through a large batch (the
+        2026-07-17 audit recorded a crash 38/51 subjects into a
         csh2026 run). jax.clear_caches() releases the previous subject's compiled
         executables before this subject's replacements get built.
 
