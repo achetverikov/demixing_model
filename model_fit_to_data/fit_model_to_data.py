@@ -1184,7 +1184,8 @@ if __name__ == '__main__':
     )
     inputs = parser.add_mutually_exclusive_group(required=True)
     inputs.add_argument('--data-path',
-                        help='Legacy CSV input (surface backend and recovery tooling).')
+                        help='Legacy CSV input: surface backend and recovery tooling only. '
+                             'Production WNM fitting requires --bundle.')
     inputs.add_argument('--bundle',
                         help='Compiled contextual_biases_database bundle (production WNM).')
     parser.add_argument('--checkpoint-path', default='pretrained/model_epoch1425_10ktrain_20samples.pkl',
@@ -1255,6 +1256,18 @@ if __name__ == '__main__':
                              'when data already match model space.')
 
     args = parser.parse_args()
+
+    # Production WNM fitting consumes a compiled bundle, which carries the trial
+    # geometry, scoring population, bandwidths and empirical targets already validated.
+    # The CSV importer derives those itself -- its own outlier filter, its own bias and
+    # dissimilarity columns -- so it stays on the legacy surface backend. `run_fitting`
+    # itself is unchanged and still reachable from recovery tooling and tests.
+    if args.data_path and args.search == 'continuous':
+        parser.error(
+            "--search continuous is the production WNM backend and needs --bundle: "
+            "--data-path builds empirical semantics from the CSV instead of reading a "
+            "validated bundle. Compile the dataset into a contextual_biases_database "
+            "bundle first, or use a surface --search mode for legacy CSV work.")
 
     try:
         common = dict(

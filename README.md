@@ -89,6 +89,12 @@ The default column contract is:
 
 The column names can be changed through command-line options. By default, a participant-condition is included only if it contains at least 30 usable trials.
 
+This CSV entry point is the **legacy surface backend**, kept for exploratory and
+recovery work. It derives the trial geometry, outlier rule and bias/dissimilarity
+columns from the file itself, so it cannot be used for production WNM fitting:
+`--data-path` with `--search continuous` is refused, and the fitter directs you to
+compile a bundle (see *Production WNM analyses* below).
+
 ```bash
 python model_fit_to_data/fit_model_to_data.py \
   --data-path path/to/trials.csv \
@@ -125,7 +131,9 @@ Advanced users can create per-trial likelihood exports with `model_fit_to_data/p
 
 Production WNM analyses use a compiled `contextual_biases_database` bundle so
 the fitter does not construct trial geometry, scoring populations, bandwidths,
-or empirical targets:
+or empirical targets. This is the only supported route for production fits, and
+the compiled runner
+(`bias_model_comparison/pipeline/regenerate_compiled_fits.py`) drives it:
 
 ```bash
 python model_fit_to_data/fit_model_to_data.py \

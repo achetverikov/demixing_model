@@ -232,3 +232,27 @@ def test_search_diagnostics_reach_the_saved_results(dataset, tmp_path):
         assert len(entry["density_start_losses"]) == 3
         assert len(entry["density_start_outcomes"]) == 3
         assert entry["density_search_settings"]["optimizer_version"] == "jax-lbfgsb@0350da1"
+
+
+def test_cli_refuses_the_production_backend_on_csv_input(dataset, tmp_path):
+    """Production WNM fitting must read a validated bundle, not a CSV.
+
+    `run_fitting` above is deliberately still reachable -- recovery tooling and the
+    tests here fit synthetic CSVs with the continuous backend. What must not be
+    reachable is the *command production runs*: `--data-path` derives the trial
+    geometry, outlier rule and bias/dissimilarity columns from the CSV itself, so
+    pairing it with the production backend would score a fit against empirical
+    semantics no bundle ever validated. Checked through the CLI because that is the
+    surface the pipeline shells out to; the guard cannot live in `run_fitting`
+    without taking the recovery path with it.
+    """
+    import subprocess
+
+    completed = subprocess.run(
+        [sys.executable, str(ROOT / "model_fit_to_data" / "fit_model_to_data.py"),
+         "--data-path", str(dataset), "--search", "continuous",
+         "--checkpoint-path", str(WNM), "--output-dir", str(tmp_path / "run")],
+        capture_output=True, text=True)
+    assert completed.returncode != 0
+    assert "--bundle" in completed.stderr
+    assert not (tmp_path / "run").exists()
