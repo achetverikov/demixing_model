@@ -6,16 +6,11 @@ work is recorded in `HISTORY.md`; result-specific evidence remains in the
 
 ## 1. Complete the bundle-native WNM production cutover
 
-- Finish the catalogued WNM production fits and exports needed by the compiled
-  cross-family comparison.
-- Pass the full compiled-product coverage, checksum, row-identity, likelihood,
-  and objective-replay gates for every production bundle.
-- Once the compiled comparison has passed, remove or explicitly historicalize
-  DM input paths that still construct empirical semantics from prepared CSVs.
-  Production fitting must consume compiled bundles; any retained CSV importer
-  must first produce and validate such a bundle.
-- Update user-facing run documentation when the compiled runner becomes the
-  only production entry point.
+The fits, gates, input-path restriction and run documentation are done for the
+datasets in the transition. `andriushchenko` is a new dataset rather than a
+migrated one, and its BBZ side is still fitting; it is tracked with the compiled
+comparison in `bias_model_comparison/TODO.md`, not here.
+
 - Close the retained WNM BWCRPS validation gaps while the production bundles
   are built: confirm the common 64-start policy on held-out cases, inspect its
   multi-condition, motor-noise, and real-data behavior, and use a large-sample
