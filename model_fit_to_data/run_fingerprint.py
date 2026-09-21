@@ -35,7 +35,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 #: when the density objective moved to CCC.
 #: A bump invalidates every existing sidecar, which is the point: an unbumped
 #: schema change would let differently-computed runs share a digest.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 FINGERPRINT_FILENAME = "extended_run_fingerprint.json"
 
@@ -54,7 +54,7 @@ OBJECTIVE_VERSIONS: Dict[str, str] = {
     "likelihood": "trial_loglik@1",
     "crps": "crps@1",
     "balanced_crps": "balanced_crps@1",
-    "bias_weighted_crps": "bias_weighted_crps@1",
+    "bias_weighted_crps": "bias_weighted_crps_circular_weight@2",
 }
 
 #: Objectives whose *evaluation convention* differs on the wrapped-normal mixture,
@@ -69,8 +69,17 @@ OBJECTIVE_VERSIONS: Dict[str, str] = {
 WNM_OBJECTIVE_VERSIONS: Dict[str, str] = {
     "likelihood": "trial_loglik_continuous@1",
     "crps": "crps_integrated_cells@1",
-    "balanced_crps": "balanced_crps_integrated_cells@1",
-    "bias_weighted_crps": "bias_weighted_crps_integrated_cells@1",
+    # @2: the curve-level CRPS objectives pool the prediction onto the observed
+    # design before scoring, matching the operator that built their target
+    # (contextual_biases_database SHARED_PREDICTIVE_CONTRACT, observed-design-
+    # pooled-v1). This is a different objective, not a better implementation of
+    # the same one -- its argmin moves -- so results fitted under @1 must not be
+    # resumed into or compared with results fitted under @2. The per-trial `crps`
+    # above is deliberately unpooled and keeps @1.
+    "balanced_crps": "balanced_crps_pooled_design@2",
+    # @3 additionally weights feature locations by the squared circular empirical
+    # mean, so observations around -180/+180 retain their large bias magnitude.
+    "bias_weighted_crps": "bias_weighted_crps_pooled_design_circular_weight@3",
 }
 
 
@@ -305,9 +314,15 @@ def compute_compiled_run_fingerprint(
         "sd_motor_hard_max": 50.0,
         "cap_rule": "min_condition_circ_sd_x1.1_clipped_0.1_50",
     })
+    from contextual_biases_database import SHARED_PREDICTIVE_CONTRACT
+
     return {
-        "schema_version": 1,
+        # v2: records the cross-family predictive contract. The pooled curve-level
+        # CRPS objectives implement it, and a run computed under a different one is
+        # not the same run even at identical parameters and bundle.
+        "schema_version": 2,
         "input_contract": "contextual_biases_compiled_bundle",
+        "shared_predictive_contract": SHARED_PREDICTIVE_CONTRACT,
         "bundle_id": bundle_manifest["bundle_id"],
         "bundle_manifest_sha256": file_sha256(bundle_path / "bundle.yaml"),
         "canonical_trial_sha256": bundle_manifest["canonical_trial_sha256"],

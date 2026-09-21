@@ -263,7 +263,7 @@ def pooled_bias_weighted_crps(probabilities, datasets, feat_grid, distance_matri
     bias_step = config.mu1_bias_step
     n_bias = probabilities.shape[1]
 
-    supports, weighted_empirical, weighted_bias = [], [], []
+    supports, weighted_empirical, weighted_sin, weighted_cos = [], [], [], []
     for dataset in datasets:
         values = np.asarray(dataset, dtype=float)
         feat_diff, bias = values[:, 0], values[:, 1]
@@ -275,7 +275,9 @@ def pooled_bias_weighted_crps(probabilities, datasets, feat_grid, distance_matri
         one_hot[np.arange(len(bias)), bias_bin] = 1.0
         supports.append(support)
         weighted_empirical.append(kernel @ one_hot)
-        weighted_bias.append(kernel @ bias)
+        bias_rad = np.deg2rad(bias)
+        weighted_sin.append(kernel @ np.sin(bias_rad))
+        weighted_cos.append(kernel @ np.cos(bias_rad))
 
     supports = np.stack(supports)
     total_support = supports.sum(axis=0)
@@ -283,7 +285,8 @@ def pooled_bias_weighted_crps(probabilities, datasets, feat_grid, distance_matri
     pred_fd /= np.maximum(total_support[:, None], 1e-10)
     empirical_fd = np.sum(weighted_empirical, axis=0) / np.maximum(total_support[:, None], 1e-10)
     target_d = empirical_fd @ distance_matrix
-    mean_bias = np.sum(weighted_bias, axis=0) / np.maximum(total_support, 1e-10)
+    mean_bias = np.rad2deg(np.arctan2(
+        np.sum(weighted_sin, axis=0), np.sum(weighted_cos, axis=0)))
     support_mask = total_support > np.median(total_support) * 0.01
     fd_weights = mean_bias ** 2 * support_mask
     if not np.any(fd_weights > 0):

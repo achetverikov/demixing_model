@@ -394,7 +394,15 @@ class ContinuousEngine:
                         if np.any(group.coordinate_model_deg < self.predictor.domain["feat_diff"][0])
                         else None),
         }
+        from contextual_biases_database import SHARED_PREDICTIVE_CONTRACT
+
         self.bundle_identity = {
+            # The bundle says what the empirical targets are; the contract says
+            # what operation the model must apply before they are used. A
+            # comparison that mixes two values of it is comparing two functionals,
+            # which is the defect this whole repair exists for, so it travels with
+            # every exported row rather than being inferable from the code version.
+            "shared_predictive_contract": SHARED_PREDICTIVE_CONTRACT,
             "bundle_id": manifest["bundle_id"],
             "canonical_trial_sha256": manifest["canonical_trial_sha256"],
             "analysis_spec_sha256": manifest["analysis_spec_sha256"],

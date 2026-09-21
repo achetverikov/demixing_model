@@ -527,7 +527,8 @@ def compute_bwcrps_condition_targets(fd_vals, bias_vals, fd_grid, D_circ, weight
         target_d      (n_feat, n_bias) expected circular distance from each bias bin
                       to the Gaussian-weighted empirical distribution at each fd point
         support_mask  (n_feat,) binary data-support mask, used by balanced_crps
-        bias_weights  (n_feat,) squared smoothed mean bias x mask, used by bias_weighted_crps
+        bias_weights  (n_feat,) squared circular smoothed mean bias x mask,
+                      used by bias_weighted_crps
     """
     fd_vals = np.asarray(fd_vals)
     bias_vals = np.asarray(bias_vals)
@@ -554,10 +555,11 @@ def compute_bwcrps_condition_targets(fd_vals, bias_vals, fd_grid, D_circ, weight
     support_threshold = np.median(w_c) * 0.01
     support_mask = (w_c > support_threshold).astype(np.float32)
 
-    # Bias-weighted CRPS: weight each fd point by the squared smoothed
-    # signed mean bias. Squaring discards the sign, so feat_diff ranges
-    # with large-magnitude observed mean bias contribute more to the loss.
-    mean_bias = (gw @ bias_vals) / np.maximum(w_c, 1e-10)   # (n_feat,)
+    # Bias-weighted CRPS uses the squared circular mean. An arithmetic mean
+    # turns observations around the -180/+180 seam into a spurious zero weight.
+    bias_rad = np.deg2rad(bias_vals)
+    mean_bias = np.rad2deg(np.arctan2(gw @ np.sin(bias_rad),
+                                     gw @ np.cos(bias_rad)))
     return target_d, support_mask, mean_bias ** 2 * support_mask
 
 
@@ -1200,8 +1202,8 @@ class GridBasedMultiConditionOptimizer:
 
         elif fitting_method == "bias_weighted_crps":
             # Same energy-score formula as balanced_crps but fd points are weighted
-            # by squared smoothed mean bias instead of a binary support mask, so
-            # feat_diff ranges with larger-magnitude observed bias contribute more.
+            # by squared circular smoothed mean bias instead of a binary support
+            # mask, so ranges with larger observed bias contribute more.
 
             log_prob_norm = surfaces - jax.scipy.special.logsumexp(surfaces, axis=1, keepdims=True)
             prob_surfaces = jnp.exp(log_prob_norm)  # (n_unique, n_bias, n_feat)

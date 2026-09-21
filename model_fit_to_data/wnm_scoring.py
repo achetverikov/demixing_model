@@ -182,6 +182,20 @@ def predicted_mean_bias(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_values
     return mean
 
 
+def prediction_coordinates(targets, feat_diff_grid):
+    """Where the model is evaluated before the observed-design operator is applied.
+
+    ``exact`` targets carry the fit group's own packed coordinate list; ``snap2``
+    targets pushed each trial onto the feature grid when the operator was built,
+    so the grid *is* the coordinate list. Either way the companion operator is
+    ``targets.feature_operator[condition_index]``, and the two must be taken from
+    the same place -- evaluating on the grid and pooling with an exact-coordinate
+    operator would multiply arrays whose columns mean different things.
+    """
+    return (targets.prediction_coordinates
+            if targets.feature_coordinate_mode == "exact" else feat_diff_grid)
+
+
 def predicted_cell_probabilities(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid,
                                  sd_motor=None):
     """``(n_bias, n_feat)`` integrated cell mass, the layout the CRPS code wants.
@@ -194,6 +208,26 @@ def predicted_cell_probabilities(predictor, sd_feat1, sd_feat2, sd_spat, feat_di
     probabilities = predictor.cell_probabilities(rows, validate=False,
                                                  sd_motor=sd_motor)  # (n_feat, n_bias)
     return probabilities.T
+
+
+def pooled_cell_probabilities(predictor, sd_feat1, sd_feat2, sd_spat, coordinates,
+                              feature_operator, sd_motor=None):
+    """``(n_bias, n_feat)`` cell mass after the observed-design pooling operator.
+
+    ``P[f, k] = sum_t W[f, t] p(bias cell k | coordinate of trial t)``, the same
+    operation that produced the empirical ``target_d`` this prediction is scored
+    against. The energy score is proper against the target it is given, and that
+    target is the design-weighted mixture ``q_emp``; a prediction evaluated at one
+    bare grid coordinate is a different object and cannot reach the minimum for
+    any parameter value. Operator rows sum to one over coordinates, so the pooled
+    rows stay normalised over the bias axis.
+
+    Padding columns of a packed exact operator are exactly zero, so the dummy
+    coordinates they index cannot contribute.
+    """
+    probabilities = predicted_cell_probabilities(
+        predictor, sd_feat1, sd_feat2, sd_spat, coordinates, sd_motor=sd_motor)
+    return probabilities @ feature_operator.T
 
 
 def trial_log_density(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff, bias,
@@ -262,12 +296,9 @@ def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_fe
                 "density target; a density objective cannot be fit against it. This is "
                 "scoped to the density objectives -- likelihood and CRPS are unaffected.")
         if is_matched:
-            prediction_coordinates = (
-                targets.prediction_coordinates
-                if targets.feature_coordinate_mode == "exact"
-                else feat_diff_grid)
             predicted = predicted_matched_density_curve(
-                predictor, sd_feat1, sd_feat2, sd_spat, prediction_coordinates,
+                predictor, sd_feat1, sd_feat2, sd_spat,
+                prediction_coordinates(targets, feat_diff_grid),
                 targets.feature_operator[condition_index],
                 targets.density_bandwidth[condition_index], sd_motor=sd_motor)
             target = targets.matched_density_target[condition_index]
@@ -291,12 +322,9 @@ def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_fe
                             weights=targets.bias_weights[condition_index][None, :])[0]
 
     if method == "smoothed_exp":
-        prediction_coordinates = (
-            targets.prediction_coordinates
-            if targets.feature_coordinate_mode == "exact"
-            else feat_diff_grid)
         predicted = predicted_matched_mean_bias(
-            predictor, sd_feat1, sd_feat2, sd_spat, prediction_coordinates,
+            predictor, sd_feat1, sd_feat2, sd_spat,
+            prediction_coordinates(targets, feat_diff_grid),
             targets.feature_operator[condition_index], sd_motor=sd_motor)
         return curve_losses(predicted[None, :],
                             targets.target_bias_curve[condition_index][None, :],
@@ -304,8 +332,14 @@ def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_fe
                             weights=targets.smoothed_support[condition_index][None, :])[0]
 
     if method in ("balanced_crps", "bias_weighted_crps"):
-        probabilities = predicted_cell_probabilities(
-            predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid, sd_motor=sd_motor)
+        # Curve-level objectives: both score against ``target_d``, which is built
+        # from the design-weighted empirical mixture, so the prediction is pooled
+        # by the same operator before it reaches the energy score. The per-trial
+        # ``crps`` branch below deliberately keeps the unpooled conditional.
+        probabilities = pooled_cell_probabilities(
+            predictor, sd_feat1, sd_feat2, sd_spat,
+            prediction_coordinates(targets, feat_diff_grid),
+            targets.feature_operator[condition_index], sd_motor=sd_motor)
         weights = (targets.fd_weights if method == "balanced_crps"
                    else targets.bias_fd_weights)[condition_index]
         # bias weights can be all-zero for a condition; the binary support mask

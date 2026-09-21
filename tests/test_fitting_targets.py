@@ -1,11 +1,12 @@
-"""Extracting target construction must not have moved a single target value.
+"""Protect unchanged targets while testing the intentional circular BW weight.
 
 ``tests/data/fitting_targets_golden.npz`` was recorded by
 ``tests/record_fitting_targets_golden.py`` from the surface optimizer *before*
 ``model_fit_to_data/fitting_targets.py`` existed. Both the extracted builder and
-the optimizer that now calls it are checked against that reference, so this
-catches an extraction that changed a definition and an optimizer that stopped
-routing through the extraction.
+the optimizer that now calls it are checked against that reference for every
+unchanged field. The BWCRPS weight deliberately moved from an arithmetic to a
+circular mean and has its own seam regression and builder/optimizer parity
+check.
 
 Equality is exact, not approximate. These are the same computations on the same
 inputs; a tolerance here would hide exactly the kind of drift the check exists
@@ -60,6 +61,10 @@ FIELDS = {
     "unified_fd_weights": "fd_weights",
     "unified_bias_fd_weights": "bias_fd_weights",
     "density_target_var": "density_target_var",
+}
+UNCHANGED_FIELDS = {
+    key: value for key, value in FIELDS.items()
+    if key != "unified_bias_fd_weights"
 }
 
 
@@ -119,10 +124,19 @@ def test_extracted_builder_reproduces_the_pre_extraction_targets(golden, case):
         pytest.skip(f"{case} not in the recorded reference")
 
     targets = _build(_inputs(golden, case))
-    for recorded, attribute in FIELDS.items():
+    for recorded, attribute in UNCHANGED_FIELDS.items():
         np.testing.assert_array_equal(
             np.asarray(getattr(targets, attribute)), golden[f"{case}/{recorded}"],
             err_msg=f"{case}: {attribute} differs from the pre-extraction reference")
+
+
+def test_bwcrps_bias_weight_uses_the_circular_mean_at_the_seam():
+    feat_grid, distance, n_bias = _grids()
+    _, _, weights = compute_bwcrps_condition_targets(
+        np.array([40.0, 40.0]), np.array([179.0, -179.0]),
+        np.asarray(feat_grid), np.asarray(distance), 20.0, -180.0, 2.0, n_bias)
+    index = np.flatnonzero(np.asarray(feat_grid) == 40.0).item()
+    assert weights[index] == pytest.approx(180.0 ** 2)
 
 
 def test_condition_order_is_the_order_given(golden):
@@ -228,7 +242,12 @@ def test_the_optimizer_still_produces_the_pre_extraction_targets(golden, case):
         density_bandwidth_mode=F.DENSITY_CURVE_SPEC["density_bandwidth_mode"],
     )
 
-    for recorded in FIELDS:
+    for recorded in UNCHANGED_FIELDS:
         np.testing.assert_array_equal(
             np.asarray(getattr(optimizer, recorded)), golden[f"{case}/{recorded}"],
             err_msg=f"{case}: optimizer.{recorded} differs from the pre-extraction reference")
+
+    targets = _build(_inputs(golden, case))
+    np.testing.assert_array_equal(
+        np.asarray(optimizer.unified_bias_fd_weights),
+        np.asarray(targets.bias_fd_weights))

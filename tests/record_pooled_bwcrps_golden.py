@@ -14,10 +14,10 @@ distribution -- and it would look entirely plausible.
 Two further details this pins, both easy to lose in a rewrite:
 
 * the bias axis is **wrapped, never clipped**, when trials are binned;
-* feature locations are weighted by squared smoothed mean bias times a support
-  mask, and the routine *raises* rather than returning a number when every weight
-  is zero, because a pooled score with no identified feature locations is not a
-  small score, it is no score.
+* feature locations are weighted by squared circular smoothed mean bias times a
+  support mask, and the routine *raises* rather than returning a number when
+  every weight is zero, because a pooled score with no identified feature
+  locations is not a small score, it is no score.
 
 Usage::
 

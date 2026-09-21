@@ -46,8 +46,8 @@ class FittingTargets:
         target_d: ``(n_conditions, n_feat, n_bias)`` expected circular distance
             from each bias bin to the empirical distribution.
         fd_weights: ``(n_conditions, n_feat)`` binary support mask, balanced CRPS.
-        bias_fd_weights: ``(n_conditions, n_feat)`` squared smoothed-bias weights,
-            bias-weighted CRPS.
+        bias_fd_weights: ``(n_conditions, n_feat)`` squared circular
+            smoothed-bias weights, bias-weighted CRPS.
         density_target_var: variance of each density target curve.
         density_degenerate: which conditions have a density target too flat to fit.
         density_bandwidth: the bias-KDE bandwidth actually used per condition.

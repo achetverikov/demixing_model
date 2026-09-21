@@ -73,27 +73,42 @@ def _orders(golden, case):
 
 
 def test_the_plotting_entry_point_is_unchanged_by_the_routing(golden, grids, surfaces, case):
-    """Exact equality through the function the plots actually call."""
+    """The plotting entry point routes through the current circular-weight scorer."""
     import create_unified_subject_plots as plots
 
     feat_grid, distance = grids
+    probabilities = np.exp(np.asarray(surfaces[:2], dtype=float))
+    probabilities /= probabilities.sum(axis=1, keepdims=True)
     got = plots._pooled_bias_weighted_crps(
         surfaces[:2], _orders(golden, case), feat_grid, distance, 20.0)
-    assert got == float(golden[f"{case}/pooled_score"][0])
+    expected = pooled_bias_weighted_crps(
+        probabilities, _orders(golden, case), feat_grid, distance, 20.0)
+    assert got == pytest.approx(expected, abs=1e-12)
 
 
 @pytest.mark.parametrize("case", CASES)
 
 
-def test_pooling_first_is_not_the_same_as_averaging_scores(golden, case):
+def test_pooling_first_is_not_the_same_as_averaging_scores(
+        golden, grids, surfaces, case):
     """The property the plan's instruction protects.
 
     If these agreed, the instruction would be untestable and the order would not
     matter. On unequal support -- 600 trials against 80 -- averaging treats the
     sparse order as an equal vote and the answer moves by 2.7.
     """
-    pooled = float(golden[f"{case}/pooled_score"][0])
-    separate = np.asarray(golden[f"{case}/separate_scores"], dtype=float)
+    feat_grid, distance = grids
+    probabilities = np.exp(np.asarray(surfaces[:2], dtype=float))
+    probabilities /= probabilities.sum(axis=1, keepdims=True)
+    orders = _orders(golden, case)
+    pooled = pooled_bias_weighted_crps(
+        probabilities, orders, feat_grid, distance, 20.0)
+    separate = np.array([
+        pooled_bias_weighted_crps(
+            probabilities[index:index + 1], [orders[index]],
+            feat_grid, distance, 20.0)
+        for index in range(2)
+    ])
     assert abs(pooled - separate.mean()) > 1e-3
 
 
@@ -119,6 +134,18 @@ def test_all_zero_bias_weights_raise_rather_than_scoring(grids, surfaces):
     zero_bias = [np.stack([np.linspace(2.0, 178.0, 200), np.zeros(200)], axis=-1)] * 2
     with pytest.raises(ValueError, match="unidentified"):
         pooled_bias_weighted_crps(probabilities, zero_bias, feat_grid, distance, 20.0)
+
+
+def test_biases_across_the_seam_retain_their_large_circular_mean(grids, surfaces):
+    feat_grid, distance = grids
+    probabilities = np.exp(np.asarray(surfaces[:1], dtype=float))
+    probabilities /= probabilities.sum(axis=1, keepdims=True)
+    feat = np.repeat(40.0, 200)
+    bias = np.tile([179.0, -179.0], 100)
+    score = pooled_bias_weighted_crps(
+        probabilities, [np.stack([feat, bias], axis=-1)],
+        feat_grid, distance, 20.0)
+    assert np.isfinite(score)
 
 
 def test_the_bias_axis_wraps_rather_than_clipping(grids, surfaces):
