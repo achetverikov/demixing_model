@@ -140,7 +140,7 @@ Results produced with a different checkpoint, dataset, objective definition, gri
 
 ### Generated artifacts are not where expected
 
-Relative fit outputs are placed under `results/`. Surface tools also honor `DEMIXING_ARTIFACT_ROOT`; without it, their default artifact root is the repository-local `results/` directory.
+Relative fit outputs are placed under `results/`. Historical raw-surface tools and WNM research/training scripts also honor `DEMIXING_ARTIFACT_ROOT`; without it, their default artifact root is the repository-local `results/` directory.
 
 ## Maintainer: rebuild container images
 
