@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Surface Simulator for Predictions
+Demixing Model Prediction Generator
 
-This script reads parameters from a CSV/Arrow file, simulates surfaces and curves
-using either neural network checkpoints or precomputed averaged surfaces, and
-writes results for downstream R analysis.
+This script reads parameter combinations from CSV/Arrow, evaluates the packaged
+production surrogate (WNM by default), or explicitly uses the historical surface
+network / stored averaged surfaces, and writes prediction curves for Python or R
+analysis.
 """
 
 import pandas as pd
