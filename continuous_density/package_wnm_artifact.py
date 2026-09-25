@@ -43,7 +43,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from continuous_density import wrapped_mixture_model as wm  # noqa: E402
+from shared import wnm as wm  # noqa: E402
 from shared.prediction import domain_from_meta, validate_params  # noqa: E402
 from shared.hashing import file_sha256  # noqa: E402
 
