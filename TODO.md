@@ -1,8 +1,8 @@
 # Demixing Model — TODO
 
 This is the sole live work plan for this repository. Completed and superseded
-work is recorded in `HISTORY.md`; result-specific evidence remains in the
-`continuous_density/*FINDINGS.md` files.
+work is recorded in `HISTORY.md`; result-specific transition evidence is archived under
+`docs/history/wnm_transition/`.
 
 ## 1. Finish retained WNM validation follow-ups
 
@@ -59,7 +59,6 @@ Next Phase C items:
 
 - move WNM validation/transition experiments under `research/wnm_transition/`;
 - move local representation experiments under `research/wnm_representation/`;
-- move findings/history documents under `docs/history/wnm_transition/`;
 - redistribute or remove `continuous_density/tests/`;
 - remove tracked generated validation outputs;
 - delete `continuous_density/` once only compatibility/history content remains.
