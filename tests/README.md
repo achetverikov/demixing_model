@@ -2,13 +2,32 @@
 
 Run commands from the repository root. Override the interpreter with `PYTHON_BIN` where needed.
 
-## Focused pytest suite
+## Maintained pytest baseline
 
 ```bash
-PYTHONPATH=. python -m pytest tests
+PYTHONPATH=. python -m pytest
 ```
 
-These tests cover configuration imports, CLI flag dispatch, lock and object-store backends, and fitted-result export behavior without regenerating the full model.
+Pytest is configured to collect `tests/` only and, by default, excludes
+`integration`, `research`, and `legacy_surface` suites. This is the
+standalone WNM/product baseline for a normal checkout.
+
+Opt-in suites remain available:
+
+```bash
+# Cross-repository checks; requires sibling contextual_biases_database where relevant.
+PYTHONPATH=. python -m pytest -m integration
+
+# Frozen transition/optimizer-comparison research.
+PYTHONPATH=. python -m pytest -m research
+
+# Historical surface-NN reproduction contracts.
+PYTHONPATH=. python -m pytest -m legacy_surface
+```
+
+The maintained baseline covers configuration, WNM fitting/scoring/prediction,
+current result/export/plot contracts, shared circular geometry, and supporting
+runtime utilities without requiring the comparison workspace.
 
 A few are slower because they exercise the surrogate on a small lattice rather
 than mocking it, which is the only way they can check what they claim:
