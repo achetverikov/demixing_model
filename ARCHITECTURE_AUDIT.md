@@ -886,14 +886,19 @@ recommended order is:
 
 ## Phase A: pre-test hygiene
 
-1. Fix the stale CCC test import/duplication.
-2. Set the default pytest collection boundary.
-3. Mark/skip CDB integration tests when the sibling repo is absent.
-4. Correct the most misleading current documentation
-   (`continuous_density/__init__.py`, README contradictions, historical
-   surface-NN docs).
+Implemented on the transition branch before establishing the green baseline:
 
-Then run the maintained product suite and `run_smoke_wnm.sh`.
+1. the stale CCC test now imports the neutral density-objective implementation;
+2. default pytest collection is restricted to `tests/`;
+3. CDB-dependent checks are explicit `integration` tests and skip cleanly
+   without the sibling checkout;
+4. transition-comparison and clearly surface-only suites are marked
+   `research` / `legacy_surface` and excluded from the default product run;
+5. the most misleading current documentation has been corrected;
+6. obvious dead imports found during the audit were removed.
+
+**Still required:** execute the maintained pytest baseline and
+`run_smoke_wnm.sh`. Do not call the baseline green until those commands pass.
 
 ## Phase B: cut production dependencies on historical surface modules
 
