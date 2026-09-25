@@ -24,6 +24,8 @@ for path in (ROOT, ROOT / "model_fit_to_data"):
 
 import density_objective as do
 from exhaustive_density import (
+
+pytestmark = pytest.mark.legacy_surface
     InMemoryCurveSource,
     SUPPORTED_OBJECTIVES,
     fit_exhaustive_density,
