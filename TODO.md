@@ -36,19 +36,33 @@ shared WNM runtime math, fitting/scoring, and explicitly historical research.
 
 The pre-refactor test cleanup and maintained WNM baseline have been completed.
 
-Phase B is now in progress. The first dependency cut is implemented: neutral
-curve losses, BWCRPS scoring, and empirical BWCRPS/binned-bias target builders
-live in `model_fit_to_data/objectives.py` and
-`model_fit_to_data/empirical_targets.py`. Both WNM and historical surface
-fitting consume those modules, and WNM engine construction no longer imports
-the historical surface optimizer. Compatibility aliases remain on the surface
-module for external reproduction/parity callers.
+Phase B is implemented:
 
-Next Phase B items:
+- neutral curve losses, BWCRPS scoring, and empirical BWCRPS/binned-bias target
+  builders live in `model_fit_to_data/objectives.py` and
+  `model_fit_to_data/empirical_targets.py`;
+- WNM engine construction no longer imports the historical surface optimizer;
+- maintained path, behavioral-data, circular-smoothing, and empirical KDE/
+  bandwidth helpers have been split out of `shared/utils.py`;
+- `model_fit_to_data` is now a package and the maintained continuous-fitting
+  path uses absolute package imports;
+- result-key identity, streaming file hashing, and WNM likelihood
+  export/rescoring each have one maintained implementation.
 
-- split lightweight maintained helpers out of `shared/utils.py`;
-- normalize `model_fit_to_data` package/import structure;
-- centralize result identity, hashing, and WNM likelihood export/rescoring.
+Phase C is now in progress. The production WNM runtime lives in `shared/wnm.py`;
+training and packaging live in `surrogate_training/wnm/`; simulation,
+continuous design, training-data generation, and legacy raw-sample import live
+in `surface_computation/`. Their former `continuous_density/` modules are
+compatibility shims only.
+
+Next Phase C items:
+
+- move WNM validation/transition experiments under `research/wnm_transition/`;
+- move local representation experiments under `research/wnm_representation/`;
+- move findings/history documents under `docs/history/wnm_transition/`;
+- redistribute or remove `continuous_density/tests/`;
+- remove tracked generated validation outputs;
+- delete `continuous_density/` once only compatibility/history content remains.
 
 ## 3. Decide the zero-width pooled-SD convention
 
