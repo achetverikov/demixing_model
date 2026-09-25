@@ -43,9 +43,9 @@ FAMILIES = (FAMILY_SURFACE_NN, FAMILY_WNM)
 #: Kept as the name older code imports; it is the production family, not a
 #: second setting. There was briefly a separate ``PRODUCTION_FAMILY``, which
 #: meant promotion took two edits and a half-promoted state was reachable:
-#: ``production_checkpoint(20)`` returning the mixture while a bare
-#: ``load_surrogate(n_samples=20)`` still returned the network. One switch.
-DEFAULT_FAMILY = FAMILY_SURFACE_NN
+#: ``production_checkpoint(20)`` returning one family while a bare
+#: ``load_surrogate(n_samples=20)`` returned another. One switch.
+DEFAULT_FAMILY = FAMILY_WNM
 
 #: Sample identity for the historical surface checkpoints, which predate any
 #: metadata.  This is a recorded fact about specific files, not a parsing rule:
