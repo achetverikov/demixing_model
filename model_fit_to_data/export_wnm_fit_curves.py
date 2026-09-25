@@ -216,7 +216,8 @@ def export_curves(results_dir: Path, checkpoint: Path | None, output_dir: Path,
             for index, x_model in enumerate(feat_grid):
                 rows.append({
                     "analysis_cell_id": condition,
-                    "fit_group_id": result.get("fit_group_id", condition),
+                    "fit_group_id": result.get(
+                        "fit_group_id", f"{subject}#{experiment}" if subject else condition),
                     "experiment": experiment,
                     "subject": subject, "condition": source_condition,
                     "report_order": report_order, "analysis_cell_values": cell_values,
