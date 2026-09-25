@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import model_fit_to_data.create_unified_subject_plots as unified_plotter
 from model_fit_to_data.create_unified_subject_plots import (
     _resolve_plot_circ_space,
     _result_plot_identity,
@@ -83,6 +84,17 @@ def test_plot_circular_period_rejects_mixed_result_sets():
             "b": {"circ_space": 360},
         })
 
+
+
+
+def test_plot_cli_rejects_retired_csv_export_flag(monkeypatch):
+    monkeypatch.setattr(
+        unified_plotter.sys, "argv",
+        ["create_unified_subject_plots.py", "--csv-exports"],
+    )
+    with pytest.raises(SystemExit) as error:
+        unified_plotter.main()
+    assert error.value.code == 2
 
 def test_standalone_pdf_plot_uses_wnm_backend_from_run_identity(monkeypatch, tmp_path):
     results = {
