@@ -68,7 +68,7 @@ its components have been moved to functional homes.
 These are pre-existing architecture/test defects, not numerical failures that a
 test run should be used to discover.
 
-## 1.1 Stale CCC test import
+## 1.1 Stale CCC test import [resolved before baseline run]
 
 `tests/test_density_ccc_objective.py` imports
 `_ccc_components` from `create_unified_subject_plots.py`. That helper was
@@ -81,7 +81,7 @@ The neutral implementation is already
 **Action:** change the test to the neutral implementation or remove the
 duplicated CCC-component test.
 
-## 1.2 Default tests depend on a sibling repository
+## 1.2 Default tests depend on a sibling repository [resolved before baseline run]
 
 At least these product-tree tests assume
 `../contextual_biases_database` exists:
@@ -94,7 +94,7 @@ The latter also imports `yaml`, which is not a declared DM dependency.
 **Action:** mark these as integration tests and skip them cleanly when CDB is not
 available. `pytest tests` should validate a standalone Demixing Model checkout.
 
-## 1.3 Pytest has no explicit collection boundary
+## 1.3 Pytest has no explicit collection boundary [resolved before baseline run]
 
 There are two substantial test roots:
 
