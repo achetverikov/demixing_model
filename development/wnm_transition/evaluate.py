@@ -30,6 +30,7 @@ import numpy as np
 import pandas as pd
 
 from surrogate_training.wnm import data as data_mod
+from surrogate_training.wnm.evaluation import empirical_moments, model_case_nll
 from surface_computation import wnm_design as design_mod
 from shared import wnm as wm
 from shared.mu1_axis import mu1_grid_np
@@ -43,24 +44,6 @@ MODE_GRID = np.linspace(-180.0, 180.0, 360, endpoint=False).astype(np.float64)
 #: Block/chunk sizes that bound the transient tensors of the sample-heavy paths.
 CASE_BLOCK = 32
 SAMPLE_CHUNK = 5000
-
-
-def empirical_moments(bias: np.ndarray) -> dict:
-    """Finite-aware circular first moment, mean direction, resultant, circular SD.
-
-    ``bias`` is ``(M, S)``; non-finite outcomes are excluded rather than mapped
-    to a spurious 0-degree sample.
-    """
-    b = np.asarray(bias, dtype=np.float64)
-    finite = np.isfinite(b)
-    z = np.where(finite, np.exp(1j * np.radians(np.where(finite, b, 0.0))), 0.0)
-    count = finite.sum(axis=-1)
-    m1 = z.sum(axis=-1) / np.maximum(count, 1)
-    m1 = np.where(count > 0, m1, np.nan + 1j * np.nan)
-    r = np.clip(np.abs(m1), 1e-12, 1.0)
-    return {'mean_bias': np.degrees(np.angle(m1)), 'resultant': np.abs(m1),
-            'moment_real': np.real(m1), 'moment_imag': np.imag(m1),
-            'circ_sd': np.degrees(np.sqrt(-2.0 * np.log(r)))}
 
 
 def empirical_density_asymmetry(bias: np.ndarray) -> np.ndarray:
@@ -89,39 +72,6 @@ def model_logdensity_grid(model, variables, params, grid, n_wraps: int = 4,
         dist = model.apply(variables, jnp.asarray(params[a:a + case_block]))
         parts.append(np.asarray(wm.mixture_logpdf_grid(grid_j, dist, n_wraps)))
     return np.concatenate(parts, axis=0) if parts else np.zeros((0, len(grid)))
-
-
-def model_case_nll(model, variables, params, bias, n_wraps: int = 4,
-                   case_block: int = CASE_BLOCK, chunk: int = SAMPLE_CHUNK):
-    """Per-case mean NLL of the raw samples, excluding non-finite outcomes.
-
-    The mixture parameters are evaluated once per case (never repeated across
-    samples) and the sample log densities accumulate in chunks, so peak memory is
-    ``block x chunk x K x wraps`` rather than ``M x S``.
-    """
-    params = np.asarray(params)
-    bias = np.asarray(bias)
-    M, S = bias.shape
-    nll = np.empty(M)
-    n_finite = np.empty(M, dtype=np.int64)
-    for a in range(0, M, case_block):
-        p = params[a:a + case_block]
-        b = bias[a:a + case_block]
-        dist = model.apply(variables, jnp.asarray(p))
-        total = np.zeros(len(p))
-        cnt = np.zeros(len(p))
-        for s in range(0, S, chunk):
-            bs = b[:, s:s + chunk]
-            finite = np.isfinite(bs)
-            lp = np.asarray(wm.mixture_logpdf_samples(
-                jnp.asarray(np.where(finite, bs, 0.0).astype(np.float32)), dist, n_wraps))
-            total += np.where(finite, lp, 0.0).sum(axis=1)
-            cnt += finite.sum(axis=1)
-        block_nll = -total / np.maximum(cnt, 1)
-        block_nll[cnt == 0] = np.nan
-        nll[a:a + len(p)] = block_nll
-        n_finite[a:a + len(p)] = cnt.astype(np.int64)
-    return nll, n_finite
 
 
 def reference_density(bias: np.ndarray, grid=EVAL_GRID, kappa: float = 60.0,
