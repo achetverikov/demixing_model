@@ -393,3 +393,60 @@ def compare_surfaces(surfaces, titles, dimension=1, component=1, use_log=True, s
 def compare_expectations(surfaces, titles, surface_rows, show_asymmetry=False):
     """One-liner for expectation comparison."""
     return MultiPlot.expectation_curves(surfaces, titles, surface_rows, show_asymmetry)
+
+
+def plot_wnm_density(view, reference=None):
+    """WNM component densities, optionally beside a stored empirical surface."""
+    rows = 2 if reference is not None else 1
+    titles = []
+    for source in (("WNM", "Stored surface") if reference is not None else ("WNM",)):
+        titles.extend([f"{source}: component 1", f"{source}: component 2"])
+    fig = make_subplots(rows=rows, cols=2, subplot_titles=titles)
+    for component in range(2):
+        fig.add_trace(go.Heatmap(
+            z=view.log_density[component].T, x=view.feat_diff, y=view.bias_grid,
+            colorscale="Viridis", coloraxis="coloraxis",
+            hovertemplate="difference: %{x:.1f}<br>bias: %{y:.1f}<br>log density: %{z:.3f}<extra></extra>"
+        ), row=1, col=component + 1)
+        fig.add_trace(go.Scatter(
+            x=view.feat_diff, y=view.mean_bias[component], mode="lines",
+            line=dict(color="white", width=2), showlegend=False,
+        ), row=1, col=component + 1)
+        if reference is not None:
+            fig.add_trace(go.Heatmap(
+                z=reference.get_surf(1, component + 1, log=True),
+                x=reference.feat_diff_grid, y=reference.get_bias_grid(1),
+                colorscale="Viridis", coloraxis="coloraxis",
+                hovertemplate="difference: %{x:.1f}<br>bias: %{y:.1f}<br>log density: %{z:.3f}<extra></extra>"
+            ), row=2, col=component + 1)
+            x, y = Plot.compute_expectation(reference, 1, component + 1, circular=True)
+            fig.add_trace(go.Scatter(
+                x=x, y=y, mode="lines", line=dict(color="white", width=2),
+                showlegend=False,
+            ), row=2, col=component + 1)
+    fig.update_layout(height=420 * rows, coloraxis=dict(colorscale="Viridis"))
+    fig.update_xaxes(title_text="Feature difference (deg)")
+    fig.update_yaxes(title_text="Bias (deg)")
+    return fig
+
+
+def plot_wnm_curves(view):
+    """Analytic WNM moment and signed-arc curves for both components."""
+    specs = (
+        (view.mean_bias, "Mean bias (deg)"),
+        (view.circular_sd, "Circular SD (deg)"),
+        (view.density_asymmetry, "Density asymmetry"),
+    )
+    fig = make_subplots(rows=1, cols=3, subplot_titles=[label for _, label in specs])
+    colors = ("#1f77b4", "#d62728")
+    for column, (values, label) in enumerate(specs, 1):
+        for component in range(2):
+            fig.add_trace(go.Scatter(
+                x=view.feat_diff, y=values[component], mode="lines",
+                name=f"Component {component + 1}", legendgroup=str(component),
+                showlegend=column == 1, line=dict(color=colors[component]),
+            ), row=1, col=column)
+        fig.update_yaxes(title_text=label, row=1, col=column)
+    fig.update_xaxes(title_text="Feature difference (deg)")
+    fig.update_layout(height=430, legend=dict(orientation="h"))
+    return fig

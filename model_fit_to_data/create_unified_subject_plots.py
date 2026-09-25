@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Create Unified Subject Plots
+Create Unified Subject and Summary Plots
 
 This script creates unified plots for each subject, combining all conditions
 in a single plot with parameter information displayed.
@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt
 import pickle
 import time
 import re
+import sys
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from collections import defaultdict
@@ -27,19 +28,27 @@ import jax
 
 warnings.filterwarnings('ignore')
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
     GridBasedMultiConditionOptimizer,
 )
-from model_fit_to_data import density_objective
+from model_fit_to_data.run_fingerprint import read_fingerprint_sidecar
+from model_fit_to_data.result_identity import (
+    canonical_condition_key as _canonical_condition_key,
+    canonicalize_result_keys,
+    sanitize_result_key_part as _sanitize_result_key_part,
+)
+from shared import surrogate
 from shared.config import config
 from shared.mu1_axis import mu1_cell_width, periodic_integral, sign_masks
+from shared.prediction import (mixture_plot_curves, pooled_bias_weighted_crps,
+                               predictor_from_surrogate)
 from shared import seed_manager
-from shared.utils import (
-    KDE_WRAPS,
-    compute_target_bias_rolling_curve_core,
-    resolve_input_path,
-    resolve_results_path,
-)
+from shared.empirical import KDE_WRAPS, compute_target_bias_rolling_curve_core
+from shared.paths import resolve_input_path, resolve_results_path
 
 # Initialize seed manager
 seed = seed_manager.SeedManager(quiet=True)
@@ -58,6 +67,7 @@ OPTIMIZER_COLORS = {
     'expectation': '#CC79A7',  # reddish purple
     'density': '#009E73',      # green
     'balanced_crps': '#D55E00',  # vermillion
+    'bias_weighted_crps': '#56B4E9',  # sky blue
     'smoothed_exp': '#F0E442',  # yellow
 }
 OPTIMIZER_LABELS = {
@@ -66,21 +76,9 @@ OPTIMIZER_LABELS = {
     'expectation': 'Expectation',
     'density': 'Density',
     'balanced_crps': 'Balanced CRPS',
+    'bias_weighted_crps': 'Bias-weighted CRPS',
     'smoothed_exp': 'Smoothed Exp',
 }
-LOSS_EVALUATION_METHODS = [
-    'density', 'density_legacy', 'expectation', 'smoothed_exp', 'likelihood', 'crps',
-    'balanced_crps', 'bias_weighted_crps',
-]
-
-#: Placeholder when a density CCC decomposition cannot be formed.
-_NAN_CCC_COMPONENTS = {'ccc': np.nan, 'r': np.nan, 'C_b': np.nan}
-
-#: The decomposition itself lives with the objective, so the exported components
-#: and the fitted loss cannot come from two different definitions of CCC.
-_ccc_components = density_objective.ccc_components
-
-
 def _angle_display_scale(circ_space: int = 360) -> float:
     """Scale angular model-space values back to the data circular space."""
     return circ_space / (2 * config.feat_diff_range[1])
@@ -88,46 +86,21 @@ def _angle_display_scale(circ_space: int = 360) -> float:
 
 def _pooled_bias_weighted_crps(log_surfaces, datasets, feat_grid, distance_matrix,
                                weights_sd):
-    """Distribution-level BWCRPS for separately fitted report-order surfaces."""
+    """Distribution-level BWCRPS for separately fitted report-order surfaces.
+
+    The pooling and scoring live in ``shared.prediction`` so both surrogate
+    families share one definition; this wrapper supplies the surface backend's
+    own probability convention -- renormalise the sampled grid over the bias axis
+    -- and is pinned unchanged against a pre-routing reference in
+    ``tests/test_pooled_bwcrps.py``.
+    """
+    from shared.prediction import pooled_bias_weighted_crps
+
     log_surfaces = np.asarray(log_surfaces, dtype=float)
     probabilities = np.exp(log_surfaces - log_surfaces.max(axis=1, keepdims=True))
     probabilities /= probabilities.sum(axis=1, keepdims=True)
-    feat_grid = np.asarray(feat_grid, dtype=float)
-    distance_matrix = np.asarray(distance_matrix, dtype=float)
-    bias_low = config.mu1_bias_range[0]
-    bias_step = config.mu1_bias_step
-    n_bias = probabilities.shape[1]
-
-    supports = []
-    weighted_empirical = []
-    weighted_bias = []
-    for dataset in datasets:
-        values = np.asarray(dataset, dtype=float)
-        feat_diff, bias = values[:, 0], values[:, 1]
-        kernel = np.exp(-0.5 * ((feat_grid[:, None] - feat_diff[None, :]) / weights_sd) ** 2)
-        support = kernel.sum(axis=1)
-        # Circular binning: wrap, never clip (the mu1_bias axis is a circle).
-        bias_bin = np.mod(np.round((bias - bias_low) / bias_step).astype(int), n_bias)
-        one_hot = np.zeros((len(bias), n_bias), dtype=float)
-        one_hot[np.arange(len(bias)), bias_bin] = 1.0
-        supports.append(support)
-        weighted_empirical.append(kernel @ one_hot)
-        weighted_bias.append(kernel @ bias)
-
-    supports = np.stack(supports)
-    total_support = supports.sum(axis=0)
-    pred_fd = np.einsum("rf,rbf->fb", supports, probabilities)
-    pred_fd /= np.maximum(total_support[:, None], 1e-10)
-    empirical_fd = np.sum(weighted_empirical, axis=0) / np.maximum(total_support[:, None], 1e-10)
-    target_d = empirical_fd @ distance_matrix
-    mean_bias = np.sum(weighted_bias, axis=0) / np.maximum(total_support, 1e-10)
-    support_mask = total_support > np.median(total_support) * 0.01
-    fd_weights = mean_bias ** 2 * support_mask
-    if not np.any(fd_weights > 0):
-        raise ValueError("pooled report-order BWCRPS is unidentified because all bias weights are zero")
-    cross = np.sum(pred_fd * target_d, axis=1)
-    self_energy = np.sum(pred_fd * (pred_fd @ distance_matrix), axis=1)
-    return float(np.sum(fd_weights * (2 * cross - self_energy)) / np.sum(fd_weights))
+    return pooled_bias_weighted_crps(probabilities, datasets, feat_grid,
+                                     distance_matrix, weights_sd)
 
 
 SD_N_BINS = 18
@@ -309,6 +282,11 @@ def compute_predicted_sd_curves_batch_pooled(log_surfaces_batch, bin_weights_bat
     degenerate correctly: a bin whose trials all sit at one feature difference
     mixes exactly one column and the pooled value equals the unpooled one.
 
+    The computation itself lives in ``shared.prediction.SurfacePredictor`` so the
+    two surrogate families share one definition of this estimator rather than
+    two that can drift. Pinned unchanged against a pre-routing reference in
+    ``tests/test_plot_estimators.py``.
+
     Args:
         log_surfaces_batch: (n_surfaces, n_mu1_bias, n_feat_diff) log densities.
         bin_weights_batch: (n_surfaces, n_bins, n_feat_vals) mixture weights,
@@ -317,62 +295,112 @@ def compute_predicted_sd_curves_batch_pooled(log_surfaces_batch, bin_weights_bat
     Returns:
         (n_surfaces, n_bins) circular SDs in model degrees.
     """
-    mu1_bias_grid = config.create_grid('mu1_bias')
-    n_feat_diff = log_surfaces_batch.shape[2]
+    from shared.prediction import SurfacePredictor
 
-    prob_surfaces = jnp.exp(log_surfaces_batch)
-    weights = jnp.asarray(bin_weights_batch)
-    if weights.shape[2] != n_feat_diff:
-        raise ValueError(
-            f"bin weights span {weights.shape[2]} feature columns but the "
-            f"surfaces have {n_feat_diff}"
-        )
-
-    # Mixture density per (surface, bin): sum_f w[b, f] * p[:, f]
-    mixtures = jnp.einsum('smf,sbf->smb', prob_surfaces, weights)
-
-    angles_rad = jnp.radians(mu1_bias_grid)
-    mass = periodic_integral(mixtures, axis=1)
-    mean_cos = periodic_integral(mixtures * jnp.cos(angles_rad)[None, :, None], axis=1)
-    mean_sin = periodic_integral(mixtures * jnp.sin(angles_rad)[None, :, None], axis=1)
-
-    # Empty bins have zero mass -> NaN, matching the empirical curve's gaps.
-    r = jnp.sqrt(mean_cos**2 + mean_sin**2) / jnp.where(mass > 0, mass, jnp.nan)
-    r_safe = jnp.minimum(jnp.maximum(r, 1e-10), 1.0 - 1e-10)
-    return jnp.degrees(jnp.sqrt(-2 * jnp.log(r_safe)))
+    predictor = SurfacePredictor(log_surfaces_batch, n_samples=0, artifact="plots")
+    return predictor.pooled_circular_sd(bin_weights_batch)
 
 
-def _sanitize_result_key_part(value: str) -> str:
-    """Match fit_model_to_data.py's result-key sanitization."""
-    return re.sub(r'[^\w]', '_', str(value)).strip('_')
-
-
-def _canonical_condition_key(key: str) -> str:
-    parts = str(key).split('#')
-    if len(parts) < 3:
-        return str(key)
-    subject, experiment = parts[0], parts[1]
-    condition = "#".join(parts[2:])
-    return (
-        f"{_sanitize_result_key_part(subject)}#"
-        f"{_sanitize_result_key_part(experiment)}#"
-        f"{_sanitize_result_key_part(condition)}"
+def _surface_plot_bundle(optimizer, params_batch, motor_noise, feat_vals,
+                         bin_weights_batch):
+    """Run the historical surface curve path without changing its arithmetic."""
+    from grid_based_multi_condition_optimizer_jax_loops import (
+        _generate_nn_bias_curve_batch,
+        apply_motor_noise_with_precomputed_kernel,
+        create_motor_noise_kernel_fft,
+        generate_nn_density_asymmetry_batch,
     )
 
+    log_surfaces = optimizer._predict_batch_fixed_size(params_batch, verbosity=0)
+    motors = jnp.asarray(motor_noise)
+    unique_motor_noise, inverse_indices = jnp.unique(motors, return_inverse=True)
+    n_mu1_bias = log_surfaces.shape[1]
+    print(f"Found {len(unique_motor_noise)} unique motor noise values: {unique_motor_noise}")
+    surfaces_with_noise = jnp.zeros_like(log_surfaces)
+    for index, sd_motor in enumerate(unique_motor_noise):
+        mask = inverse_indices == index
+        print(f"  Processing motor noise {sd_motor:.1f}: {jnp.sum(mask)} surfaces")
+        if sd_motor > 0:
+            key = (float(sd_motor), n_mu1_bias)
+            if key not in global_motor_kernel_cache:
+                global_motor_kernel_cache[key] = create_motor_noise_kernel_fft(
+                    sd_motor, n_mu1_bias)
+            noisy = apply_motor_noise_with_precomputed_kernel(
+                log_surfaces[mask], global_motor_kernel_cache[key])
+            surfaces_with_noise = surfaces_with_noise.at[mask].set(noisy)
+        else:
+            surfaces_with_noise = surfaces_with_noise.at[mask].set(log_surfaces[mask])
+    log_surfaces = surfaces_with_noise
 
-def canonicalize_result_keys(results: Dict) -> Dict:
-    canonical = {}
-    source_keys = {}
-    for key, entry in results.items():
-        ckey = _canonical_condition_key(key)
-        if ckey in canonical and source_keys[ckey] != str(key):
-            raise ValueError(
-                "Result-key collision after sanitization: "
-                f"{source_keys[ckey]!r} and {str(key)!r} both map to {ckey!r}"
+    print("Computing bias curves for all surfaces...")
+    bias = _generate_nn_bias_curve_batch(log_surfaces, jnp.arange(len(feat_vals)))
+    print("Computing density asymmetry curves for all surfaces...")
+    asymmetry = generate_nn_density_asymmetry_batch(log_surfaces)
+    print("Computing standard deviation curves for all surfaces...")
+    sd = compute_predicted_sd_curves_batch(log_surfaces, feat_vals)
+    pooled_sd = compute_predicted_sd_curves_batch_pooled(log_surfaces, bin_weights_batch)
+    return {
+        "bias": bias, "asymmetry": asymmetry, "sd": sd, "pooled_sd": pooled_sd,
+        "distributions": log_surfaces, "distribution_kind": "log_density",
+    }
+
+
+def _mixture_probability_surfaces(predictor, params_batch, motor_noise, feat_vals):
+    """Exact reporting-cell masses, shaped like a surface for shared pooling."""
+    outputs = []
+    feat_vals = jnp.asarray(feat_vals, dtype=jnp.float32)
+    for params, sd_motor in zip(np.asarray(params_batch), np.asarray(motor_noise)):
+        rows = jnp.column_stack([
+            jnp.full(feat_vals.shape, params[0]),
+            jnp.full(feat_vals.shape, params[1]),
+            jnp.full(feat_vals.shape, params[2]),
+            feat_vals,
+        ])
+        # cell_probabilities is (feature, bias); the shared report-order scorer
+        # consumes (bias, feature), matching the historical surface orientation.
+        outputs.append(np.asarray(predictor.cell_probabilities(
+            rows, sd_motor=float(sd_motor))).T)
+    return np.stack(outputs)
+
+
+def _mixture_plot_bundle(predictor, params_batch, motor_noise, feat_vals,
+                         bin_weights_batch, feature_operators,
+                         density_bandwidths, density_curve_spec,
+                         operator_coordinates):
+    """Direct fitted WNM curves in bounded observed-operator batches.
+
+    Each stored operator maps the plot grid onto its own fit's observed
+    coordinates, and ``mixture_plot_curves`` takes one coordinate set per call,
+    so rows are batched only with rows that share their coordinates.
+    """
+    n_rows = len(params_batch)
+    groups = {}
+    for index, coordinates in enumerate(operator_coordinates):
+        coordinates = np.asarray(coordinates, dtype=np.float32)
+        groups.setdefault((coordinates.shape, coordinates.tobytes()), []).append(index)
+    motor_noise = np.asarray(motor_noise)
+    names = ("bias", "asymmetry", "sd", "pooled_sd")
+    out = {}
+    for indices in groups.values():
+        coordinates = operator_coordinates[indices[0]]
+        for start in range(0, len(indices), 16):
+            rows = np.asarray(indices[start:start + 16])
+            chunk = mixture_plot_curves(
+                predictor, params_batch[rows], feat_vals,
+                bin_weights=bin_weights_batch[rows],
+                sd_motor_by_row=motor_noise[rows],
+                emp_density_weights_sd=density_curve_spec["emp_density_weights_sd"],
+                density_smoothing_sigma=density_curve_spec["density_smoothing_sigma"],
+                feature_operators=np.stack([feature_operators[i] for i in rows]),
+                density_bandwidths=density_bandwidths[rows],
+                operator_feature_coordinates=coordinates,
             )
-        canonical[ckey] = entry
-        source_keys[ckey] = str(key)
-    return canonical
+            for name in names:
+                values = np.asarray(chunk[name])
+                if name not in out:
+                    out[name] = np.empty((n_rows,) + values.shape[1:], values.dtype)
+                out[name][rows] = values
+    return out
 
 
 def load_extended_results(results_path: str) -> Dict:
@@ -385,6 +413,31 @@ def load_extended_results(results_path: str) -> Dict:
     return results
 
 
+def _resolve_plot_circ_space(extended_results: Dict,
+                             requested: Optional[int] = None) -> int:
+    """Use the circular period recorded by the fit, validating any CLI override."""
+    stored = {
+        float(result['circ_space'])
+        for result in extended_results.values()
+        if result is not None and result.get('circ_space') is not None
+    }
+    if len(stored) > 1:
+        raise ValueError(
+            "plotting requires one circular period per result set, but the fitted "
+            f"results contain {sorted(stored)}")
+    if stored:
+        recorded = stored.pop()
+        if requested is not None and not np.isclose(float(requested), recorded):
+            raise ValueError(
+                f"--circ-space={requested} disagrees with the fitted result period "
+                f"{recorded:g}; plotting in a different physical angular scale would "
+                "mislabel curves and fitted SDs")
+        if not np.isclose(recorded, round(recorded)):
+            raise ValueError(f"unsupported non-integer circular period {recorded:g}")
+        return int(round(recorded))
+    return 360 if requested is None else int(requested)
+
+
 def display_condition_label(value: object) -> str:
     text = str(value)
     if "___" in text:
@@ -392,45 +445,66 @@ def display_condition_label(value: object) -> str:
     return text
 
 
+def _result_plot_identity(condition_name: str, result: Dict) -> Tuple[str, str, str]:
+    """Return subject, experiment, and condition labels for plotting.
+
+    Bundle-native WNM results use opaque analysis-cell IDs, so their scientific
+    labels must come from ``analysis_cell_values``. Legacy CSV/surface results
+    predate that metadata and retain their historical key parsing as a fallback.
+    Report-order cells are mapped to the established ``*_first``/``*_second``
+    experiment labels so the existing pooled report-order comparison still pairs
+    the two fitted distributions.
+    """
+    values = result.get('analysis_cell_values') or {}
+    if 'subject_id' in values and 'experiment_id' in values:
+        subject_id = str(values['subject_id'])
+        experiment = str(values['experiment_id'])
+        report_order = values.get('report_order')
+        if report_order is not None and str(report_order).lower() not in {'', 'nan', 'none'}:
+            try:
+                order = int(report_order)
+            except (TypeError, ValueError):
+                order = None
+            if order == 1:
+                experiment = f"{experiment}_first"
+            elif order == 2:
+                experiment = f"{experiment}_second"
+            else:
+                experiment = f"{experiment}_report_{report_order}"
+        noise_condition = str(
+            values.get('condition_id', result.get('condition', condition_name))
+        )
+        return subject_id, experiment, noise_condition
+
+    # Legacy result keys: "S12#color_1#high - low".
+    if '#' in condition_name:
+        parts = condition_name.split('#')
+        if len(parts) >= 3:
+            return parts[0], parts[1], '#'.join(parts[2:])
+
+    # Older result keys: "S1.color.1_low - high".
+    parts = condition_name.split('.')
+    if len(parts) < 3:
+        return str(condition_name), 'unknown', 'unknown'
+    subject_id = parts[0]
+    exp_part = parts[1]
+    noise_part = parts[2]
+    if '_' in noise_part:
+        exp_num, noise_condition = noise_part.split('_', 1)
+    else:
+        exp_num, noise_condition = noise_part, 'unknown'
+    return subject_id, f"{exp_part}.{exp_num}", noise_condition
+
+
 def organize_results_by_subject(extended_results: Dict) -> Dict:
-    """Organize results by subject and experiment."""
+    """Organize results by subject and experiment using bundle metadata when available."""
     subjects = defaultdict(lambda: defaultdict(list))
 
     for condition_name, result in extended_results.items():
         if result is None:
             continue
-
-        # Handle both new naming pattern (S12#color_1#high) and old pattern (S12.color.1_high)
-        if '#' in condition_name:
-            # New naming pattern: "S12#color_1#high - low" -> subject="S12", exp="color_1", noise="high - low"
-            parts = condition_name.split('#')
-            if len(parts) < 3:
-                continue
-
-            subject_id = parts[0]  # "S12"
-            experiment = parts[1]  # "color_1" or "color_2" or "color_2_first" or "color_2_second"
-            noise_condition = parts[2]  # "high - low"
-
-        else:
-            # Old naming pattern: "S1.color.1_low - high" -> subject="S1", exp="color.1", noise="low - high"
-            parts = condition_name.split('.')
-            if len(parts) < 3:
-                continue
-
-            subject_id = parts[0]  # "S1"
-            exp_part = parts[1]    # "color"
-
-            # Extract experiment and noise condition
-            noise_part = parts[2]  # "1_low - high"
-            if '_' in noise_part:
-                exp_num = noise_part.split('_')[0]  # "1"
-                noise_condition = noise_part.split('_', 1)[1]  # "low - high"
-            else:
-                exp_num = noise_part
-                noise_condition = "unknown"
-
-            experiment = f"{exp_part}.{exp_num}"  # "color.1"
-
+        subject_id, experiment, noise_condition = _result_plot_identity(
+            condition_name, result)
         subjects[subject_id][experiment].append({
             'condition_name': condition_name,
             'noise_condition': noise_condition,
@@ -442,29 +516,53 @@ def organize_results_by_subject(extended_results: Dict) -> Dict:
 
 def prepare_all_subjects_data(
     subjects_data: Dict,
-    global_optimizer: GridBasedMultiConditionOptimizer
+    prediction_backend,
+    density_curve_spec: Optional[Dict] = None,
 ) -> Dict:
     """
     Batch data preparation routine - processes all subjects at once for maximum efficiency.
 
-    Two selection/settings caveats (see MODEL_PIPELINE_FOR_AGENTS.md S10.1, D.2):
+    One selection caveat (see MODEL_PIPELINE_FOR_AGENTS.md S10.1):
     - The available-optimizer list per (subject, experiment) is read from the
       FIRST condition's result only and reused for every condition; a method
       fitted only in a later condition is never predicted or plotted.
-    - Model density-asymmetry curves are computed with the DEFAULT 20-degree
-      smoothing (generate_nn_density_asymmetry_batch defaults), regardless of
-      any non-default emp_density_weights_sd/density_smoothing_sigma the fit
-      itself used.
+
+    Surface fits retain their historical grid computations. WNM fits use direct
+    analytic curves and exact reporting-cell masses, with the observed-design
+    operator and KDE bandwidth stored by the fit.
 
     Returns:
         Dictionary with all precomputed data for all subjects
     """
 
     print("Preparing data for all subjects in batch...")
+    backend_family = getattr(prediction_backend, "family", surrogate.FAMILY_SURFACE_NN)
+    if hasattr(prediction_backend, "identity"):
+        surrogate_identity = prediction_backend.identity().as_dict()
+    else:
+        surrogate_identity = {
+            "dm_version": surrogate.dm_version(
+                surrogate.FAMILY_SURFACE_NN,
+                Path(prediction_backend.checkpoint_path).name,
+            ),
+            "surrogate_family": surrogate.FAMILY_SURFACE_NN,
+            "surrogate_artifact": Path(prediction_backend.checkpoint_path).name,
+            "surrogate_n_samples": np.nan,
+        }
+    if density_curve_spec is None:
+        density_curve_spec = {
+            "emp_density_weights_sd": float(
+                getattr(prediction_backend, "emp_density_weights_sd", 20.0)),
+            "density_smoothing_sigma": getattr(
+                prediction_backend, "density_smoothing_sigma", None),
+        }
 
     # Collect all parameters and data across ALL subjects
     all_params_3d = []
     all_motor_noise = []
+    all_feature_operators = []
+    all_density_bandwidths = []
+    all_operator_coordinates = []
     param_mapping = {}  # Maps (subject_id, experiment, condition, optimizer) -> index in batch
     # Maps (subject_id, experiment, condition) -> feature differences of the
     # trials the empirical SD curve will be built from, used to pool the model
@@ -534,57 +632,62 @@ def prepare_all_subjects_data(
 
                         all_params_3d.append(params_3d)
                         all_motor_noise.append(motor_noise)
+                        if backend_family == surrogate.FAMILY_WNM:
+                            empirical = result.get("empirical_curves", {})
+                            missing = [key for key in ("feature_operator", "density_bandwidth",
+                                                       "prediction_coordinates")
+                                       if key not in empirical]
+                            if missing:
+                                raise ValueError(
+                                    f"WNM fit {result.get('condition', condition_name)!r} lacks "
+                                    f"its stored {', '.join(missing)}; direct curves cannot "
+                                    "reproduce the fitted objective without them")
+                            all_feature_operators.append(empirical["feature_operator"])
+                            all_density_bandwidths.append(empirical["density_bandwidth"])
+                            all_operator_coordinates.append(empirical["prediction_coordinates"])
                         param_mapping[(subject_id, experiment, condition_name, opt)] = batch_idx
                         batch_idx += 1
 
     print(f"Collected {len(all_params_3d)} parameter combinations from all subjects")
 
-    # MASSIVE BATCH COMPUTATION FOR ALL SUBJECTS AT ONCE
+    zero_weights = np.zeros((SD_N_BINS, len(feat_vals)))
+    unique_weight_rows = [zero_weights]
+    weight_row_of_condition = {}
+    for condition_key, feat_diff_vals in condition_feat_diff.items():
+        weight_row_of_condition[condition_key] = len(unique_weight_rows)
+        unique_weight_rows.append(compute_feat_bin_weights(feat_diff_vals, feat_vals))
+    weight_rows = jnp.asarray(np.stack(unique_weight_rows))
+    weight_index = jnp.asarray([
+        weight_row_of_condition.get(key[:3], 0)
+        for key, _ in sorted(param_mapping.items(), key=lambda item: item[1])
+    ])
+
+    # One batch over every subject/condition/objective, through its own family.
     if all_params_3d:
         print(f"Batch computing {len(all_params_3d)} parameter combinations for ALL subjects...")
-
-        # Single NN prediction for ALL subjects×experiments×conditions×optimizers
         params_batch = jnp.array(all_params_3d)
-        log_surfaces_batch = global_optimizer._predict_batch_fixed_size(params_batch, verbosity=0)
+        if backend_family == surrogate.FAMILY_WNM:
+            bundle = _mixture_plot_bundle(
+                prediction_backend, params_batch, all_motor_noise, feat_vals,
+                weight_rows[weight_index], all_feature_operators,
+                np.asarray(all_density_bandwidths), density_curve_spec,
+                all_operator_coordinates)
+        else:
+            bundle = _surface_plot_bundle(
+                prediction_backend, params_batch, all_motor_noise, feat_vals,
+                weight_rows[weight_index])
 
-        # Apply motor noise in batch grouped by motor noise value
-        from grid_based_multi_condition_optimizer_jax_loops import apply_motor_noise_with_precomputed_kernel, create_motor_noise_kernel_fft, _generate_nn_bias_curve_batch, generate_nn_density_asymmetry_batch
-
-        # Group surfaces by motor noise values using unique with indices
-        all_motor_noise_array = jnp.array(all_motor_noise)
-        unique_motor_noise, inverse_indices = jnp.unique(all_motor_noise_array, return_inverse=True)
-        n_mu1_bias = log_surfaces_batch.shape[1]
-
-        print(f"Found {len(unique_motor_noise)} unique motor noise values: {unique_motor_noise}")
-
-        # Initialize output array
-        surfaces_with_noise = jnp.zeros_like(log_surfaces_batch)
-
-        # Process each unique motor noise value in batches
-        for i, sd_motor in enumerate(unique_motor_noise):
-            # Find all surfaces with this motor noise value
-            mask = inverse_indices == i
-            n_surfaces_with_this_noise = jnp.sum(mask)
-
-            print(f"  Processing motor noise {sd_motor:.1f}: {n_surfaces_with_this_noise} surfaces")
-
-            if sd_motor > 0:
-                # Get or create precomputed kernel
-                key = (float(sd_motor), n_mu1_bias)
-                if key not in global_motor_kernel_cache:
-                    global_motor_kernel_cache[key] = create_motor_noise_kernel_fft(sd_motor, n_mu1_bias)
-
-                kernel_fft = global_motor_kernel_cache[key]
-
-                # Apply motor noise to all surfaces with this motor noise value in one batch
-                batch_surfaces = log_surfaces_batch[mask]
-                batch_surfaces_with_noise = apply_motor_noise_with_precomputed_kernel(batch_surfaces, kernel_fft)
-                surfaces_with_noise = surfaces_with_noise.at[mask].set(batch_surfaces_with_noise)
-            else:
-                # No motor noise - keep original surfaces
-                surfaces_with_noise = surfaces_with_noise.at[mask].set(log_surfaces_batch[mask])
-
-        log_surfaces_batch = surfaces_with_noise
+        all_bias_curves = bundle["bias"]
+        all_asymm_curves = bundle["asymmetry"]
+        all_predicted_sd = bundle["sd"]
+        all_predicted_sd_pooled = bundle["pooled_sd"]
+        if backend_family == surrogate.FAMILY_SURFACE_NN:
+            distributions = bundle["distributions"]
+            distance_matrix = prediction_backend.D_circ_matrix
+        else:
+            bias_grid = np.asarray(config.create_grid("mu1_bias"))
+            difference = np.abs(bias_grid[:, None] - bias_grid[None, :])
+            distance_matrix = np.minimum(difference, 360.0 - difference)
 
         # Report-order fits have separate parameters but enter the comparison as
         # one color_2 distribution. Mix their predicted surfaces with the same
@@ -604,45 +707,21 @@ def prepare_all_subjects_data(
                 "noise_conditions"][condition_name][0]["result"]
             if "data_df" not in first_result or "data_df" not in second_result:
                 continue
-            score = _pooled_bias_weighted_crps(
-                jnp.take(log_surfaces_batch,
-                         jnp.asarray([first_idx, param_mapping[second_key]]), axis=0),
-                [first_result["data_df"], second_result["data_df"]],
-                feat_vals, global_optimizer.D_circ_matrix,
-                global_optimizer.emp_density_weights_sd,
-            )
+            indices = [first_idx, param_mapping[second_key]]
+            if backend_family == surrogate.FAMILY_WNM:
+                selected = _mixture_probability_surfaces(
+                    prediction_backend, np.asarray(params_batch)[indices],
+                    np.asarray(all_motor_noise)[indices], feat_vals)
+                scorer = pooled_bias_weighted_crps
+            else:
+                selected = np.take(distributions, indices, axis=0)
+                scorer = _pooled_bias_weighted_crps
+            score = scorer(
+                selected, [first_result["data_df"], second_result["data_df"]],
+                feat_vals, distance_matrix,
+                density_curve_spec["emp_density_weights_sd"])
             report_order_bwcrps[key] = score
             report_order_bwcrps[second_key] = score
-
-        # Batch compute ALL curves at once for all subjects
-        print("Computing bias curves for all surfaces...")
-        feat_indices = jnp.arange(len(feat_vals))
-        all_bias_curves = _generate_nn_bias_curve_batch(log_surfaces_batch, feat_indices)
-
-        print("Computing density asymmetry curves for all surfaces...")
-        all_asymm_curves = generate_nn_density_asymmetry_batch(log_surfaces_batch)
-
-        print("Computing standard deviation curves for all surfaces...")
-        all_predicted_sd = compute_predicted_sd_curves_batch(log_surfaces_batch, feat_vals)
-
-        # Bin-pooled twin of the same curve, for the comparison against the
-        # empirical SD. Weights are per condition, not per optimizer, so build
-        # the unique rows once and gather them into batch order.
-        zero_weights = np.zeros((SD_N_BINS, len(feat_vals)))
-        unique_weight_rows = [zero_weights]
-        weight_row_of_condition = {}
-        for condition_key, feat_diff_vals in condition_feat_diff.items():
-            weight_row_of_condition[condition_key] = len(unique_weight_rows)
-            unique_weight_rows.append(
-                compute_feat_bin_weights(feat_diff_vals, feat_vals))
-
-        weight_rows = jnp.asarray(np.stack(unique_weight_rows))
-        weight_index = jnp.asarray([
-            weight_row_of_condition.get(key[:3], 0)
-            for key, _ in sorted(param_mapping.items(), key=lambda item: item[1])
-        ])
-        all_predicted_sd_pooled = compute_predicted_sd_curves_batch_pooled(
-            log_surfaces_batch, weight_rows[weight_index])
 
         print("Mapping results back to subject structure...")
     else:
@@ -763,7 +842,10 @@ def prepare_all_subjects_data(
                     experiment_empirical_curves[noise_cond] = {
                         'bias': saved_curves['target_bias'],
                         'bias_weights': saved_curves.get('bias_weights'),
-                        'asymmetry': saved_curves['target_density'],
+                        'asymmetry': (
+                            saved_curves.get('matched_density_target', saved_curves['target_density'])
+                            if backend_family == surrogate.FAMILY_WNM
+                            else saved_curves['target_density']),
                         'sd': empirical_sd,
                         'bias_grid': saved_curves['density_feat_grid'][saved_curves['bias_feat_indices']],
                         'asymm_grid': saved_curves['density_feat_grid'],
@@ -775,7 +857,7 @@ def prepare_all_subjects_data(
                     }
 
             elif all_condition_datasets:
-                global_optimizer.update_dataset(all_condition_datasets)
+                prediction_backend.update_dataset(all_condition_datasets)
                 dataset_names_list = list(all_condition_datasets.keys())
 
                 # Process each condition using precomputed curves and individual empirical SD
@@ -788,10 +870,10 @@ def prepare_all_subjects_data(
 
                         if condition_indices:
                             condition_indices_array = jnp.array(condition_indices)
-                            empirical_bias = jnp.mean(global_optimizer.unified_target_bias[condition_indices_array], axis=0)
-                            empirical_bias_weights = jnp.sum(global_optimizer.unified_bias_weights[condition_indices_array], axis=0)
-                            empirical_asymm = jnp.mean(global_optimizer.unified_target_density[condition_indices_array], axis=0)
-                            empirical_bias_smoothed = jnp.mean(global_optimizer.unified_target_bias_curve[condition_indices_array], axis=0)
+                            empirical_bias = jnp.mean(prediction_backend.unified_target_bias[condition_indices_array], axis=0)
+                            empirical_bias_weights = jnp.sum(prediction_backend.unified_bias_weights[condition_indices_array], axis=0)
+                            empirical_asymm = jnp.mean(prediction_backend.unified_target_density[condition_indices_array], axis=0)
+                            empirical_bias_smoothed = jnp.mean(prediction_backend.unified_target_bias_curve[condition_indices_array], axis=0)
                         else:
                             empirical_bias = None
                             empirical_bias_weights = None
@@ -808,11 +890,11 @@ def prepare_all_subjects_data(
                         empirical_bias_grid = None
                         empirical_asymm_grid = None
 
-                        if hasattr(global_optimizer, 'unified_feat_indices') and hasattr(global_optimizer, 'feat_diff_grid'):
+                        if hasattr(prediction_backend, 'unified_feat_indices') and hasattr(prediction_backend, 'feat_diff_grid'):
                             # Bias uses binned grid (via unified_feat_indices)
-                            empirical_bias_grid = global_optimizer.feat_diff_grid[global_optimizer.unified_feat_indices]
+                            empirical_bias_grid = prediction_backend.feat_diff_grid[prediction_backend.unified_feat_indices]
                             # Asymmetry uses full grid
-                            empirical_asymm_grid = global_optimizer.feat_diff_grid
+                            empirical_asymm_grid = prediction_backend.feat_diff_grid
 
                         experiment_empirical_curves[noise_cond] = {
                             'bias': empirical_bias,
@@ -833,7 +915,8 @@ def prepare_all_subjects_data(
                 'parameters': experiment_parameters,
                 'available_optimizers': available_optimizers,
                 'feat_vals': feat_vals,
-                'noise_conditions': list(noise_conditions.keys())
+                'noise_conditions': list(noise_conditions.keys()),
+                'surrogate_identity': surrogate_identity,
             }
 
         prepared_all_subjects[subject_id] = prepared_subject
@@ -1085,38 +1168,27 @@ def organize_preprocessed_results_by_experiment(prepared_all_subjects: Dict) -> 
 
 def create_extended_summary_plots(prepared_all_subjects: Dict,
                                  output_dir: str = 'model_fit_to_data_results_v2',
-                                 create_individual_plots: bool = True,
-                                 circ_space: int = 360) -> Tuple[List, List]:
+                                 circ_space: int = 360) -> None:
     """Create extended summary plots using preprocessed data.
 
-    Aggregation caveat (see MODEL_PIPELINE_FOR_AGENTS.md S10.4, D.14): only
-    optimizers present in EVERY prepared result of an experiment+condition are
-    aggregated, and that intersection is computed before the "combined"
-    pseudo-subject is excluded from the statistics — a method missing only from
-    "combined" is dropped from the plots AND from the CSV rows returned here,
-    so the exports are not necessarily complete over all stored fits.
+    Only optimizers present in every prepared result of an
+    experiment+condition are aggregated. The intersection is computed before
+    the "combined" pseudo-subject is excluded from the statistics, preserving
+    the historical plotting behavior without coupling plots to tabular exports.
 
     Args:
         prepared_all_subjects: Dictionary from prepare_all_subjects_data() with all precomputed curves
         output_dir: Output directory for plots
-        create_individual_plots: Whether to create individual plots
-
-    Returns:
-        Tuple of (curve_data_for_csv, parameter_data_for_csv) for CSV export
     """
 
     print("Creating extended summary plots using preprocessed data...")
-
-    # Data collection for CSV export
-    curve_data_for_csv = []
-    parameter_data_for_csv = []
 
     # Organize preprocessed data by experiment and condition
     experiments = organize_preprocessed_results_by_experiment(prepared_all_subjects)
 
     if len(experiments) == 0:
         print("No experiments found with sufficient data for summary plots")
-        return [], []
+        return
 
     # Create plots directory
     plots_dir = Path(output_dir) / 'summary_plots'
@@ -1158,7 +1230,7 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
             # before motor-noise runs excluded "expectation", alongside subjects
             # fit later under the current --include-methods set); trusting just
             # the first subject's optimizer list produces ragged per-optimizer
-            # arrays below and crashes the DataFrame construction.
+            # arrays below and corrupts the group summaries.
             common_optimizers = set(first_subject_data['available_optimizers'])
             for prepared_result in prepared_results_list[1:]:
                 common_optimizers &= set(prepared_result['experiment_data']['available_optimizers'])
@@ -1173,13 +1245,12 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
             # Collect precomputed curves from all subjects for this experiment+condition
             stage_bias_curves = {opt: [] for opt in available_optimizers}
             stage_asymm_curves = {opt: [] for opt in available_optimizers}
-            # Fine-grid SD feeds the CSV export; the bin-pooled twin is what the
-            # SD panel plots against the empirical curve.
+            # Fine-grid SD remains as a fallback for older prepared results;
+            # current results use the bin-pooled twin for comparison with data.
             stage_sd_curves = {opt: [] for opt in available_optimizers}
             stage_sd_pooled_curves = {opt: [] for opt in available_optimizers}
 
-            # Collect parameters and empirical curves
-            all_parameters = {opt: [] for opt in available_optimizers}
+            # Collect empirical curves
             all_empirical_bias = []
             all_empirical_bias_smoothed = []
             all_empirical_asymm = []
@@ -1202,8 +1273,6 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                 # Get precomputed optimizer curves for this subject+condition
                 optimizer_curves = experiment_data['optimizer_curves'].get(noise_condition_key, {})
                 empirical_curves = experiment_data['empirical_curves'].get(noise_condition_key, {})
-                parameters = experiment_data['parameters'].get(noise_condition_key, {})
-
                 for opt in available_optimizers:
                     if opt in optimizer_curves:
                         stage_bias_curves[opt].append(optimizer_curves[opt]['bias'])
@@ -1213,9 +1282,6 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                         if optimizer_curves[opt].get('predicted_sd_pooled') is not None:
                             stage_sd_pooled_curves[opt].append(
                                 optimizer_curves[opt]['predicted_sd_pooled'])
-                        params = parameters.get('params', {}).get(opt, parameters.get(opt))
-                        if params is not None:
-                            all_parameters[opt].append(params)
 
                 # Collect empirical curves and separate feature grids
                 if empirical_curves.get('bias') is not None:
@@ -1243,7 +1309,6 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                 if stage_bias_curves[opt]:
                     stage_bias_curves[opt] = jnp.array(stage_bias_curves[opt])
                     stage_asymm_curves[opt] = jnp.array(stage_asymm_curves[opt])
-                    all_parameters[opt] = jnp.array(all_parameters[opt])
                 if len(stage_sd_curves[opt]) > 0:
                     stage_sd_curves[opt] = jnp.array(stage_sd_curves[opt])
                 if len(stage_sd_pooled_curves[opt]) > 0:
@@ -1253,138 +1318,6 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
             # stage_bias_curves[opt] stays a plain list when conversion was skipped.
             available_optimizers = [opt for opt in available_optimizers
                                     if not isinstance(stage_bias_curves[opt], list)]
-
-            # Collect data for CSV export using preprocessed data
-            valid_results = []
-            for prepared_result in prepared_results_list:
-                subject_id = prepared_result['subject_id']
-                if subject_id == "combined":
-                    continue
-                experiment_data = prepared_result['experiment_data']
-                noise_condition_key = prepared_result['noise_condition']
-                noise_condition = display_condition_label(noise_condition_key)
-
-                valid_results.append({
-                    'subject': subject_id,
-                    'experiment': exp_name,
-                    'condition': noise_condition,
-                    'condition_key': noise_condition_key,
-                    'experiment_data': experiment_data
-                })
-
-            if len(valid_results) > 0:
-                # Create curve and parameter data for CSV export
-                n_subjects = len(valid_results)
-                n_feat_points = len(feat_vals)
-
-                subjects = np.array([r['subject'] for r in valid_results])
-                experiments = np.array([r['experiment'] for r in valid_results])
-                conditions = np.array([r['condition'] for r in valid_results])
-
-                # Process all available optimizers
-                for opt in available_optimizers:
-                    # Curve data
-                    opt_bias_data = stage_bias_curves[opt][:n_subjects]
-                    opt_asymm_data = stage_asymm_curves[opt][:n_subjects]
-                    if opt in stage_sd_curves and len(stage_sd_curves[opt]) > 0:
-                        opt_sd_data = stage_sd_curves[opt][:n_subjects]
-                    else:
-                        opt_sd_data = np.full((n_subjects, n_feat_points), np.nan)
-
-                    opt_curve_df = pd.DataFrame({
-                        'subject': np.repeat(subjects, n_feat_points),
-                        'experiment': np.repeat(experiments, n_feat_points),
-                        'condition': np.repeat(conditions, n_feat_points),
-                        'optimizer': opt,
-                        'feat_diff': np.tile(display_feat_vals, n_subjects),
-                        'mu_bias': (opt_bias_data * angle_display_scale).flatten(),
-                        'sd_deg': (opt_sd_data * angle_display_scale).flatten(),
-                        'density_asymmetry': opt_asymm_data.flatten()
-                    })
-
-                    curve_data_for_csv.extend(opt_curve_df.to_dict('records'))
-
-                    # Parameter data from preprocessed results
-                    opt_params_list = []
-                    opt_losses = []
-                    opt_eval_losses = {method: [] for method in LOSS_EVALUATION_METHODS}
-                    opt_pooled_bwcrps = []
-                    opt_ccc_stats = []
-
-                    for result in valid_results:
-                        experiment_data = result['experiment_data']
-                        noise_condition = result['condition_key']
-                        parameters = experiment_data['parameters'].get(noise_condition, {})
-
-                        # Handle both old format (parameters[opt]) and new format (parameters['params'][opt])
-                        opt_params = parameters.get('params', {}).get(opt, parameters.get(opt))
-                        opt_loss = parameters.get('losses', {}).get(opt, 0.0)
-                        eval_losses = parameters.get('eval_losses', {}).get(opt, {})
-                        pooled_bwcrps = parameters.get('pooled_bwcrps', {}).get(opt, np.nan)
-
-                        if opt_params is not None:
-                            opt_params_list.append(opt_params)
-                            opt_losses.append(opt_loss)
-                            for loss_method in LOSS_EVALUATION_METHODS:
-                                opt_eval_losses[loss_method].append(eval_losses.get(loss_method, np.nan))
-                            opt_pooled_bwcrps.append(pooled_bwcrps)
-
-                            # Decompose the density fit into CCC and its two
-                            # factors. CCC = r * C_b splits the score into
-                            # precision (r, how well the curve shapes track) and
-                            # accuracy (C_b, whether the amplitude and offset are
-                            # right) -- and it was the missing accuracy term that
-                            # let the old objective accept curves an order of
-                            # magnitude too small, so exporting them separately is
-                            # what makes that visible per condition.
-                            if opt == 'density':
-                                optimizer_curves = experiment_data['optimizer_curves'].get(noise_condition, {})
-                                empirical_curves = experiment_data['empirical_curves'].get(noise_condition, {})
-
-                                if opt in optimizer_curves and empirical_curves.get('asymmetry') is not None:
-                                    predicted_asymm = np.asarray(optimizer_curves[opt]['asymmetry']).reshape(-1)
-                                    target_asymm = np.asarray(empirical_curves['asymmetry']).reshape(-1)
-                                    opt_ccc_stats.append(_ccc_components(predicted_asymm, target_asymm))
-                                else:
-                                    opt_ccc_stats.append(_NAN_CCC_COMPONENTS)
-                            else:
-                                opt_ccc_stats.append(_NAN_CCC_COMPONENTS)
-
-                    if not opt_params_list:
-                        continue
-
-                    opt_params_array = np.vstack([np.asarray(params).reshape(-1) for params in opt_params_list])
-
-                    param_df_data = {
-                        'subject': subjects,
-                        'experiment': experiments,
-                        'condition': conditions,
-                        'optimizer': opt,
-                        'sd_feat1': opt_params_array[:, 0],
-                        'sd_feat2': opt_params_array[:, 1],
-                        'sd_spat': opt_params_array[:, 2],
-                        f'{opt}_loss': opt_losses
-                    }
-                    for loss_method, values in opt_eval_losses.items():
-                        param_df_data[f'eval_{loss_method}_loss'] = values
-                    param_df_data['eval_bias_weighted_crps_pooled_loss'] = opt_pooled_bwcrps
-
-                    # Add density loss components for density optimizer. NaN (not
-                    # 0) wherever a component is undefined: 0 is a real, meaningful
-                    # value for both r and C_b and would be indistinguishable from
-                    # a measurement. `density_loss` itself keeps its name and its
-                    # lower-is-better convention -- it now carries 1 - CCC.
-                    if opt == 'density':
-                        param_df_data['density_ccc'] = [s['ccc'] for s in opt_ccc_stats]
-                        param_df_data['density_r'] = [s['r'] for s in opt_ccc_stats]
-                        param_df_data['density_C_b'] = [s['C_b'] for s in opt_ccc_stats]
-
-                    # Add sd_motor if available
-                    if opt_params_array.shape[1] > 3:
-                        param_df_data['sd_motor'] = opt_params_array[:, 3]
-
-                    opt_param_df = pd.DataFrame(param_df_data)
-                    parameter_data_for_csv.extend(opt_param_df.to_dict('records'))
 
             # Compute statistics for plotting
             avg_stage_bias = {}
@@ -1565,7 +1498,7 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
 
         print(f"  Saved extended summary: {plot_path}")
 
-    return curve_data_for_csv, parameter_data_for_csv
+    return None
 
 
 def _model_slice(log_surf: np.ndarray, feat_grid: np.ndarray, mu1_grid: np.ndarray,
@@ -1586,21 +1519,26 @@ def _model_slice(log_surf: np.ndarray, feat_grid: np.ndarray, mu1_grid: np.ndarr
 
 def _empirical_slice(fd_vals: np.ndarray, bias_vals: np.ndarray,
                      target_fd: float, bias_grid: np.ndarray, weights_sd: float,
-                     period: float = 360.0):
-    """Return Gaussian-weighted KDE of bias values around target_fd.
+                     period: float = 360.0,
+                     bias_bandwidth: Optional[float] = None):
+    """Return Gaussian-weighted wrapped KDE of bias values around target_fd.
 
-    The bias kernel is wrapped over `period` (model space, so 360 by default),
-    matching the fit-side target in shared/utils.py. Note this twin still floors
-    the bandwidth at 1.0 while the fit side has no floor — the two empirical KDEs
-    remain inconsistent in that one respect (MODEL_PIPELINE_FOR_AGENTS.md D.11).
+    WNM fits store the exact empirical bias bandwidth used by the fitted density
+    target; passing it here keeps the illustrative slice on that same estimator.
+    Historical results without stored bandwidth retain the old local fallback.
     """
     w = np.exp(-0.5 * ((fd_vals - target_fd) / weights_sd) ** 2)
     if w.sum() < 1e-10:
         return np.zeros_like(bias_grid)
     w /= w.sum()
-    bias_std = bias_vals.std()
-    iqr = np.percentile(bias_vals, 75) - np.percentile(bias_vals, 25)
-    bw  = max(0.9 * min(bias_std, iqr / 1.34) * len(bias_vals) ** (-0.2), 1.0)
+    if bias_bandwidth is None:
+        bias_std = bias_vals.std()
+        iqr = np.percentile(bias_vals, 75) - np.percentile(bias_vals, 25)
+        bw = max(0.9 * min(bias_std, iqr / 1.34) * len(bias_vals) ** (-0.2), 1.0)
+    else:
+        bw = float(bias_bandwidth)
+        if not np.isfinite(bw) or bw <= 0:
+            raise ValueError(f"bias_bandwidth must be positive and finite, got {bw!r}")
     diff    = bias_grid[:, None] - bias_vals[None, :]
     offsets = period * np.arange(-KDE_WRAPS, KDE_WRAPS + 1)
     kernels = sum(np.exp(-0.5 * ((diff + o) / bw) ** 2) for o in offsets)
@@ -1608,15 +1546,50 @@ def _empirical_slice(fd_vals: np.ndarray, bias_vals: np.ndarray,
     return (kernels * w[None, :]).sum(axis=1)
 
 
+def _plot_log_surface(prediction_backend, params, feat_grid, mu1_grid):
+    """Display-grid density from either backend, with fitted motor noise."""
+    params = np.asarray(params, dtype=float)
+    sd_motor = float(params[3]) if len(params) >= 4 else 0.0
+    if getattr(prediction_backend, "family", None) == surrogate.FAMILY_WNM:
+        feat = jnp.asarray(feat_grid, dtype=jnp.float32)
+        rows = jnp.column_stack([
+            jnp.full(feat.shape, params[0]),
+            jnp.full(feat.shape, params[1]),
+            jnp.full(feat.shape, params[2]),
+            feat,
+        ])
+        # Direct analytic WNM evaluation on the display grid; no NN surface is
+        # loaded or reconstructed. Transpose to the plotting helper's
+        # historical (bias, feature) convention.
+        return np.asarray(prediction_backend.grid_log_density(
+            rows, grid=jnp.asarray(mu1_grid), sd_motor=sd_motor)).T
+
+    log_surf = prediction_backend._predict_batch_fixed_size(
+        jnp.array([params[:3]]), verbosity=0)[0]
+    if sd_motor > 0:
+        from grid_based_multi_condition_optimizer_jax_loops import (
+            apply_motor_noise_with_precomputed_kernel,
+            create_motor_noise_kernel_fft,
+        )
+        n_mu1_bias = log_surf.shape[0]
+        key = (sd_motor, n_mu1_bias)
+        if key not in global_motor_kernel_cache:
+            global_motor_kernel_cache[key] = create_motor_noise_kernel_fft(
+                sd_motor, n_mu1_bias)
+        log_surf = apply_motor_noise_with_precomputed_kernel(
+            log_surf[None], global_motor_kernel_cache[key])[0]
+    return np.asarray(log_surf)
+
+
 def create_pdf_slice_plots(
     extended_results: Dict,
-    global_optimizer,
+    prediction_backend,
     output_dir: str,
     circ_space: int = 360,
     optimizer_names=None,
     n_subjects: int = 3,
     feat_diffs_data: Optional[List[float]] = None,
-    weights_sd: float = 20.0,
+    weights_sd_model: float = 20.0,
 ) -> None:
     """For each experiment × condition × fitting method, plot p(mu1_bias | feat_diff) slices.
 
@@ -1641,9 +1614,9 @@ def create_pdf_slice_plots(
         feat_diffs_data = [round(fd / 2) * 2
                            for fd in np.linspace(fd_max * 0.05, fd_max * 0.50, 4)]
 
-    # Convert to model space for NN lookup
+    # Convert to model space for surrogate evaluation
     feat_diffs_model = [fd / angle_display_scale for fd in feat_diffs_data]
-    weights_sd_model = weights_sd / angle_display_scale  # scale sigma too
+    weights_sd_model = float(weights_sd_model)
 
     # Auto-detect available methods if not specified
     if optimizer_names is None:
@@ -1662,10 +1635,7 @@ def create_pdf_slice_plots(
         for cond_key, result in extended_results.items():
             if f'{optimizer_name}_fitted_params' not in result or 'data_df' not in result:
                 continue
-            parts = cond_key.split('#')
-            if len(parts) < 3:
-                continue
-            subject_id, experiment, noise_cond = parts[0], parts[1], '#'.join(parts[2:])
+            subject_id, experiment, noise_cond = _result_plot_identity(cond_key, result)
             key = (experiment, noise_cond)
             by_exp_cond.setdefault(key, []).append((subject_id, result))
 
@@ -1678,19 +1648,8 @@ def create_pdf_slice_plots(
             scored = []
             for subject_id, result in subject_list:
                 params = np.array(result[f'{optimizer_name}_fitted_params'])
-                log_surf = global_optimizer._predict_batch_fixed_size(
-                    jnp.array([params[:3]]), verbosity=0)[0]
-                sd_motor = float(params[3]) if len(params) >= 4 else 0.0
-                if sd_motor > 0:
-                    from grid_based_multi_condition_optimizer_jax_loops import (
-                        apply_motor_noise_with_precomputed_kernel, create_motor_noise_kernel_fft)
-                    n_mu1_bias = log_surf.shape[0]
-                    key = (sd_motor, n_mu1_bias)
-                    if key not in global_motor_kernel_cache:
-                        global_motor_kernel_cache[key] = create_motor_noise_kernel_fft(sd_motor, n_mu1_bias)
-                    log_surf = apply_motor_noise_with_precomputed_kernel(
-                        log_surf[None], global_motor_kernel_cache[key])[0]
-                log_surf = np.array(log_surf)
+                log_surf = _plot_log_surface(
+                    prediction_backend, params, feat_grid, mu1_grid)
                 fd0 = feat_diffs_model[0]
                 _, E0, asym0 = _model_slice(log_surf, feat_grid, mu1_grid, fd0, weights_sd_model)
                 dissoc = int((E0 < 0 and asym0 > 0) or (E0 > 0 and asym0 < 0))
@@ -1710,13 +1669,16 @@ def create_pdf_slice_plots(
             for row, (dissoc, _, subject_id, result, log_surf, params) in enumerate(selected):
                 fd_vals  = np.array(result['data_df'])[:, 0]  # model space
                 bias_vals = np.array(result['data_df'])[:, 1]
+                empirical_bandwidth = (
+                    result.get("empirical_curves", {}).get("density_bandwidth"))
 
                 for col, (fd_data, fd_model) in enumerate(zip(feat_diffs_data, feat_diffs_model)):
                     ax = axes[row, col]
                     prob, E, asym = _model_slice(log_surf, feat_grid, mu1_grid,
                                                  fd_model, weights_sd_model)
-                    emp = _empirical_slice(fd_vals, bias_vals, fd_model,
-                                           bias_plot_grid_model, weights_sd_model)
+                    emp = _empirical_slice(
+                        fd_vals, bias_vals, fd_model, bias_plot_grid_model,
+                        weights_sd_model, bias_bandwidth=empirical_bandwidth)
                     prob_display = prob / angle_display_scale
                     E_display = E * angle_display_scale
 
@@ -1769,58 +1731,6 @@ def create_pdf_slice_plots(
             print(f"    Saved: {out}")
 
 
-def export_fitted_parameters_csv(parameter_data: List[Dict], output_dir: str = 'model_fit_to_data_results_v2') -> None:
-    """Export fitted parameters to CSV in long format using pre-collected data.
-
-    Values are in MODEL space (360-degree; sd_* columns in model degrees) —
-    unlike fitted_curves.csv, which is display-scaled. Downstream joins must
-    convert one of the two (MODEL_PIPELINE_FOR_AGENTS.md D.1).
-    """
-
-    print("Exporting fitted parameters to CSV...")
-
-    # Save to CSV
-    df = pd.DataFrame(parameter_data)
-
-    # Create output directory
-    csv_dir = Path(output_dir) / 'csv_exports'
-    csv_dir.mkdir(exist_ok=True)
-
-    # Save parameters CSV
-    params_path = csv_dir / 'fitted_parameters.csv'
-    df.to_csv(params_path, index=False)
-
-    print(f"  Saved fitted parameters: {params_path}")
-    print(f"  Shape: {df.shape} (rows: {df.shape[0]}, columns: {df.shape[1]})")
-
-
-def export_fitted_curves_csv(curve_data: List[Dict], output_dir: str = 'model_fit_to_data_results_v2') -> None:
-    """Export fitted bias, SD, and density asymmetry curves to CSV in long format.
-
-    Values are in DISPLAY (data) space: feat_diff, mu_bias, and sd_deg are
-    multiplied by circ_space/360; density_asymmetry is unitless and unscaled.
-    Model curves only — empirical curves are not exported. Rows inherit the
-    summary loop's common-optimizer filtering (see create_extended_summary_plots
-    docstring; MODEL_PIPELINE_FOR_AGENTS.md D.1/D.14).
-    """
-
-    print("Exporting fitted curves to CSV...")
-
-    # Save to CSV
-    df = pd.DataFrame(curve_data)
-
-    # Create output directory
-    csv_dir = Path(output_dir) / 'csv_exports'
-    csv_dir.mkdir(exist_ok=True)
-
-    # Save curves CSV
-    curves_path = csv_dir / 'fitted_curves.csv'
-    df.to_csv(curves_path, index=False)
-
-    print(f"  Saved fitted curves: {curves_path}")
-    print(f"  Shape: {df.shape} (rows: {df.shape[0]}, columns: {df.shape[1]})")
-
-
 def create_unified_plots_with_summaries(
         n_samples: int = 20,
         outliers: bool = False,
@@ -1828,7 +1738,6 @@ def create_unified_plots_with_summaries(
         max_subjects: Optional[int] = None,
         create_summary_plots: bool = True,
         create_individual_plots: bool = True,
-        create_csv_exports: bool = True,
         create_pdf_slices: bool = True,
         pdf_slice_optimizers=None,
         pdf_slice_n_subjects: int = 3,
@@ -1838,9 +1747,9 @@ def create_unified_plots_with_summaries(
         checkpoint_path: Optional[str] = None,
         output_dir: Optional[str] = None,
         results_dir: str = RESULTS_DIR,
-        circ_space: int = 360,
+        circ_space: Optional[int] = None,
 ) -> None:
-    """Create unified subject plots and summary exports.
+    """Create unified subject, group-summary, and optional PDF-slice plots.
 
     Args:
         n_samples: Training sample count used for checkpoints.
@@ -1849,15 +1758,16 @@ def create_unified_plots_with_summaries(
         max_subjects: Optional limit on subjects to process.
         create_summary_plots: Whether to generate summary plots.
         create_individual_plots: Whether to generate per-subject plots.
-        create_csv_exports: Whether to write CSV exports.
         skip_motor_noise: Whether motor noise was skipped in fitting.
         corr_weight: Correlation weight used during fitting. Only affects the
             output path name here, and only reaches the `density_legacy`
             objective during fitting; `density` is 1 - CCC and has no such term.
         results_path: Optional path to extended_fit_results.pkl.
         checkpoint_path: Optional checkpoint path for loading the model.
-        output_dir: Optional output directory for plots/exports.
+        output_dir: Optional output directory for plots.
         results_dir: Base directory for resolving relative paths.
+        circ_space: Optional display-period override. Normally inferred from
+            stored fit metadata; a conflicting override raises.
     """
     corr_str = f'_cw_{corr_weight:.2f}' if corr_weight != 0.25 else ''
 
@@ -1867,11 +1777,31 @@ def create_unified_plots_with_summaries(
         f"{MODEL_FIT_RESULTS_PREFIX}{motor_str}{corr_str}/"
         f"{n_samples}samples/{outliers_str}/extended_fit_results.pkl"
     )
-    default_checkpoint_path = f"pretrained/model_epoch1500_10ktrain_{n_samples}samples.pkl"
     resolved_results_path = resolve_input_path(results_path or default_results_path, results_dir)
-    resolved_checkpoint_path = resolve_input_path(
-        checkpoint_path or default_checkpoint_path, results_dir
-    )
+    # These plots recompute curves, moments and SDs at *stored* parameters, so
+    # they must use the surrogate that produced those parameters, not whatever
+    # is production today. The run's fingerprint says which by SHA-256. A run
+    # without that identity must supply an explicit checkpoint; it never falls
+    # back to today's production artifact. An explicit --checkpoint-path is
+    # verified against the recorded digest when one exists.
+    #
+    # Resolving by n_samples alone was wrong twice over: the old default named
+    # epoch 1500 while the fitter's named epoch 1425 -- different architectures,
+    # not just different epochs -- and after a promotion it would recompute a
+    # historical fit's curves from the new model.
+    resolved_checkpoint_path = surrogate.checkpoint_for_run(
+        resolved_results_path,
+        explicit=resolve_input_path(checkpoint_path, results_dir) if checkpoint_path else None,
+        n_samples=n_samples)
+    _family = surrogate.detect_family(resolved_checkpoint_path)
+    sidecar = read_fingerprint_sidecar(Path(resolved_results_path).parent)
+    fingerprint_payload = (sidecar or {}).get("payload", {})
+    density_curve_spec = (fingerprint_payload.get("density_curve_spec") or {
+        "emp_density_weights_sd": 20.0,
+        "density_smoothing_sigma": None,
+    })
+    matmul_precision = fingerprint_payload.get(
+        "continuous_spec", {}).get("matmul_precision", "default")
 
     if output_dir is None:
         resolved_output_dir = Path(resolved_results_path).parent
@@ -1879,20 +1809,25 @@ def create_unified_plots_with_summaries(
         resolved_output_dir = Path(resolve_results_path(output_dir, results_dir))
 
     # print(f'Reading {resolved_results_path}')
-    """Create both unified plots and summary plots with CSV exports."""
+    """Create unified subject, group-summary, and optional PDF-slice plots."""
 
-    # Load results and organize by subject
+    # Load results and recover the physical circular period recorded by the fit.
     extended_results = load_extended_results(str(resolved_results_path))
+    circ_space = _resolve_plot_circ_space(extended_results, circ_space)
 
-    # Initialize optimizer
-    print("Initializing optimizer...")
-    # df_clean, dummy_dataset = get_data(data_path)
-    # Create dummy condition dataset for GridBasedMultiConditionOptimizer
-    dummy_condition_datasets = {'dummy': jnp.asarray(np.random.uniform(low=-180, high=180.0, size=(100,2)))}
-    global_optimizer = GridBasedMultiConditionOptimizer(
-        str(resolved_checkpoint_path), dummy_condition_datasets
-    )
-    print("Optimizer initialized.")
+    print("Initializing prediction backend...")
+    if _family == surrogate.FAMILY_WNM:
+        prediction_backend = predictor_from_surrogate(
+            surrogate.load_surrogate(checkpoint_path=resolved_checkpoint_path))
+    else:
+        rng = np.random.default_rng(0)
+        dummy_condition_datasets = {'dummy': jnp.asarray(np.column_stack([
+            rng.uniform(config.feat_diff_range[0], config.feat_diff_range[1], 100),
+            rng.uniform(config.mu1_bias_range[0], config.mu1_bias_range[1], 100),
+        ]))}
+        prediction_backend = GridBasedMultiConditionOptimizer(
+            str(resolved_checkpoint_path), dummy_condition_datasets)
+    print(f"{_family} prediction backend initialized.")
     print()
 
     # Create unified subject plots
@@ -1906,7 +1841,9 @@ def create_unified_plots_with_summaries(
     else:
         limited_subjects_data = subjects_data
 
-    prepared_all_subjects = prepare_all_subjects_data(limited_subjects_data, global_optimizer)
+    with jax.default_matmul_precision(matmul_precision):
+        prepared_all_subjects = prepare_all_subjects_data(
+            limited_subjects_data, prediction_backend, density_curve_spec)
 
     # Create plots for each subject using prepared data
     if create_individual_plots:
@@ -1919,26 +1856,22 @@ def create_unified_plots_with_summaries(
         print(f"Plots saved to: {output_dir}/unified_subject_plots/")
 
     # Create summary plots if requested
-    if create_summary_plots or create_csv_exports:
-        print("\n=== Creating Summary Plots and Exports ===")
-        curve_data_for_csv, parameter_data_for_csv = create_extended_summary_plots(
-            prepared_all_subjects, resolved_output_dir, create_individual_plots=False,
-            circ_space=circ_space,
+    if create_summary_plots:
+        print("\n=== Creating Summary Plots ===")
+        create_extended_summary_plots(
+            prepared_all_subjects, resolved_output_dir, circ_space=circ_space,
         )
-
-        if create_csv_exports:
-            export_fitted_parameters_csv(parameter_data_for_csv, resolved_output_dir)
-            export_fitted_curves_csv(curve_data_for_csv, resolved_output_dir)
-            print(f"CSV files saved to: {resolved_output_dir}/csv_exports/")
 
     if create_pdf_slices:
         print("\n=== Creating PDF Slice Plots ===")
-        create_pdf_slice_plots(
-            extended_results, global_optimizer, resolved_output_dir,
-            circ_space=circ_space,
-            optimizer_names=pdf_slice_optimizers,
-            n_subjects=pdf_slice_n_subjects,
-        )
+        with jax.default_matmul_precision(matmul_precision):
+            create_pdf_slice_plots(
+                extended_results, prediction_backend, resolved_output_dir,
+                circ_space=circ_space,
+                optimizer_names=pdf_slice_optimizers,
+                n_subjects=pdf_slice_n_subjects,
+                weights_sd_model=density_curve_spec["emp_density_weights_sd"],
+            )
 
 
 def main():
@@ -1946,14 +1879,14 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Create unified subject plots and summary exports from model-fit results."
+        description="Create unified subject, group-summary, and PDF-slice plots from model-fit results."
     )
     parser.add_argument("--results-path", default=None,
                         help="Path to extended_fit_results.pkl (overrides defaults).")
     parser.add_argument("--checkpoint-path", default=None,
                         help="Path to model checkpoint (overrides defaults).")
     parser.add_argument("--output-dir", default=None,
-                        help="Directory to write plots/exports (defaults to results parent).")
+                        help="Directory to write plots (defaults to results parent).")
     parser.add_argument("--n-samples", type=int, default=20,
                         help="Sample count used for training (default: 20).")
     parser.add_argument("--include-outliers", action=argparse.BooleanOptionalAction, default=True,
@@ -1968,19 +1901,16 @@ def main():
                         help="Create per-subject plots (default: false).")
     parser.add_argument("--summary-plots", action=argparse.BooleanOptionalAction, default=True,
                         help="Create summary plots (default: true).")
-    parser.add_argument("--csv-exports", action=argparse.BooleanOptionalAction, default=True,
-                        help="Create CSV exports (default: true).")
     parser.add_argument("--results-dir", default=RESULTS_DIR,
                         help="Base directory for outputs (default: results).")
-    parser.add_argument("--circ-space", type=int, default=360, choices=[180, 360],
-                        help="Circular space of the fitted data. Use 180 for axial orientation "
-                             "data fitted after doubling into model space; plots/CSVs are shown "
-                             "back in the original data space. Use 360 when data already match "
-                             "model space.")
+    parser.add_argument("--circ-space", type=int, default=None, choices=[180, 360],
+                        help="Optional circular-space override. By default it is inferred from "
+                             "the fitted result metadata; a conflicting override raises.")
     parser.add_argument("--pdf-slices", action=argparse.BooleanOptionalAction, default=True,
                         help="Create PDF slice plots (default: true).")
     parser.add_argument("--pdf-slice-optimizer", nargs='*', default=None,
-                        choices=['density', 'expectation', 'likelihood', 'crps', 'balanced_crps'],
+                        choices=['density', 'expectation', 'smoothed_exp', 'likelihood',
+                                 'crps', 'balanced_crps', 'bias_weighted_crps'],
                         help="Which optimizer(s) to use for PDF slices (default: all available).")
     parser.add_argument("--pdf-slice-n-subjects", type=int, default=3,
                         help="Number of subjects to show per PDF slice plot (default: 3).")
@@ -1993,7 +1923,6 @@ def main():
         max_subjects=args.max_subjects,
         create_individual_plots=args.individual_plots,
         create_summary_plots=args.summary_plots,
-        create_csv_exports=args.csv_exports,
         create_pdf_slices=args.pdf_slices,
         pdf_slice_optimizers=args.pdf_slice_optimizer,
         pdf_slice_n_subjects=args.pdf_slice_n_subjects,

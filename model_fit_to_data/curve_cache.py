@@ -240,6 +240,30 @@ class CacheCorruptError(RuntimeError):
     """Raised when a cache's contents do not match its manifest."""
 
 
+def surrogate_manifest_fields(checkpoint_path) -> Dict[str, Any]:
+    """Which surrogate built a cache, for the manifest -- not for the key.
+
+    The key already digests ``checkpoint_sha256``, so two families cannot share a
+    cache directory and correctness does not need these. Adding them to the key
+    would rename every existing directory and discard caches that take hours to
+    build, for no change in what the curves are. They go in the manifest instead,
+    where they answer "which model produced this" without invalidating anything.
+    """
+    from shared import surrogate
+
+    loaded = surrogate.load_surrogate(checkpoint_path=checkpoint_path)
+    fields = {
+        "dm_version": surrogate.dm_version(loaded.family, loaded.path.name),
+        "surrogate_family": loaded.family,
+        "surrogate_n_samples": loaded.n_samples,
+        "surrogate_artifact": loaded.path.name,
+    }
+    schema = loaded.meta.get("artifact_schema")
+    if schema:
+        fields["surrogate_artifact_schema"] = schema
+    return fields
+
+
 def write_cache(out_dir: os.PathLike | str, *, cache_key: str, sd_spat_values,
                 feat_pairs, curves, manifest_extra: Optional[Dict[str, Any]] = None) -> Path:
     """Write a complete cache directory. Centering and statistics happen here.
@@ -303,17 +327,25 @@ def write_cache(out_dir: os.PathLike | str, *, cache_key: str, sd_spat_values,
     return out_dir
 
 
-def read_manifest(cache_dir: os.PathLike | str, *, verify: bool = False) -> Dict[str, Any]:
+def read_manifest(cache_dir: os.PathLike | str, *, verify: bool = False,
+                  expected_key: Optional[str] = None) -> Dict[str, Any]:
     """Load and validate a cache manifest.
 
     Args:
         verify: also re-hash every array and compare. Off by default because it
             costs a full read of a multi-GB cache; on for `--verify` builds and
             whenever a cache has moved between machines.
+        expected_key: the key the caller asked for. The directory name is derived
+            from the key, but nothing stops a directory being renamed, copied or
+            restored under the wrong name -- and then a fit reads another
+            surrogate's curves with no sign that anything is wrong. The manifest
+            records the key it was built with; checked here when the caller knows
+            what it wanted.
 
     Raises:
         CacheIncompleteError: the completion marker is absent.
-        CacheCorruptError: manifest missing, malformed, or checksums disagree.
+        CacheCorruptError: manifest missing, malformed, checksums disagree, or
+            the manifest's own key is not the one requested.
     """
     cache_dir = Path(cache_dir)
     if not (cache_dir / COMPLETION_MARKER).exists():
@@ -325,6 +357,19 @@ def read_manifest(cache_dir: os.PathLike | str, *, verify: bool = False) -> Dict
         manifest = json.loads((cache_dir / MANIFEST_NAME).read_text())
     except (OSError, json.JSONDecodeError) as exc:
         raise CacheCorruptError(f"{cache_dir}: cannot read {MANIFEST_NAME}: {exc}") from exc
+
+    if expected_key is not None:
+        recorded = manifest.get("cache_key")
+        if recorded is None:
+            raise CacheCorruptError(
+                f"{cache_dir}: the manifest records no cache_key, so it cannot say which "
+                "settings and surrogate produced these curves. Rebuild it.")
+        if recorded != expected_key:
+            raise CacheCorruptError(
+                f"{cache_dir} holds a cache built for key {recorded}, but key {expected_key} "
+                "was requested. The directory name is derived from the key, so this means the "
+                "directory was renamed, copied or restored under the wrong name. Reading it "
+                "would score a fit against another surrogate's curves.")
 
     if manifest.get("cache_format") != CACHE_FORMAT:
         raise CacheCorruptError(
@@ -404,6 +449,9 @@ def open_or_build(out_root: os.PathLike | str, cache_key: str, build_fn,
 
     cache_dir = cache_dir_for(out_root, cache_key)
     if (cache_dir / COMPLETION_MARKER).exists():
+        # Check the manifest agrees with what was asked for before handing the
+        # curves to a fit; the directory name alone is not evidence.
+        read_manifest(cache_dir, expected_key=cache_key)
         return CachedCurveSource(cache_dir, verify=verify)
 
     Path(out_root).mkdir(parents=True, exist_ok=True)

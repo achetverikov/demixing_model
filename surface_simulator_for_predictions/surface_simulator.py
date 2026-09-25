@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 """
-Surface Simulator for Predictions
+Demixing Model Prediction Generator
 
-This script reads parameters from a CSV/Arrow file, simulates surfaces and curves
-using either neural network checkpoints or precomputed averaged surfaces, and
-writes results for downstream R analysis.
+This script reads parameter combinations from CSV/Arrow, evaluates the packaged
+production surrogate (WNM by default), or explicitly uses the historical surface
+network / stored averaged surfaces, and writes prediction curves for Python or R
+analysis.
 """
 
 import pandas as pd
 import numpy as np
 import jax
 import jax.numpy as jnp
-import pyarrow as pa
-import pyarrow.parquet as pq
 import argparse
 import sys
+import re
 from pathlib import Path
-import pickle
 from typing import Optional, Tuple
 
 from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
@@ -25,18 +24,12 @@ from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
     apply_motor_noise,
     _generate_nn_bias_curve_batch,
 )
-from shared.config import config
+from shared.config import DENSITY_CURVE_SPEC, config
 from shared.mu1_axis import guard_surface_mu1_axis, periodic_integral
-from shared.utils import (AveragedSurface, SurfaceUnpickler, resolve_input_path,
-                          ensure_averaged_surface_file)
-
-RESULTS_DIR = "results"
-CHECKPOINT_PREFIX = "neural_net_checkpoints"
-CHECKPOINT_EPOCH = 1500
-PRETRAINED_CHECKPOINTS = {
-    20: "pretrained/model_epoch1425_10ktrain_20samples.pkl",
-    100: "pretrained/model_epoch1500_10ktrain_100samples.pkl",
-}
+from shared import surrogate
+from shared.prediction import predictor_from_surrogate
+from shared.utils import (SurfaceUnpickler, ensure_averaged_surface_file,
+                          gaussian_curve_smoother)
 
 def _generate_mu2_bias_curve_batch(mu2_surfaces_batch: jnp.ndarray, target_feat_indices: jnp.ndarray) -> jnp.ndarray:
     """Generate mu2 bias curves for batch of mu2 surfaces using linear integration (not circular)."""
@@ -89,28 +82,14 @@ def _generate_mu2_density_asymmetry_batch(mu2_surfaces_batch: jnp.ndarray, targe
         p_negative = jnp.sum(negative_probs, axis=0) * dx
         
         asymmetry = p_positive - p_negative
-        
-        # Apply Gaussian smoothing if requested using JAX operations
+
+        # Same smoother as the mu1 path, from the one shared implementation.
+        # This used to be a second inline copy that convolved via `correlate`;
+        # the kernel is symmetric, so the two agree exactly (checked in
+        # tests/test_curve_smoother.py) and the duplicate bought nothing.
         if apply_smoothing:
-            # Create Gaussian kernel
-            kernel_size = int(4 * smoothing_sigma + 1)  # Kernel size based on sigma
-            if kernel_size % 2 == 0:
-                kernel_size += 1  # Ensure odd size
-            
-            # Create 1D Gaussian kernel
-            x = jnp.arange(kernel_size) - kernel_size // 2
-            kernel = jnp.exp(-0.5 * (x / smoothing_sigma) ** 2)
-            kernel = kernel / jnp.sum(kernel)  # Normalize
-            
-            # Apply convolution using JAX - pad the asymmetry values
-            pad_width = kernel_size // 2
-            padded_asymmetry = jnp.pad(asymmetry, pad_width, mode='edge')
-            
-            # Convolve using correlate (which is equivalent to convolution with flipped kernel)
-            smoothed_asymmetry = jnp.correlate(padded_asymmetry, kernel, mode='valid')
-            return smoothed_asymmetry
-        else:
-            return asymmetry
+            return gaussian_curve_smoother(asymmetry, smoothing_sigma)
+        return asymmetry
 
     # Apply to entire batch using vmap with smoothing enabled (sigma=5)
     vectorized_compute = jax.vmap(lambda log_surf: compute_single_mu2_density_asymmetry(
@@ -196,6 +175,30 @@ def load_averaged_surface(sd_feat1: float, sd_feat2: float, sd_spat: float, n_sa
     Raises:
         FileNotFoundError: If surface file doesn't exist
     """
+    # The directory carries the observer model -- the filename holds only the SDs
+    # -- so n_samples cannot select a file here and must not be taken as evidence
+    # of one. It is checked against the directory instead: passing 20 while
+    # reading a 100-sample directory used to return that directory's arrays
+    # labelled 20, byte-identical to the same call with 100.
+    # An exact token, not containment: "120samples" contains "20samples", and a
+    # directory renamed "..._100samples_copy_20samples" would pass a containment
+    # check and export n=100 arrays under an n=20 label.
+    directory_name = Path(surfaces_dir).name
+    tokens = re.findall(r"(?<![0-9])(\d+)samples(?![0-9])", directory_name)
+    distinct = sorted(set(tokens))
+    if len(distinct) > 1:
+        raise ValueError(
+            f"the averaged-surface directory {directory_name!r} names more than one observer "
+            f"model ({distinct}), so it cannot identify which produced its surfaces. Rename "
+            "it, or pass a directory whose name is unambiguous.")
+    if str(n_samples) not in tokens:
+        raise ValueError(
+            f"n_samples={n_samples} does not match the averaged-surface directory "
+            f"{directory_name!r}, whose sample-count tokens are {tokens or 'none'}. The "
+            "directory is what identifies the observer model here -- the surfaces are keyed "
+            "on disk by it, so the argument cannot select them and would only mislabel the "
+            "output.")
+
     # Use canonical ordering for filename; ensure .0 suffix matches saved filenames
     canonical_sf1 = float(min(sd_feat1, sd_feat2))
     canonical_sf2 = float(max(sd_feat1, sd_feat2))
@@ -230,192 +233,199 @@ def load_averaged_surface(sd_feat1: float, sd_feat2: float, sd_spat: float, n_sa
 
 
 def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: str,
-                              skip_motor_noise: bool = False, use_nn_surfaces: bool = True,
+                              skip_motor_noise: bool = False,
+                              use_nn_surfaces: Optional[bool] = None,
                               averaged_surfaces_dir: Optional[str] = None,
-                              explicit_checkpoint_path: Optional[str] = None):
-    """
-    Read parameters from CSV/Arrow file, simulate surfaces, and save results.
+                              explicit_checkpoint_path: Optional[str] = None,
+                              surface_source: str = "model"):
+    """Generate prediction curves from the packaged model or stored surfaces.
 
-    Args:
-        input_path: Path to CSV/Arrow file with parameters
-        n_samples: Number of samples used for training (determines checkpoint path)
-        output_path: Path to save results
-        skip_motor_noise: Whether to skip motor noise
-        use_nn_surfaces: Whether to use NN predictions (True) or averaged surfaces from files (False)
+    surface_source="model" uses the current production surrogate, which is WNM.
+    "nn" explicitly selects the historical surface network and "raw" loads
+    averaged simulation surfaces, retaining the separate mu2 outputs.
+    use_nn_surfaces is accepted only as a compatibility alias: True means the
+    current packaged model, False means raw surfaces.
     """
+    if use_nn_surfaces is not None:
+        compatibility_source = "model" if use_nn_surfaces else "raw"
+        if surface_source != "model" and surface_source != compatibility_source:
+            raise ValueError(
+                "use_nn_surfaces and surface_source request different prediction sources")
+        surface_source = compatibility_source
+    if surface_source not in {"model", "nn", "raw"}:
+        raise ValueError(f"unknown surface_source {surface_source!r}")
+
     print(f"Reading parameters from {input_path}...")
-    
-    # Read parameters from file (support both CSV and Arrow)
     try:
         if input_path.endswith('.arrow') or input_path.endswith('.parquet'):
             params_df = pd.read_parquet(input_path)
         else:
             params_df = pd.read_csv(input_path)
         print(f"Loaded {len(params_df)} parameter combinations")
-        print(f"DataFrame dtypes:\n{params_df.dtypes}")
-        print(f"DataFrame head:\n{params_df.head()}")
-    except Exception as e:
-        print(f"Error reading file: {e}")
-        sys.exit(1)
-    
-    # Validate CSV columns
-    if skip_motor_noise:
-        required_cols = ['sd_feat1', 'sd_feat2', 'sd_spat']
-    else:
-        required_cols = ['sd_feat1', 'sd_feat2', 'sd_spat', 'sd_motor']
-    
+    except Exception as exc:
+        raise RuntimeError(f"could not read parameter file {input_path}: {exc}") from exc
+
+    required_cols = ['sd_feat1', 'sd_feat2', 'sd_spat']
+    if not skip_motor_noise:
+        required_cols.append('sd_motor')
     missing_cols = [col for col in required_cols if col not in params_df.columns]
     if missing_cols:
-        print(f"Error: Missing required columns in CSV: {missing_cols}")
-        print(f"Available columns: {list(params_df.columns)}")
-        sys.exit(1)
-    
-    if not use_nn_surfaces and not averaged_surfaces_dir:
-        raise ValueError("averaged_surfaces_dir is required when use_nn_surfaces=False")
+        raise ValueError(
+            f"missing required parameter columns {missing_cols}; "
+            f"available columns are {list(params_df.columns)}")
 
-    # Convert to JAX array and handle motor noise
     if skip_motor_noise:
-        # Add sd_motor column with zeros when motor noise is skipped
+        params_df = params_df.copy()
         params_df['sd_motor'] = 0.0
-        parameters_array = jnp.array(params_df[['sd_feat1', 'sd_feat2', 'sd_spat', 'sd_motor']].values, dtype=jnp.float32)
-    else:
-        parameters_array = jnp.array(params_df[required_cols].values, dtype=jnp.float32)
-    
-    if explicit_checkpoint_path:
-        resolved_checkpoint_path = Path(explicit_checkpoint_path)
-    else:
-        checkpoint_path = PRETRAINED_CHECKPOINTS.get(
-            n_samples,
-            f'{CHECKPOINT_PREFIX}_{n_samples}samples/model_epoch_{CHECKPOINT_EPOCH:04d}.pkl',
-        )
-        resolved_checkpoint_path = resolve_input_path(checkpoint_path, RESULTS_DIR)
 
-    # Initialize optimizer for simulation only (no datasets needed) - but only if using NN surfaces
-    if use_nn_surfaces:
-        try:
-            print(f"Using checkpoint: {resolved_checkpoint_path}")
-            optimizer = GridBasedMultiConditionOptimizer(
-                checkpoint_path=str(resolved_checkpoint_path),
-                condition_datasets=None,  # No datasets needed for simulation
-                skip_motor_noise=skip_motor_noise
-            )
-            print("Optimizer initialized successfully")
-        except Exception as e:
-            print(f"Error initializing optimizer: {e}")
-            sys.exit(1)
-    else:
-        print("Using averaged surfaces from files instead of NN predictions")
-        # We still need the grid configuration, so create a minimal config object
-        optimizer = type('obj', (object,), {
-            'feat_diff_grid': config.create_grid('feat_diff'),
-            'mu1_bias_grid': config.create_grid('mu1_bias')
-        })()
-    
-    # Extract parameters
-    sd_feat1 = parameters_array[:, 0]
-    sd_feat2 = parameters_array[:, 1] 
-    sd_spat = parameters_array[:, 2]
-    sd_motor = parameters_array[:, 3]
-    
-    print(f"Simulating surfaces for {len(parameters_array)} parameter combinations...")
-    
-    if use_nn_surfaces:
-        # Create NN input parameters (sd_feat1, sd_feat2, sd_spat)
-        nn_params = jnp.column_stack([sd_feat1, sd_feat2, sd_spat])
-        
-        # Generate base surfaces using NN (only mu1 surfaces available)
-        log_surfaces_batch = optimizer._predict_batch_fixed_size(nn_params, verbosity=1)
-        mu2_surfaces_batch = None  # NN doesn't provide mu2 surfaces
-        print("Note: NN surfaces only provide mu1 bias curves, mu2 bias curves not available")
-    else:
-        # Load averaged surfaces from files
-        print("Loading averaged surfaces from files...")
+    try:
+        motor_values = np.asarray(params_df['sd_motor'], dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("sd_motor values must be numeric, finite, and non-negative") from exc
+    if not np.all(np.isfinite(motor_values)) or np.any(motor_values < 0):
+        raise ValueError(
+            f"sd_motor values must be finite and non-negative, got {motor_values.tolist()}")
+    params_df = params_df.copy()
+    params_df['sd_motor'] = motor_values
+
+    parameters_array = jnp.asarray(
+        params_df[['sd_feat1', 'sd_feat2', 'sd_spat', 'sd_motor']].values,
+        dtype=jnp.float32)
+
+    feat_diff_grid = jnp.asarray(config.create_grid('feat_diff'), dtype=jnp.float32)
+    mu1_bias_grid = jnp.asarray(config.create_grid('mu1_bias'), dtype=jnp.float32)
+    n_feat_points = len(feat_diff_grid)
+    resolved_checkpoint_path = None
+    surrogate_family = None
+    resolved_n_samples = n_samples
+    mu2_surfaces_batch = None
+
+    density_curves = []
+    expectation_curves = []
+    sd_curves = []
+
+    if surface_source == "raw":
+        if not averaged_surfaces_dir:
+            raise ValueError("averaged_surfaces_dir is required with surface_source=raw")
+        surrogate_family = "averaged_surfaces"
         mu1_surfaces_list = []
         mu2_surfaces_list = []
-        
-        for i, (sf1, sf2, sp) in enumerate(zip(sd_feat1, sd_feat2, sd_spat)):
-            try:
-                mu1_surface, mu2_surface = load_averaged_surface(float(sf1), float(sf2), float(sp), n_samples, surfaces_dir=averaged_surfaces_dir)
-                mu1_surfaces_list.append(mu1_surface)
-                mu2_surfaces_list.append(mu2_surface)
-            except FileNotFoundError as e:
-                print(f"Error loading surface for parameter combination {i+1}: {e}")
-                sys.exit(1)
-            except RuntimeError as e:
-                print(f"Error loading surface for parameter combination {i+1}: {e}")
-                sys.exit(1)
-        
-        log_surfaces_batch = jnp.stack(mu1_surfaces_list, axis=0)  # Keep mu1 for existing functionality
-        mu2_surfaces_batch = jnp.stack(mu2_surfaces_list, axis=0)  # Add mu2 surfaces
-        print(f"Successfully loaded {len(mu1_surfaces_list)} averaged mu1 and mu2 surface pairs")
-    
-    # Apply motor noise if not skipped
-    if not skip_motor_noise:
-        print("Applying motor noise...")
-        # Group by unique sd_motor values for efficiency
-        unique_motors, motor_indices = jnp.unique(sd_motor, return_inverse=True)
-        
-        final_surfaces = jnp.empty_like(log_surfaces_batch)
-        for i, unique_motor in enumerate(unique_motors):
-            # Get surfaces for this motor noise level
-            mask = motor_indices == i
-            surfaces_subset = log_surfaces_batch[mask]
-            
-            if len(surfaces_subset) > 0:
-                # Apply motor noise
-                noisy_surfaces = apply_motor_noise(surfaces_subset, float(unique_motor))
-                final_surfaces = final_surfaces.at[mask].set(noisy_surfaces)
+        for sf1, sf2, sp in parameters_array[:, :3]:
+            mu1_surface, mu2_surface = load_averaged_surface(
+                float(sf1), float(sf2), float(sp), n_samples,
+                surfaces_dir=averaged_surfaces_dir)
+            mu1_surfaces_list.append(mu1_surface)
+            mu2_surfaces_list.append(mu2_surface)
+        log_surfaces_batch = jnp.stack(mu1_surfaces_list)
+        mu2_surfaces_batch = jnp.stack(mu2_surfaces_list)
 
-        log_surfaces_batch = final_surfaces
+        if not skip_motor_noise:
+            noisy = []
+            for surface, motor in zip(log_surfaces_batch, parameters_array[:, 3]):
+                noisy.append(apply_motor_noise(surface[None], float(motor))[0]
+                             if float(motor) > 0 else surface)
+            log_surfaces_batch = jnp.stack(noisy)
+
+        density_curves = generate_nn_density_asymmetry_batch(log_surfaces_batch)
+        target_feat_indices = jnp.arange(n_feat_points)
+        expectation_curves = _generate_nn_bias_curve_batch(
+            log_surfaces_batch, target_feat_indices)
+        sd_curves = compute_predicted_sd_curves_batch(
+            log_surfaces_batch, feat_diff_grid)
     else:
-        print("Skipping motor noise (sd_motor = 0)")
-    
-    # Generate density curves
-    print("Computing density curves...")
-    density_curves = generate_nn_density_asymmetry_batch(log_surfaces_batch)
-    
-    # Generate expectation curves (bias curves)
-    print("Computing mu1 expectation curves...")
-    # We need to create target feature indices for the bias curve computation
-    feat_diff_grid = optimizer.feat_diff_grid
-    target_feat_indices = jnp.arange(len(feat_diff_grid))  # Use all feature indices
-    expectation_curves = _generate_nn_bias_curve_batch(log_surfaces_batch, target_feat_indices)
-    
-    # Generate mu2 expectation curves if available
+        if explicit_checkpoint_path:
+            resolved_checkpoint_path = Path(explicit_checkpoint_path)
+        elif surface_source == "nn":
+            resolved_checkpoint_path = surrogate.SURFACE_DEFAULTS[n_samples]
+        else:
+            resolved_checkpoint_path = surrogate.production_checkpoint(n_samples)
+
+        loaded = surrogate.load_surrogate(
+            checkpoint_path=resolved_checkpoint_path, n_samples=n_samples)
+        resolved_n_samples = loaded.n_samples
+        surrogate_family = loaded.family
+
+        if surface_source == "nn" and loaded.family != surrogate.FAMILY_SURFACE_NN:
+            raise ValueError(
+                f"surface_source=nn requires a historical surface checkpoint, got "
+                f"{loaded.family!r}")
+
+        if loaded.family == surrogate.FAMILY_WNM:
+            predictor = predictor_from_surrogate(loaded)
+            smoothing_sigma = DENSITY_CURVE_SPEC["density_smoothing_sigma"]
+            if smoothing_sigma is None:
+                smoothing_sigma = (
+                    DENSITY_CURVE_SPEC["emp_density_weights_sd"] / config.feat_diff_step)
+            for sf1, sf2, sp, motor in np.asarray(parameters_array):
+                rows = jnp.column_stack([
+                    jnp.full(feat_diff_grid.shape, sf1),
+                    jnp.full(feat_diff_grid.shape, sf2),
+                    jnp.full(feat_diff_grid.shape, sp),
+                    feat_diff_grid,
+                ])
+                effective_motor = 0.0 if skip_motor_noise else float(motor)
+                mean, _ = predictor.mean_and_resultant(
+                    rows, sd_motor=effective_motor)
+                density = predictor.smoothed_asymmetry_curve(
+                    rows, float(smoothing_sigma), sd_motor=effective_motor)
+                sd = predictor.circular_sd(rows, sd_motor=effective_motor)
+                expectation_curves.append(np.asarray(mean))
+                density_curves.append(np.asarray(density))
+                sd_curves.append(np.asarray(sd))
+            expectation_curves = np.stack(expectation_curves)
+            density_curves = np.stack(density_curves)
+            sd_curves = np.stack(sd_curves)
+        else:
+            optimizer = GridBasedMultiConditionOptimizer(
+                checkpoint_path=str(resolved_checkpoint_path),
+                condition_datasets=None,
+                skip_motor_noise=skip_motor_noise)
+            nn_params = parameters_array[:, :3]
+            log_surfaces_batch = optimizer._predict_batch_fixed_size(
+                nn_params, verbosity=1)
+            if not skip_motor_noise:
+                noisy = []
+                for surface, motor in zip(log_surfaces_batch, parameters_array[:, 3]):
+                    noisy.append(apply_motor_noise(surface[None], float(motor))[0]
+                                 if float(motor) > 0 else surface)
+                log_surfaces_batch = jnp.stack(noisy)
+            density_curves = generate_nn_density_asymmetry_batch(log_surfaces_batch)
+            target_feat_indices = jnp.arange(n_feat_points)
+            expectation_curves = _generate_nn_bias_curve_batch(
+                log_surfaces_batch, target_feat_indices)
+            sd_curves = compute_predicted_sd_curves_batch(
+                log_surfaces_batch, feat_diff_grid)
+
     if mu2_surfaces_batch is not None:
-        print("Computing mu2 expectation curves...")
-        mu2_expectation_curves = _generate_mu2_bias_curve_batch(mu2_surfaces_batch, target_feat_indices)
-        
-        print("Computing mu2 density asymmetry curves...")
-        mu2_density_curves = _generate_mu2_density_asymmetry_batch(mu2_surfaces_batch, target_feat_indices)
+        target_feat_indices = jnp.arange(n_feat_points)
+        mu2_expectation_curves = _generate_mu2_bias_curve_batch(
+            mu2_surfaces_batch, target_feat_indices)
+        mu2_density_curves = _generate_mu2_density_asymmetry_batch(
+            mu2_surfaces_batch, target_feat_indices)
     else:
         mu2_expectation_curves = None
         mu2_density_curves = None
-    
-    # Generate SD curves
-    print("Computing standard deviation curves...")
-    sd_curves = compute_predicted_sd_curves_batch(log_surfaces_batch, feat_diff_grid)
-    
-    # Prepare results as flattened dataframe for Arrow
-    n_combinations = len(parameters_array)
-    n_feat_points = len(optimizer.feat_diff_grid)
-    
-    # Create a row for each parameter combination
+
     results_list = []
-    for i in range(n_combinations):
+    for i in range(len(parameters_array)):
         row = {
             'sd_feat1': float(parameters_array[i, 0]),
-            'sd_feat2': float(parameters_array[i, 1]), 
+            'sd_feat2': float(parameters_array[i, 1]),
             'sd_spat': float(parameters_array[i, 2]),
             'sd_motor': float(parameters_array[i, 3]),
-            'mu1_density_curve': density_curves[i].tolist(),  # Renamed for clarity 
-            'mu2_density_curve': mu2_density_curves[i].tolist() if mu2_density_curves is not None else [float('nan')] * n_feat_points,
-            'mu1_expectation_curve': expectation_curves[i].tolist(),
-            'mu2_expectation_curve': mu2_expectation_curves[i].tolist() if mu2_expectation_curves is not None else [float('nan')] * n_feat_points,
-            'sd_curve': sd_curves[i].tolist(),  # Store SD curve as list
-            # Store config info in first row only to avoid duplication
-            'feat_diff_grid': optimizer.feat_diff_grid.tolist() if i == 0 else None,
-            'mu1_bias_grid': optimizer.mu1_bias_grid.tolist() if i == 0 else None,
+            'mu1_density_curve': np.asarray(density_curves[i]).tolist(),
+            'mu2_density_curve': (
+                np.asarray(mu2_density_curves[i]).tolist()
+                if mu2_density_curves is not None
+                else [float('nan')] * n_feat_points),
+            'mu1_expectation_curve': np.asarray(expectation_curves[i]).tolist(),
+            'mu2_expectation_curve': (
+                np.asarray(mu2_expectation_curves[i]).tolist()
+                if mu2_expectation_curves is not None
+                else [float('nan')] * n_feat_points),
+            'sd_curve': np.asarray(sd_curves[i]).tolist(),
+            'feat_diff_grid': np.asarray(feat_diff_grid).tolist() if i == 0 else None,
+            'mu1_bias_grid': np.asarray(mu1_bias_grid).tolist() if i == 0 else None,
             'mu2_bias_grid': config.create_grid('mu2_bias').tolist() if i == 0 else None,
             'feat_diff_range': list(config.feat_diff_range) if i == 0 else None,
             'mu1_bias_range': list(config.mu1_bias_range) if i == 0 else None,
@@ -423,33 +433,30 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
             'feat_diff_step': config.feat_diff_step if i == 0 else None,
             'mu1_bias_step': config.mu1_bias_step if i == 0 else None,
             'mu2_bias_step': config.mu2_bias_step if i == 0 else None,
-            'n_samples': n_samples if i == 0 else None,
+            'n_samples': resolved_n_samples if i == 0 else None,
+            'surrogate_family': surrogate_family if i == 0 else None,
+            'surrogate_artifact': (
+                Path(resolved_checkpoint_path).name
+                if i == 0 and resolved_checkpoint_path is not None else None),
             'skip_motor_noise': skip_motor_noise if i == 0 else None,
-            'has_mu2_data': mu2_expectation_curves is not None if i == 0 else None
+            'has_mu2_data': mu2_expectation_curves is not None if i == 0 else None,
         }
         results_list.append(row)
-    
-    results_df = pd.DataFrame(results_list)
-    
-    # Save results
-    print(f"Saving results to {output_path}...")
-    try:
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        if output_path.endswith('.arrow') or output_path.endswith('.parquet'):
-            results_df.to_parquet(output_path, index=False)
-        else:
-            # Fallback to CSV if not arrow
-            results_df.to_csv(output_path, index=False)
-        print(f"Results saved successfully!")
-        print(f"Generated {len(log_surfaces_batch)} surfaces and density curves.")
-    except Exception as e:
-        print(f"Error saving results: {e}")
-        sys.exit(1)
 
+    results_df = pd.DataFrame(results_list)
+    print(f"Saving results to {output_path}...")
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    if output_path.endswith('.arrow') or output_path.endswith('.parquet'):
+        results_df.to_parquet(output_path, index=False)
+    else:
+        results_df.to_csv(output_path, index=False)
+    print(
+        f"Generated predictions for {len(parameters_array)} parameter combinations "
+        f"with {surrogate_family}.")
 
 def main():
     """Parse CLI args and run surface simulation."""
-    parser = argparse.ArgumentParser(description='Simulate surfaces from CSV/Arrow parameters')
+    parser = argparse.ArgumentParser(description='Generate Demixing Model predictions from CSV/Arrow parameters')
     # The three required inputs may be given positionally (legacy form, used by the smoke
     # scripts) or by name. Named forms win if both are supplied.
     parser.add_argument('input_path', nargs='?',
@@ -466,8 +473,10 @@ def main():
                         help='Named form of the third positional argument')
     parser.add_argument('--skip-motor-noise', action='store_true', 
                        help='Skip motor noise computation (sd_motor = 0)')
-    parser.add_argument('--surface-source', choices=['nn', 'raw'], default='nn',
-                       help='nn: use NN approximation of averaged surfaces (default); raw: load averaged surfaces directly from files')
+    parser.add_argument('--surface-source', choices=['model', 'nn', 'raw'], default='model',
+                       help='model: use the current packaged production surrogate (default, WNM); '
+                            'nn: explicitly use the historical surface network; '
+                            'raw: load averaged simulation surfaces and include mu2 outputs')
     parser.add_argument('--averaged-surfaces-dir',
                        help='Path to averaged surfaces directory (required with --surface-source raw).')
     parser.add_argument('--checkpoint-path',
@@ -498,9 +507,9 @@ def main():
         args.n_samples,
         args.output_path,
         args.skip_motor_noise,
-        use_nn_surfaces=args.surface_source == 'nn',
         averaged_surfaces_dir=args.averaged_surfaces_dir,
         explicit_checkpoint_path=args.checkpoint_path,
+        surface_source=args.surface_source,
     )
 
 

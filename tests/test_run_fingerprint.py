@@ -72,6 +72,35 @@ def test_digest_is_stable_and_field_order_independent(run_files):
     assert rf.fingerprint_digest(payload) == rf.fingerprint_digest(shuffled)
 
 
+@pytest.mark.integration
+def test_compiled_fingerprint_pins_bundle_products(run_files, tmp_path):
+    _, checkpoint, _ = run_files
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "bundle.yaml").write_text("bundle_id: example\n")
+    manifest = {
+        "bundle_id": "b1", "population": "signed_bias",
+        "canonical_trial_sha256": "canonical",
+        "analysis_spec_sha256": "analysis",
+        "ordered_scored_row_id_sha256": "rows",
+        "objective_versions": {"density": "density-v1"},
+        "products": {"shared_empirical_targets": {"sha256": "targets"}},
+    }
+    payload = rf.compute_compiled_run_fingerprint(
+        bundle_path=bundle, bundle_manifest=manifest,
+        checkpoint_path=checkpoint, continuous_spec={"n_starts": 8},
+        skip_motor_noise=True,
+        evaluation_methods=["density", "smoothed_exp", "likelihood",
+                            "bias_weighted_crps"], corr_weight=0.25,
+        density_curve_spec={"emp_density_weights_sd": 20.0,
+                            "density_smoothing_sigma": None})
+    assert payload["bundle_id"] == "b1"
+    assert payload["empirical_targets_sha256"] == "targets"
+    assert payload["density_curve_spec"]["emp_density_weights_sd"] == 20.0
+    changed = dict(payload, bundle_id="b2")
+    assert rf.fingerprint_digest(changed) != rf.fingerprint_digest(payload)
+
+
 @pytest.mark.parametrize("overrides", [
     {"circ_space": 180},
     {"min_trials": 40},
@@ -217,3 +246,96 @@ def test_payload_records_the_live_mu1_grid_size(run_files):
     from shared.config import config
 
     assert make_payload(data, checkpoint)["mu1_grid_size"] == config.mu1_bias_grid_size
+
+
+# ---------------------------------------------------------------------------
+# Continuous runs must not be fingerprinted as though they walked the lattice
+# ---------------------------------------------------------------------------
+
+def _common(**overrides):
+    base = dict(
+        data_path=ROOT / "tests" / "data" / "bw_sj_reference.tsv",
+        checkpoint_path=ROOT / "pretrained" / "model_epoch1425_10ktrain_20samples.pkl",
+        circ_space=360, evaluation_methods=["density", "likelihood", "crps"],
+        curve_cache_key=None, skip_motor_noise=True, exp_col="e", subject_col="s",
+        condition_col="c", x_col="x", y_col="y", outlier_col=None,
+        include_outliers=False, min_trials=30, corr_weight=0.25,
+        density_curve_spec={"emp_density_weights_sd": 20.0})
+    base.update(overrides)
+    return base
+
+
+GRID = {"shared_grid_size": 20, "feat_grid_size": 20, "min_grid_step": 0.5,
+        "zoom_factor": 0.5}
+CONTINUOUS = {"n_starts": 64, "seed": 0, "parameterisation": "log",
+              "bounds": [[2.5, 200.0], [5.0, 200.0]], "method": "BatchedLbfgsb",
+              "optimizer_version": "jax-lbfgsb@0350da1", "batch_size": 32,
+              "dtype": "float32", "matmul_precision": "highest"}
+
+
+def test_a_continuous_run_records_its_settings_and_omits_the_grid_schedule():
+    """Filling the lattice fields with defaults a gradient search never walked
+    would let two genuinely different runs share a digest and resume into each
+    other's results."""
+    payload = rf.compute_run_fingerprint(
+        search_backend="continuous", surrogate_family="wnm",
+        continuous_spec=CONTINUOUS, **_common())
+
+    assert payload["continuous_spec"]["n_starts"] == 64
+    assert payload["continuous_spec"]["seed"] == 0
+    assert payload["continuous_spec"]["bounds"] == [[2.5, 200.0], [5.0, 200.0]]
+    for absent in ("grid_spec", "feat_step_schedule", "param_bounds", "refinement_spec"):
+        assert absent not in payload, f"{absent} describes a search that did not run"
+
+def test_the_optimizer_configuration_is_part_of_the_identity():
+    """Two runs at different budgets are different fits, not resumable halves."""
+    base = rf.compute_run_fingerprint(
+        search_backend="continuous", surrogate_family="wnm",
+        continuous_spec=CONTINUOUS, **_common())
+    for changed in ({**CONTINUOUS, "n_starts": 32}, {**CONTINUOUS, "seed": 1},
+                    {**CONTINUOUS, "optimizer_version": "jax-lbfgsb@future"},
+                    {**CONTINUOUS, "batch_size": 16},
+                    {**CONTINUOUS, "dtype": "float64"},
+                    {**CONTINUOUS, "matmul_precision": "default"}):
+        other = rf.compute_run_fingerprint(
+            search_backend="continuous", surrogate_family="wnm",
+            continuous_spec=changed, **_common())
+        assert rf.fingerprint_digest(base) != rf.fingerprint_digest(other)
+
+
+def test_a_missing_or_spurious_continuous_spec_raises():
+    with pytest.raises(ValueError, match="requires continuous_spec"):
+        rf.compute_run_fingerprint(search_backend="continuous", surrogate_family="wnm",
+                                   **_common())
+    with pytest.raises(ValueError, match="does not use one"):
+        rf.compute_run_fingerprint(search_backend="hierarchical", grid_spec=GRID,
+                                   continuous_spec=CONTINUOUS, **_common())
+
+
+def test_only_distributional_objectives_are_versioned_per_family():
+    """The surface backend reads a trial's density at its grid cell's centre; the
+    mixture evaluates at the observation. One version string for both would make
+    a head-to-head information criterion compare different conventions."""
+    methods = ["density", "expectation", "smoothed_exp", "likelihood", "crps",
+               "balanced_crps"]
+    surface = rf.objective_versions_for("surface_nn", methods)
+    wnm = rf.objective_versions_for("wnm", methods)
+
+    # Every curve objective now shares its empirical target/operator contract.
+    for shared in ("density", "expectation", "smoothed_exp"):
+        assert surface[shared] == wnm[shared]
+    # Distributional ones are not.
+    for differing in ("likelihood", "crps", "balanced_crps"):
+        assert surface[differing] != wnm[differing]
+
+    with pytest.raises(ValueError, match="unknown surrogate family"):
+        rf.objective_versions_for("mixture_of_hopes", methods)
+
+
+def test_current_surface_fingerprint_pins_matched_curve_objectives():
+    payload = rf.compute_run_fingerprint(
+        search_backend="hierarchical", grid_spec=GRID, **_common())
+    assert "surrogate_family" not in payload
+    assert "continuous_spec" not in payload
+    assert rf.fingerprint_digest(payload) == (
+        "51148bc7418e3db857d13f8b688643d07058160ad9a6776fed8d0567c1b0a782")

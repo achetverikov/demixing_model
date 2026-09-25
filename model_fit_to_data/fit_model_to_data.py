@@ -23,41 +23,49 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
+# Keep the documented ``python model_fit_to_data/fit_model_to_data.py`` entry
+# point usable without requiring callers to manufacture PYTHONPATH.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 
-from grid_based_multi_condition_optimizer_jax_loops import (
-    DEGENERATE_TARGET_EPS,
-    GridBasedMultiConditionOptimizer,
-    apply_motor_noise_with_precomputed_kernel,
-    create_motor_noise_kernel_fft,
+from model_fit_to_data import curve_cache
+from model_fit_to_data.continuous_fit import ContinuousEngine
+from model_fit_to_data.continuous_optimizer import DEFAULT_N_STARTS
+from model_fit_to_data.density_objective import DEGENERATE_TARGET_EPS
+from model_fit_to_data.exhaustive_density import fit_exhaustive_density
+from model_fit_to_data.run_fingerprint import (
+    StaleResultsError,
+    compute_compiled_run_fingerprint,
+    compute_run_fingerprint,
+    enforce_fingerprint,
+    write_fingerprint_sidecar,
 )
-try:
-    import curve_cache
-    from exhaustive_density import fit_exhaustive_density
-    from run_fingerprint import (
-        StaleResultsError,
-        compute_run_fingerprint,
-        enforce_fingerprint,
-        write_fingerprint_sidecar,
-    )
-except ModuleNotFoundError:  # imported as `model_fit_to_data.fit_model_to_data`
-    from model_fit_to_data import curve_cache
-    from model_fit_to_data.exhaustive_density import fit_exhaustive_density
-    from model_fit_to_data.run_fingerprint import (
-        StaleResultsError,
-        compute_run_fingerprint,
-        enforce_fingerprint,
-        write_fingerprint_sidecar,
-    )
-from shared.utils import filter_data_for_fitting, resolve_input_path, resolve_results_path
+from shared import surrogate
+from shared.config import DENSITY_CURVE_SPEC
+from shared.behavioral_data import filter_data_for_fitting
+from shared.paths import resolve_input_path, resolve_results_path
+from model_fit_to_data.result_identity import (
+    canonical_condition_key as _canonical_condition_key,
+    canonicalize_result_keys,
+    make_condition_key,
+    make_experiment_key,
+    sanitize_result_key_part as _sanitize,
+    validate_group_key_uniqueness as _validate_group_key_uniqueness,
+)
 
 
 LOSS_EVALUATION_METHODS = [
     'density', 'density_legacy', 'expectation', 'smoothed_exp', 'likelihood',
     'crps', 'balanced_crps', 'bias_weighted_crps',
+]
+COMPILED_EVALUATION_METHODS = [
+    'density', 'smoothed_exp', 'likelihood', 'bias_weighted_crps',
 ]
 
 #: The only objective the exhaustive backend can search. Dispatch is per METHOD,
@@ -82,13 +90,6 @@ HIERARCHICAL_GRID_SPEC = {
 #: above: they change the fit target, so the run fingerprint has to state them,
 #: and a value the fingerprint reads from one place while the fit reads it from
 #: another can drift.
-DENSITY_CURVE_SPEC = {
-    'emp_density_weights_sd': 20.0,
-    'density_smoothing_sigma': None,
-    'density_bandwidth_mode': 'pooled',
-    'density_bandwidth_rule': 'sj',
-}
-
 try:
     from rich.console import Console
     from rich.panel import Panel
@@ -111,6 +112,23 @@ USE_RICH = (
     and sys.stdout.isatty()
 )
 console = Console(color_system="auto") if USE_RICH else None
+
+
+def _create_continuous_engine(checkpoint_path, *, corr_weight, skip_motor_noise,
+                              continuous_starts, continuous_seed):
+    from objectives import (
+        bwcrps_energy_score as _energy,
+        compute_curve_losses as _curve_losses,
+    )
+    from shared.prediction import predictor_from_surrogate
+
+    loaded = surrogate.load_surrogate(checkpoint_path=checkpoint_path)
+    return ContinuousEngine(
+        predictor_from_surrogate(loaded),
+        curve_losses=_curve_losses, energy_score=_energy, corr_weight=corr_weight,
+        skip_motor_noise=skip_motor_noise, n_starts=continuous_starts,
+        seed=continuous_seed, **DENSITY_CURVE_SPEC,
+    )
 
 
 def log(message: str = "", style: Optional[str] = None) -> None:
@@ -147,59 +165,6 @@ def make_progress() -> Optional[Progress]:
     )
 
 
-def _sanitize(value: str) -> str:
-    """Replace characters that are problematic in filenames/keys."""
-    return re.sub(r'[^\w]', '_', str(value)).strip('_')
-
-
-def _canonical_condition_key(key: str) -> str:
-    """Canonicalize legacy result keys to the current sanitized form."""
-    parts = str(key).split('#')
-    if len(parts) < 3:
-        return str(key)
-    subject, experiment = parts[0], parts[1]
-    condition = "#".join(parts[2:])
-    return f"{_sanitize(subject)}#{_sanitize(experiment)}#{_sanitize(condition)}"
-
-
-def canonicalize_result_keys(results: Dict) -> Dict:
-    """Canonicalize legacy result keys, rejecting lossy-key collisions."""
-    canonical = {}
-    source_keys = {}
-    for key, entry in results.items():
-        ckey = _canonical_condition_key(key)
-        if ckey in canonical and source_keys[ckey] != str(key):
-            raise ValueError(
-                "Result-key collision after sanitization: "
-                f"{source_keys[ckey]!r} and {str(key)!r} both map to {ckey!r}"
-            )
-        canonical[ckey] = entry
-        source_keys[ckey] = str(key)
-    return canonical
-
-
-def _validate_group_key_uniqueness(
-    df: pd.DataFrame, exp_col: str, subject_col: str, condition_col: str
-) -> None:
-    """Fail before fitting if distinct labels collapse to the same result key."""
-    seen_subjects = {}
-    seen_conditions = {}
-    label_cols = [subject_col, exp_col, condition_col]
-    for values in df[label_cols].drop_duplicates().itertuples(index=False, name=None):
-        raw = tuple(str(value) for value in values)
-        for source, sanitized, seen in (
-            (raw[:2], "#".join(_sanitize(value) for value in raw[:2]), seen_subjects),
-            (raw, "#".join(_sanitize(value) for value in raw), seen_conditions),
-        ):
-            previous = seen.get(sanitized)
-            if previous is not None and previous != source:
-                raise ValueError(
-                    "Distinct labels collide after result-key sanitization: "
-                    f"{previous!r} and {source!r} both map to {sanitized!r}"
-                )
-            seen[sanitized] = source
-
-
 def load_data(data_path: str, outlier_col: Optional[str], include_outliers: bool) -> pd.DataFrame:
     """Load trial data from a CSV file and optionally filter outlier rows.
 
@@ -221,7 +186,8 @@ def load_data(data_path: str, outlier_col: Optional[str], include_outliers: bool
         return df
     before = len(df)
     df = df[df[outlier_col] != 1].copy()
-    log(f"Loaded {before} trials, removed {before - len(df)} outliers, {len(df)} remaining.", "cyan")
+    log(f"Loaded {before} trials, removed {before - len(df)} outliers, "
+        f"{len(df)} remaining after the outlier-flag filter.", "cyan")
     return df
 
 
@@ -346,13 +312,13 @@ def group_conditions(
         exp_data = df[df[exp_col] == exp]
         for subject in exp_data[subject_col].unique():
             subject_data = exp_data[exp_data[subject_col] == subject]
-            exp_key = f"{_sanitize(subject)}#{_sanitize(exp)}"
+            exp_key = make_experiment_key(subject, exp)
 
             conditions = {}
             for condition in subject_data[condition_col].unique():
                 cond_data = subject_data[subject_data[condition_col] == condition]
                 if len(cond_data) >= min_trials:
-                    cond_key = f"{exp_key}#{_sanitize(condition)}"
+                    cond_key = make_condition_key(subject, exp, condition)
                     conditions[cond_key] = cond_data
 
             if len(conditions) >= 1:
@@ -363,12 +329,77 @@ def group_conditions(
     return groups
 
 
+def _validate_continuous_feature_domain(frame, x_col, y_col, high):
+    scored = frame[y_col].notna() & np.isfinite(frame[x_col])
+    above = scored & frame[x_col].gt(high)
+    if above.any():
+        values = frame.loc[above, x_col]
+        raise ValueError(
+            f"{len(values)} signed-bias rows exceed the circular half-period/model maximum "
+            f"{high:g} (maximum {values.max():.6g})")
+
+
+def plan_continuous_prediction_capacities(subject_groups, optimizer, x_col, y_col,
+                                          angle_scale_to_model, max_span=64):
+    """Plan exact-coordinate compile shapes from this run's observed workload."""
+    from workload_bucketing import plan_workload_buckets
+
+    high = optimizer.predictor.domain["feat_diff"][1] / angle_scale_to_model
+    groups = []
+    for group_id, conditions in subject_groups.items():
+        coordinate_count = 0
+        n_conditions = 0
+        for frame in conditions.values():
+            _validate_continuous_feature_domain(frame, x_col, y_col, high)
+            frame = frame[frame[x_col].gt(0) & frame[x_col].lt(high)]
+            clean = filter_data_for_fitting(
+                frame, feat_diff_col=x_col, bias_col=y_col, verbose=False,
+                min_diss=0.0, max_diss=high)
+            # Current WNM objectives are fitted in signed-bias space. Direction
+            # toward context is undefined at zero and non-unique at half-period;
+            # canonical bundles encode this as an absent bias value. Apply the
+            # same population rule while legacy CSVs remain supported.
+            if len(clean) < 10:
+                continue
+            coordinates = clean[x_col].to_numpy(copy=True) * angle_scale_to_model
+            coordinate_count += len(np.unique(coordinates.astype(np.float32)))
+            n_conditions += 1
+        if n_conditions:
+            fit_motor = not optimizer.skip_motor_noise
+            signature = ("wnm-exact", n_conditions,
+                         2 * n_conditions + 1 + int(fit_motor))
+            groups.append((group_id, signature, coordinate_count))
+    assignments = plan_workload_buckets(groups, max_span=max_span)
+    return {assignment.group_id: assignment for assignment in assignments}
+
+
 def evaluate_parameter_losses(
-    optimizer: GridBasedMultiConditionOptimizer,
+    optimizer,
     params_by_condition: jnp.ndarray,
     fitting_methods: List[str],
 ) -> Dict[str, jnp.ndarray]:
-    """Evaluate one fixed parameter set per current condition under each objective."""
+    """Evaluate one fixed parameter set per current condition under each objective.
+
+    Dispatches on the engine: the surface backend materialises surfaces and runs
+    the compiled objective kernels, the mixture scores analytically. Both write a
+    loss for every method in ``fitting_methods``, which is what keeps a results
+    row from being half-populated when a run is fitted under one objective and
+    cross-scored under the rest.
+    """
+    if isinstance(optimizer, ContinuousEngine):
+        return optimizer.evaluate(params_by_condition, fitting_methods)
+
+    try:
+        from grid_based_multi_condition_optimizer_jax_loops import (
+            apply_motor_noise_with_precomputed_kernel,
+            create_motor_noise_kernel_fft,
+        )
+    except ModuleNotFoundError:
+        from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
+            apply_motor_noise_with_precomputed_kernel,
+            create_motor_noise_kernel_fft,
+        )
+
     params_by_condition = jnp.asarray(params_by_condition)
     if params_by_condition.ndim != 2 or params_by_condition.shape[0] != optimizer.n_conditions:
         raise ValueError(
@@ -411,7 +442,7 @@ def evaluate_parameter_losses(
 def process_subject(
     subject_id: str,
     subject_conditions: Dict[str, pd.DataFrame],
-    optimizer: GridBasedMultiConditionOptimizer,
+    optimizer,
     methods: List[str],
     x_col: str,
     y_col: str,
@@ -421,35 +452,61 @@ def process_subject(
     circ_space: int = 360,
     progress: Optional[Progress] = None,
     curve_source=None,
+    prediction_capacity: Optional[int] = None,
+    compiled_group=None,
+    shared_targets=None,
+    bundle_manifest=None,
 ) -> Dict:
     methods_to_run = missing_methods if missing_methods is not None else methods
     log(f"\nProcessing {subject_id}: {len(subject_conditions)} condition(s)" +
         (f" (adding: {', '.join(methods_to_run)})" if missing_methods else ""), "bold cyan")
 
-    # Clamp dissimilarity in the input space to the MODEL-space grid range so the
-    # effective floor/ceiling is identical across datasets (the legacy raw-space
-    # 4/180 made the floor period-dependent: 8° model for 180° data, 4° for 360°).
-    # clip commutes with the positive angle scaling applied just below, so raw
-    # bounds = model bounds / scale == clamping model-space to feat_diff_range.
-    # See codex_audit.md report-level #3.
+    if compiled_group is not None and not isinstance(optimizer, ContinuousEngine):
+        raise ValueError("compiled empirical bundles are supported only by DM-WNM")
+
+    # WNM predictions are analytic at the observed coordinate, including below
+    # the old surface grid's 2-degree floor. The surface backend retains its grid
+    # clamp. Canonical bundles will make this selection upstream; this branch is
+    # the transitional reader for existing CSV inputs.
     from shared.config import config as _cfg
-    min_diss = _cfg.feat_diff_range[0] / angle_scale_to_model
-    max_diss = _cfg.feat_diff_range[1] / angle_scale_to_model
+    if isinstance(optimizer, ContinuousEngine):
+        min_diss = 0.0
+        max_diss = optimizer.predictor.domain["feat_diff"][1] / angle_scale_to_model
+    else:
+        min_diss = _cfg.feat_diff_range[0] / angle_scale_to_model
+        max_diss = _cfg.feat_diff_range[1] / angle_scale_to_model
 
     # Filter and convert each condition to a JAX array
-    condition_datasets = {}
-    for cond_key, cond_df in subject_conditions.items():
-        clean = filter_data_for_fitting(cond_df, feat_diff_col=x_col, bias_col=y_col, verbose=False,
-                                        min_diss=min_diss, max_diss=max_diss)
-        if len(clean) < 10:
-            log(f"  Skipping {cond_key}: only {len(clean)} valid trials after filtering.", "yellow")
-            continue
-        data = clean[[x_col, y_col]].values.copy()
-        if angle_scale_to_model != 1.0:
-            data[:, 0] = data[:, 0] * angle_scale_to_model
-            data[:, 1] = data[:, 1] * angle_scale_to_model
-        condition_datasets[cond_key] = jnp.asarray(data)
-        log(f"  {cond_key}: {len(clean)} trials", "cyan")
+    if compiled_group is not None:
+        optimizer.update_compiled(compiled_group, shared_targets, bundle_manifest)
+        condition_datasets = {
+            name: jnp.asarray(values)
+            for name, values in optimizer.condition_datasets.items()
+        }
+        for name, values in condition_datasets.items():
+            log(f"  {name}: {len(values)} compiled signed trials", "cyan")
+    else:
+        condition_datasets = {}
+        for cond_key, cond_df in subject_conditions.items():
+            fit_input = cond_df
+            if isinstance(optimizer, ContinuousEngine):
+                _validate_continuous_feature_domain(
+                    cond_df, x_col, y_col, max_diss)
+                fit_input = cond_df[
+                    cond_df[x_col].gt(0)
+                    & cond_df[x_col].lt(max_diss)]
+            clean = filter_data_for_fitting(
+                fit_input, feat_diff_col=x_col, bias_col=y_col, verbose=False,
+                min_diss=min_diss, max_diss=max_diss)
+            if len(clean) < 10:
+                log(f"  Skipping {cond_key}: only {len(clean)} valid trials after filtering.", "yellow")
+                continue
+            data = clean[[x_col, y_col]].values.copy()
+            if angle_scale_to_model != 1.0:
+                data[:, 0] = data[:, 0] * angle_scale_to_model
+                data[:, 1] = data[:, 1] * angle_scale_to_model
+            condition_datasets[cond_key] = jnp.asarray(data)
+            log(f"  {cond_key}: {len(clean)} trials", "cyan")
 
     if not condition_datasets:
         log(f"  Skipping {subject_id}: no valid conditions remain.", "yellow")
@@ -474,7 +531,13 @@ def process_subject(
         emp_motor_cap = float(max(0.1, min(emp_motor_cap, 50.0)))
         log(f"  Empirical motor-noise cap (min-condition error SD ×1.1): {emp_motor_cap:.1f}° (model space)", "cyan")
 
-    optimizer.update_dataset(condition_datasets)
+    if compiled_group is not None:
+        pass
+    elif isinstance(optimizer, ContinuousEngine):
+        optimizer.update_dataset(
+            condition_datasets, prediction_capacity=prediction_capacity)
+    else:
+        optimizer.update_dataset(condition_datasets)
 
     empirical_curves = {
         cond: {
@@ -487,6 +550,14 @@ def process_subject(
         }
         for i, cond in enumerate(condition_datasets)
     }
+    if isinstance(optimizer, ContinuousEngine):
+        for i, cond in enumerate(condition_datasets):
+            empirical_curves[cond].update({
+                'matched_density_target': optimizer.targets.matched_density_target[i],
+                'feature_operator': optimizer.targets.feature_operator[i],
+                'density_bandwidth': optimizer.targets.density_bandwidth[i],
+                'prediction_coordinates': optimizer.targets.prediction_coordinates,
+            })
 
     method_results = {}
     method_task = None
@@ -511,7 +582,14 @@ def process_subject(
             status = console.status(f"[bold magenta]Fitting {subject_id} / {method}[/]", spinner="dots")
             status.start()
         try:
-            if curve_source is not None and method in EXHAUSTIVE_METHODS:
+            if isinstance(optimizer, ContinuousEngine):
+                # The same empirical cap the surface backend uses: the motor SD is
+                # one component of the total response error and cannot exceed it.
+                # Passing 0.0 here regardless of the motor policy, as an earlier
+                # version did, forced every motor-enabled continuous run to fit at
+                # zero while the run was labelled motor-enabled.
+                result = optimizer.fit(method, sd_motor_max=emp_motor_cap, verbosity=1)
+            elif curve_source is not None and method in EXHAUSTIVE_METHODS:
                 # Exhaustive on the cache lattice. The two backends return the
                 # same object shape, so everything below this call is identical.
                 result = fit_exhaustive_density(
@@ -536,16 +614,33 @@ def process_subject(
         progress.remove_task(method_task)
 
     condition_results = {}
-    for cond_key in condition_datasets:
+    for local_index, cond_key in enumerate(condition_datasets):
+        cell_values = (compiled_group.analysis_cell_values[local_index]
+                       if compiled_group is not None else {})
         entry = existing_results.get(cond_key, {}).copy() if existing_results else {}
         entry.update({
             'condition': cond_key,
             'data_df': condition_datasets[cond_key],
-            'n_trials': len(subject_conditions[cond_key]),
+            'n_trials': (len(condition_datasets[cond_key]) if compiled_group is not None
+                         else len(subject_conditions[cond_key])),
             'empirical_curves': empirical_curves.get(cond_key, {}),
-            'circ_space': circ_space,
-            'angle_scale_to_model': angle_scale_to_model,
+            'circ_space': (float(np.asarray(shared_targets['circular_period_deg'])[
+                compiled_group.analysis_cell_index[local_index]])
+                if compiled_group is not None else circ_space),
+            'angle_scale_to_model': (float(np.asarray(shared_targets['model_scale'])[
+                compiled_group.analysis_cell_index[local_index]])
+                if compiled_group is not None else angle_scale_to_model),
         })
+        if compiled_group is not None:
+            entry.update({
+                'fit_group_id': compiled_group.fit_group_id,
+                'fit_group_values': compiled_group.fit_group_values,
+                'analysis_cell_id': cond_key,
+                'analysis_cell_values': cell_values,
+                'bundle_identity': optimizer.bundle_identity,
+                'ordered_row_ids': compiled_group.row_id[
+                    compiled_group.trial_condition_index == local_index],
+            })
         for method, mdata in method_results.items():
             opt = mdata['result']
             cond_res = opt['condition_results'][cond_key]
@@ -558,7 +653,19 @@ def process_subject(
                 f'{method}_optimization_time': mdata['duration'],
                 f'{method}_stage_times': opt.get('stage_times', []),
                 f'{method}_loss': cond_res['loss'],
+                f'{method}_search_backend': opt.get('search_backend', 'hierarchical'),
+                f'{method}_n_obs': len(condition_datasets[cond_key]),
             })
+            # Search diagnostics, when the backend can produce them. Without
+            # these a run where one start of eight converged is stored
+            # indistinguishably from one where all eight agreed, and a railed
+            # parameter is indistinguishable from an interior one -- so nothing
+            # in the saved table says whether the search or the objective chose
+            # the answer. Absent for the lattice backends, which have no analogue.
+            for field in ('loss_spread', 'n_converged', 'n_starts', 'at_bound',
+                          'start_losses', 'start_outcomes', 'search_settings'):
+                if field in opt:
+                    entry[f'{method}_{field}'] = opt[field]
         condition_results[cond_key] = entry
 
     fitted_methods = sorted({
@@ -582,7 +689,9 @@ def process_subject(
             losses_by_objective = evaluate_parameter_losses(
                 optimizer,
                 params_by_condition,
-                fitting_methods=LOSS_EVALUATION_METHODS,
+                fitting_methods=(COMPILED_EVALUATION_METHODS
+                                 if compiled_group is not None
+                                 else LOSS_EVALUATION_METHODS),
             )
             for cond_idx, cond_key in enumerate(condition_datasets):
                 eval_losses = {
@@ -621,6 +730,8 @@ def run_fitting(
     results_dir: str = 'results',
     circ_space: int = 360,
     search: str = 'hierarchical',
+    continuous_starts: int = DEFAULT_N_STARTS,
+    continuous_seed: int = 0,
     curve_cache_root: Optional[str] = None,
     curve_cache_step: float = 1.0,
 ):
@@ -632,6 +743,22 @@ def run_fitting(
 
     resolved_output = resolve_results_path(output_dir, results_dir)
     resolved_checkpoint = resolve_input_path(checkpoint_path, results_dir)
+
+    # One place decides what a checkpoint is, and it reads the file rather than
+    # its name. Continuous search is the normal WNM path; the lattice backends
+    # remain available only for explicit historical surface checkpoints.
+    checkpoint_family = surrogate.detect_family(resolved_checkpoint)
+    if search == 'continuous' and checkpoint_family != surrogate.FAMILY_WNM:
+        raise ValueError(
+            f"--search continuous needs a wrapped-normal-mixture checkpoint, but "
+            f"{Path(resolved_checkpoint).name} is a {checkpoint_family} artifact. The surface "
+            "backend emits a sampled grid and has no gradients, so there is nothing for a "
+            "gradient search to descend.")
+    if search != 'continuous' and checkpoint_family != surrogate.FAMILY_SURFACE_NN:
+        raise ValueError(
+            f"{Path(resolved_checkpoint).name} is a {checkpoint_family} checkpoint, which the "
+            f"{search!r} backend cannot drive. Pass --search continuous to fit a mixture, or a "
+            "surface checkpoint to use the lattice backends.")
 
     if USE_RICH:
         table = Table.grid(padding=(0, 2))
@@ -669,6 +796,25 @@ def run_fitting(
     missing_cols = [c for c in required if c not in df.columns]
     if missing_cols:
         raise ValueError(f"Columns not found in CSV: {missing_cols}")
+    missing_targets = int(df[[x_col, y_col]].isna().any(axis=1).sum())
+    if missing_targets:
+        log(f"{missing_targets} rows have missing {x_col}/{y_col} values and will be "
+            "excluded during condition fitting.", "yellow")
+
+    # The continuous engine is built before the fingerprint so the recorded
+    # identity comes from the object that will actually run, rather than from a
+    # second description of it that can drift. It is cheap to construct -- a
+    # 440 KB artifact and no compilation -- so building it ahead of the resume
+    # check costs nothing, unlike the surface optimizer.
+    continuous_engine = None
+    continuous_spec = None
+    if search == 'continuous':
+        continuous_engine = _create_continuous_engine(
+            resolved_checkpoint, corr_weight=corr_weight,
+            skip_motor_noise=skip_motor_noise,
+            continuous_starts=continuous_starts,
+            continuous_seed=continuous_seed)
+        continuous_spec = continuous_engine.search_spec()
 
     curve_source = None
     curve_cache_key = None
@@ -691,12 +837,15 @@ def run_fitting(
     fingerprint = compute_run_fingerprint(
         data_path=data_path,
         checkpoint_path=resolved_checkpoint,
+        surrogate_family=checkpoint_family,
+        continuous_spec=continuous_spec,
         circ_space=circ_space,
         # Every objective the run may WRITE, not the ones it was asked to fit:
         # `evaluate_parameter_losses` scores all of them at each fitted method's
         # parameters, so a change to any one invalidates the stored evaluations.
         evaluation_methods=LOSS_EVALUATION_METHODS,
-        search_backend=('exhaustive_1deg' if search == 'exhaustive' else 'hierarchical'),
+        search_backend=('exhaustive_1deg' if search == 'exhaustive'
+                        else 'continuous' if search == 'continuous' else 'hierarchical'),
         curve_cache_key=curve_cache_key,
         skip_motor_noise=skip_motor_noise,
         exp_col=exp_col,
@@ -708,7 +857,7 @@ def run_fitting(
         include_outliers=include_outliers,
         min_trials=min_trials,
         corr_weight=corr_weight,
-        grid_spec=HIERARCHICAL_GRID_SPEC,
+        grid_spec=None if search == 'continuous' else HIERARCHICAL_GRID_SPEC,
         density_curve_spec=DENSITY_CURVE_SPEC,
         degenerate_eps=DEGENERATE_TARGET_EPS,
     )
@@ -727,17 +876,32 @@ def run_fitting(
         existing_results, completed = {}, set()
 
     log("Initializing optimizer...", "bold cyan")
-    dummy = jnp.asarray(np.random.uniform(-180, 180, (100, 2)))
+    dummy_rng = np.random.default_rng(0)
+    dummy = jnp.asarray(np.column_stack([
+        dummy_rng.uniform(_cfg.feat_diff_range[0], _cfg.feat_diff_range[1], 100),
+        dummy_rng.uniform(-180.0, 180.0, 100),
+    ]))
     status = None
     if USE_RICH:
         status = console.status("[bold cyan]Loading model and compiling optimizer[/]", spinner="dots")
         status.start()
     try:
-        optimizer = GridBasedMultiConditionOptimizer(
-            str(resolved_checkpoint), {'dummy': dummy},
-            skip_motor_noise=skip_motor_noise, corr_weight=corr_weight,
-            **DENSITY_CURVE_SPEC,
-        )
+        if continuous_engine is not None:
+            optimizer = continuous_engine
+        else:
+            try:
+                from grid_based_multi_condition_optimizer_jax_loops import (
+                    GridBasedMultiConditionOptimizer,
+                )
+            except ModuleNotFoundError:
+                from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
+                    GridBasedMultiConditionOptimizer,
+                )
+            optimizer = GridBasedMultiConditionOptimizer(
+                str(resolved_checkpoint), {'dummy': dummy},
+                skip_motor_noise=skip_motor_noise, corr_weight=corr_weight,
+                **DENSITY_CURVE_SPEC,
+            )
     finally:
         if status is not None:
             status.stop()
@@ -752,9 +916,18 @@ def run_fitting(
                 _cfg.param_grid_low, _cfg.param_range_high, curve_cache_step)
             feat_pairs = curve_cache.feat_pair_lattice(sd_spat_values)
             curves = curve_cache.build_curve_lattice(optimizer, sd_spat_values, feat_pairs)
-            curve_cache.write_cache(cache_dir, cache_key=curve_cache_key,
-                                    sd_spat_values=sd_spat_values, feat_pairs=feat_pairs,
-                                    curves=curves)
+            curve_cache.write_cache(
+                cache_dir, cache_key=curve_cache_key, sd_spat_values=sd_spat_values,
+                feat_pairs=feat_pairs, curves=curves,
+                # Same fields the standalone builder records, from the same
+                # helper: a cache built by the fitter and one built by the
+                # builder must describe themselves identically.
+                manifest_extra={
+                    "checkpoint": str(resolved_checkpoint),
+                    "emp_density_weights_sd": DENSITY_CURVE_SPEC['emp_density_weights_sd'],
+                    "density_smoothing_sigma": DENSITY_CURVE_SPEC['density_smoothing_sigma'],
+                    **curve_cache.surrogate_manifest_fields(resolved_checkpoint),
+                })
 
         curve_source = curve_cache.open_or_build(curve_cache_root, curve_cache_key, _build)
         log(f"Exhaustive search over {len(curve_source.sd_spat_values)} x "
@@ -762,6 +935,13 @@ def run_fitting(
             f"(cache {curve_cache_key}).", "green")
 
     subject_groups = group_conditions(df, exp_col, subject_col, condition_col, min_trials)
+    prediction_buckets = {}
+    if continuous_engine is not None:
+        prediction_buckets = plan_continuous_prediction_capacities(
+            subject_groups, continuous_engine, x_col, y_col, angle_scale_to_model)
+        capacities = sorted({assignment.capacity for assignment in prediction_buckets.values()})
+        log(f"Exact WNM prediction capacities: {capacities} "
+            f"(observed-range-v1, maximum within-bucket span 64).", "cyan")
     n_total = min(len(subject_groups), max_subjects) if max_subjects else len(subject_groups)
     log(f"Subject x experiment groups: {n_total} | Completed: {len(completed)} | "
         f"Remaining: {n_total - len(completed)}\n", "bold")
@@ -807,7 +987,7 @@ def run_fitting(
                     # expected condition entries — not just one sampled condition. Include
                     # conditions that have no saved entry at all, as can happen when a
                     # condition is added after the original fit or an incomplete save omits
-                    # it. See codex_audit.md recovery #2.
+                    # it. See HISTORY.md for the original recovery audit.
                     missing = [m for m in methods
                                if not subject_existing
                                or conditions_missing
@@ -839,6 +1019,8 @@ def run_fitting(
                     circ_space=circ_space,
                     progress=active_progress,
                     curve_source=curve_source,
+                    prediction_capacity=(prediction_buckets[subject_id].capacity
+                                         if subject_id in prediction_buckets else None),
                 )
                 existing_results.update(results)
                 n_done += 1
@@ -860,15 +1042,112 @@ def run_fitting(
     log(f"\nDone. {len(existing_results)} conditions fitted in {total/60:.1f}m.", "bold green")
 
 
+def run_compiled_fitting(
+    bundle_path: str,
+    checkpoint_path: str,
+    output_dir: str,
+    *,
+    methods: List[str] = None,
+    resume: bool = True,
+    force_refit: bool = False,
+    max_subjects: Optional[int] = None,
+    corr_weight: float = 0.25,
+    skip_motor_noise: bool = True,
+    results_dir: str = 'results',
+    continuous_starts: int = DEFAULT_N_STARTS,
+    continuous_seed: int = 0,
+):
+    """Fit WNM from an immutable bundle; all empirical semantics stay upstream."""
+    from compiled_bundle import load_compiled_wnm_bundle
+
+    methods = methods or ['density']
+    unknown = sorted(set(methods) - set(COMPILED_EVALUATION_METHODS))
+    if unknown:
+        raise ValueError(
+            f"compiled WNM bundles support {COMPILED_EVALUATION_METHODS}; got {unknown}")
+    resolved_output = resolve_results_path(output_dir, results_dir)
+    resolved_checkpoint = resolve_input_path(checkpoint_path, results_dir)
+    if surrogate.detect_family(resolved_checkpoint) != surrogate.FAMILY_WNM:
+        raise ValueError("--bundle requires a wrapped-normal-mixture checkpoint")
+
+    groups, shared, _assignments, manifest = load_compiled_wnm_bundle(bundle_path)
+    optimizer = _create_continuous_engine(
+        resolved_checkpoint, corr_weight=corr_weight,
+        skip_motor_noise=skip_motor_noise,
+        continuous_starts=continuous_starts,
+        continuous_seed=continuous_seed)
+    fingerprint = compute_compiled_run_fingerprint(
+        bundle_path=bundle_path, bundle_manifest=manifest,
+        checkpoint_path=resolved_checkpoint,
+        continuous_spec=optimizer.search_spec(),
+        skip_motor_noise=skip_motor_noise,
+        evaluation_methods=COMPILED_EVALUATION_METHODS,
+        corr_weight=corr_weight,
+        density_curve_spec=DENSITY_CURVE_SPEC)
+    Path(resolved_output).mkdir(exist_ok=True, parents=True)
+    if force_refit:
+        existing_results = {}
+    else:
+        existing_results, _ = load_results(
+            resolved_output, expected_fingerprint=fingerprint)
+        if not resume and existing_results:
+            existing_results = {}
+
+    selected_groups = groups[:max_subjects] if max_subjects else groups
+    log(f"Compiled bundle {manifest['bundle_id']}: {len(selected_groups)} fit groups, "
+        f"{sum(len(group.row_id) for group in selected_groups)} signed rows.", "cyan")
+    started = time.time()
+    completed_groups = 0
+    for group in selected_groups:
+        cell_ids = set(group.analysis_cell_ids)
+        group_existing = {
+            key: value for key, value in existing_results.items()
+            if value.get('fit_group_id') == group.fit_group_id
+        }
+        missing = [method for method in methods if any(
+            f'{method}_fitted_params' not in group_existing.get(cell, {})
+            for cell in cell_ids)]
+        missing_evaluations = [method for method in methods if any(
+            f'{method}_fitted_params' in group_existing.get(cell, {})
+            and f'{method}_evaluation_losses' not in group_existing.get(cell, {})
+            for cell in cell_ids)]
+        if group_existing.keys() >= cell_ids and not missing and not missing_evaluations:
+            log(f"Skipping {group.fit_group_id}: already complete.", "yellow")
+            continue
+        result = process_subject(
+            group.fit_group_id, {cell: None for cell in group.analysis_cell_ids},
+            optimizer, methods, "", "", group_existing,
+            missing if group_existing else None,
+            progress=None, compiled_group=group,
+            shared_targets=shared, bundle_manifest=manifest)
+        existing_results.update(result)
+        completed_groups += 1
+        save_results(existing_results, resolved_output, group.fit_group_id,
+                     fingerprint=fingerprint)
+    save_results(existing_results, resolved_output, 'FINAL', fingerprint=fingerprint)
+    log(f"Done. Updated {completed_groups} groups in {(time.time() - started)/60:.1f}m; "
+        f"{len(existing_results)} analysis cells on disk.", "bold green")
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description="Fit the demixing model to behavioural data.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument('--data-path', required=True,
-                        help='Path to input CSV.')
-    parser.add_argument('--checkpoint-path', default='pretrained/model_epoch1425_10ktrain_20samples.pkl',
-                        help='Path to trained NN checkpoint.')
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument('--data-path',
+                        help='Legacy CSV input: surface backend and recovery tooling only. '
+                             'Production WNM fitting requires --bundle.')
+    inputs.add_argument('--bundle',
+                        help='Compiled contextual_biases_database bundle for controlled '
+                             'cross-model/cross-dataset analyses.')
+    parser.add_argument('--checkpoint-path', default=None,
+                        help='Optional surrogate artifact. By default the packaged production '
+                             'model for --n-samples is used.')
+    parser.add_argument('--n-samples', type=int, choices=surrogate.SUPPORTED_SAMPLE_COUNTS,
+                        default=20,
+                        help='Observer evidence samples per item. Selects the packaged production '
+                             'surrogate when --checkpoint-path is omitted.')
     parser.add_argument('--output-dir', required=True,
                         help='Directory for results.')
 
@@ -907,12 +1186,18 @@ if __name__ == '__main__':
                         help='Include motor noise parameter (slower, rarely needed).')
     parser.add_argument('--results-dir', default='results',
                         help='Base directory for relative output paths.')
-    parser.add_argument('--search', choices=['hierarchical', 'exhaustive'], default='hierarchical',
-                        help='Search backend. Applies per METHOD: exhaustive is used only for '
-                             "'density'; every other method stays hierarchical regardless. "
-                             'The default is unchanged so every existing invocation keeps its '
-                             'current behaviour and the switch is visible in the command line '
-                             'that produced a result.')
+    parser.add_argument('--search', choices=['hierarchical', 'exhaustive', 'continuous'],
+                        default='continuous',
+                        help='Search backend. Continuous WNM fitting is the default. Hierarchical '
+                             'and exhaustive are historical surface-grid backends and require an '
+                             'explicit surface checkpoint; exhaustive applies only to density.')
+    parser.add_argument('--continuous-starts', type=int, default=DEFAULT_N_STARTS,
+                        help='Multistart count for --search continuous (production: 64, run as '
+                             'two sequential batches of 32).')
+    parser.add_argument('--continuous-seed', type=int, default=0,
+                        help='Seed for --search continuous starting points. Recorded in the run '
+                             'fingerprint, since the same seed must give the same starts for two '
+                             'runs of a fit to be comparable.')
     parser.add_argument('--curve-cache', default=None,
                         help='Root directory for curve caches, required by --search exhaustive. '
                              'Built on demand if absent (single-writer locked).')
@@ -926,11 +1211,42 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    # CSV input is the normal end-user route. Compiled bundles are preferred when
+    # the same empirical population and target definitions must be shared across
+    # repositories/model families, as in contextual-bias model comparisons.
+    if args.data_path and args.search == 'continuous':
+        log(
+            "Note: fitting WNM directly from CSV. This is appropriate for ordinary "
+            "single-model analyses. For controlled cross-model/cross-dataset comparisons, "
+            "prefer a validated contextual_biases_database --bundle so empirical targets "
+            "and scoring populations are fixed upstream.",
+            "yellow",
+        )
+
     try:
-        run_fitting(
-            data_path=args.data_path,
-            checkpoint_path=args.checkpoint_path,
+        checkpoint_path = (args.checkpoint_path
+                           if args.checkpoint_path is not None
+                           else str(surrogate.production_checkpoint(args.n_samples)))
+        common = dict(
+            checkpoint_path=checkpoint_path,
             output_dir=args.output_dir,
+            methods=args.include_methods,
+            resume=args.resume,
+            force_refit=args.force_refit,
+            max_subjects=args.max_subjects,
+            corr_weight=args.corr_weight,
+            skip_motor_noise=args.skip_motor_noise,
+            results_dir=args.results_dir,
+            continuous_starts=args.continuous_starts,
+            continuous_seed=args.continuous_seed,
+        )
+        if args.bundle:
+            if args.search != 'continuous':
+                raise ValueError("--bundle uses the continuous WNM backend")
+            run_compiled_fitting(bundle_path=args.bundle, **common)
+        else:
+            run_fitting(
+            data_path=args.data_path,
             exp_col=args.exp_col,
             subject_col=args.subject_col,
             condition_col=args.condition_col,
@@ -938,18 +1254,12 @@ if __name__ == '__main__':
             y_col=args.y_col,
             outlier_col=args.outlier_col,
             include_outliers=args.include_outliers,
-            methods=args.include_methods,
             min_trials=args.min_trials,
-            resume=args.resume,
-            force_refit=args.force_refit,
-            max_subjects=args.max_subjects,
-            corr_weight=args.corr_weight,
-            skip_motor_noise=args.skip_motor_noise,
-            results_dir=args.results_dir,
             circ_space=args.circ_space,
             search=args.search,
             curve_cache_root=args.curve_cache,
             curve_cache_step=args.curve_cache_step,
+            **common,
         )
     except StaleResultsError as exc:
         # A wall of traceback would bury the field diff, which is the whole

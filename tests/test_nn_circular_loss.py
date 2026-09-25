@@ -21,6 +21,8 @@ from loss_functions import (circular_energy_loss, combined_probabilistic_loss,
                             probability_curvature_regularization)
 from shared.mu1_axis import mu1_grid, mu1_size
 
+pytestmark = pytest.mark.legacy_surface
+
 
 def _impulse(index, feat_points=3):
     logits = jnp.full((1, mu1_size(), feat_points), -12.0)

@@ -22,8 +22,8 @@ from jax.scipy import stats
 import numpy as np
 from functools import partial
 from typing import Optional
-import jax_fit_functions as jf  # uses the module in this repo
-from jax_fit_functions import ResCol  # Import column index enum
+from surface_computation import jax_fit_functions as jf
+from surface_computation.jax_fit_functions import ResCol
 import matplotlib.pyplot as plt
 
 

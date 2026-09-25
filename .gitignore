@@ -28,6 +28,8 @@ __pycache__/
 *.json
 !.devcontainer/*.json
 .devcontainer/local/
+!.devcontainer/cpu/devcontainer.json
+
 *.backup
 *.gz
 *temp*
@@ -54,3 +56,10 @@ neural_network_optimization/mirror_aware_training_v2.py
 pretrained/model_epoch1500_8ktrain_20samples_old.pkl
 AGENT_AUDIT_GUIDE.md
 MODEL_PIPELINE_FOR_AGENTS.md
+
+# Prebuilt devcontainer image bundle, rebuilt locally
+.devcontainer/*.zip
+
+# Test reference data is version-controlled: a golden record that silently
+# vanishes turns its test into a skip, which reads as coverage.
+!tests/data/*.npz

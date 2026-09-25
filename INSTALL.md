@@ -93,18 +93,26 @@ install.packages(c("arrow", "stringr", "data.table"))
 
 ## Verification
 
-Start with the focused tests, which do not regenerate the full model:
+Start with the maintained standalone pytest baseline:
 
 ```bash
-PYTHONPATH=. python -m pytest \
-  tests/test_config_import.py \
-  tests/test_flag_dispatch.py \
-  tests/test_lock_backend.py \
-  tests/test_object_store.py \
-  tests/test_pooled_bwcrps_export.py
+PYTHONPATH=. python -m pytest
 ```
 
-The smoke scripts additionally exercise simulation, averaging, network training, and fitting. They are compute-heavy and should normally run on a GPU:
+The default pytest configuration collects `tests/` and excludes
+cross-repository `integration`, transition `research`, and historical
+`legacy_surface` suites. See `tests/README.md` for the explicit commands to
+run those opt-in contracts.
+
+The current end-to-end user-path smoke fits the packaged WNM, exports results,
+generates plots, and runs the prediction API:
+
+```bash
+PYTHON_BIN=python bash tests/run_smoke_wnm.sh
+```
+
+The remaining smoke scripts exercise the historical simulation/surface-training
+pipeline and are substantially more compute-heavy:
 
 ```bash
 PYTHON_BIN=python bash tests/run_smoke_pipeline.sh
@@ -132,7 +140,7 @@ Results produced with a different checkpoint, dataset, objective definition, gri
 
 ### Generated artifacts are not where expected
 
-Relative fit outputs are placed under `results/`. Surface tools also honor `DEMIXING_ARTIFACT_ROOT`; without it, their default artifact root is the repository-local `results/` directory.
+Relative fit outputs are placed under `results/`. Historical raw-surface tools and WNM research/training scripts also honor `DEMIXING_ARTIFACT_ROOT`; without it, their default artifact root is the repository-local `results/` directory.
 
 ## Maintainer: rebuild container images
 

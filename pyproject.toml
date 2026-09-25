@@ -6,6 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
   "jax==0.10.1",
   "jaxlib==0.10.1",        # CPU runtime; replaced automatically by jax[cuda13-local]
+  "jax-lbfgsb @ git+https://github.com/achetverikov/JAX_L-BFGS-B_port.git@0350da1",
   "flax>=0.10.7",
   "optax>=0.2.5",
   "numpy==2.1.3",
@@ -17,14 +18,24 @@ dependencies = [
   "redis==6.4.0",
   "streamlit==1.47.0",
   "plotly==6.2.0",
+  "scipy>=1.14",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest",
-  "sympy>=1.12",   # symbolic targets for bayesian_biases_zoo/tests/test_sympy_predictions.py
-  "mpmath",        # exact Bessel evaluation in the causal-inference symbolic chain
 ]
 cuda = [
   "jax[cuda13-local]==0.10.1",
+]
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not integration and not legacy_surface'"
+markers = [
+  "integration: requires sibling repositories or external compiled artifacts",
+  "legacy_surface: historical surface-NN reproduction contract",
+  "slow: substantially slower than ordinary unit/contract tests",
+  "gpu: intended for GPU-backed validation",
 ]
