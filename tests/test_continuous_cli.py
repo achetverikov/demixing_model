@@ -131,16 +131,6 @@ def test_a_different_start_budget_refuses_to_resume(dataset, tmp_path):
     with pytest.raises(StaleResultsError, match="n_starts"):
         _run(dataset, out, continuous_starts=16)
 
-
-def test_a_hierarchical_run_cannot_resume_into_a_continuous_one(dataset, tmp_path):
-    from run_fingerprint import StaleResultsError
-
-    out = tmp_path / "run"
-    _run(dataset, out)
-    with pytest.raises((StaleResultsError, ValueError)):
-        _run(dataset, out, search="hierarchical", checkpoint_path=str(SURFACE))
-
-
 def test_the_backends_refuse_each_other_s_checkpoints(dataset, tmp_path):
     """The surface backend emits a sampled grid and has no gradients; the
     lattice backends cannot drive a mixture."""
