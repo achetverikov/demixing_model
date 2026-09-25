@@ -1,5 +1,13 @@
-"""Compatibility shim for surrogate_training.wnm.train."""
-from surrogate_training.wnm.train import *  # noqa: F401,F403
+"""Compatibility shim retained during the WNM architecture transition."""
+from surrogate_training.wnm import train as _impl
+
+globals().update({
+    name: getattr(_impl, name)
+    for name in dir(_impl)
+    if not name.startswith("__")
+})
+
+__all__ = [name for name in dir(_impl) if not name.startswith("_")]
 
 if __name__ == "__main__":
-    main()
+    _impl.main()
