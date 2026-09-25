@@ -64,6 +64,7 @@ $PYTHON_BIN neural_network_optimization/mirror_aware_training.py \
 # Step 4: Fit model to trimmed human data
 $PYTHON_BIN model_fit_to_data/fit_model_to_data.py \
   --checkpoint-path "checkpoints_smoke_standard/model_epoch_0025.pkl" \
+  --search hierarchical \
   --output-dir "model_fit_to_data_smoke_standard" \
   --data-path "example_data/data_color_comb_color2_two_subjects.csv" \
   --subject-col subject_exp \
@@ -75,6 +76,7 @@ $PYTHON_BIN model_fit_to_data/fit_model_to_data.py \
 $PYTHON_BIN model_fit_to_data/create_unified_subject_plots.py \
   --results-path "model_fit_to_data_smoke_standard/extended_fit_results.pkl" \
   --checkpoint-path "checkpoints_smoke_standard/model_epoch_0025.pkl" \
+  --search hierarchical \
   --output-dir "model_fit_to_data_smoke_standard" \
   --individual-plots \
   --summary-plots
