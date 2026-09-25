@@ -32,7 +32,6 @@ packaging must not leave a half-trusted artifact where production will find it.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import pickle
 import sys
@@ -46,6 +45,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from continuous_density import wrapped_mixture_model as wm  # noqa: E402
 from shared.prediction import domain_from_meta, validate_params  # noqa: E402
+from shared.hashing import file_sha256  # noqa: E402
 
 #: Bumped whenever the artifact's fields or their meaning change.  Consumers
 #: compare against it rather than guessing from which keys happen to be present.
@@ -87,11 +87,8 @@ VERIFICATION_PANEL = np.array([
 
 
 def file_digest(path: Path) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    """Compatibility alias for the canonical streaming file hasher."""
+    return file_sha256(path)
 
 
 def corpus_domain(stage: Path) -> dict:
