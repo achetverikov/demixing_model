@@ -1,23 +1,16 @@
 # Pretrained checkpoints
 
-The production 20-observation checkpoint is
-`model_epoch1425_10ktrain_20samples.pkl`. It was selected from the full
-1500-epoch feature-smoothing experiment because its downstream bias curves were
-smoother and closer to the simulated-surface curves than the former production
-model. The stable defaults in the simulator and fitting pipeline point to it.
+The production surrogates are the packaged K=12 conditional wrapped-normal
+mixtures:
 
-| File | Epoch | Native training grid | Objective | Sim samples / item | Loss |
-|---|---:|---|---|---:|---:|
-| `model_epoch1425_10ktrain_20samples.pkl` | 1425 | 128 mu1 rows × 128 feature columns | KL + circular energy + circular moment + density asymmetry + moment-trajectory curvature | 20 | 0.00008997 |
-| `model_epoch1500_10ktrain_100samples.pkl` | 1500 | 64 mu1 rows × 90 feature columns | legacy `combined_probabilistic` | 100 | 0.06681 |
+| File | K | Hidden | min_scale | Sim samples / item | Selected step | Corpus | NLL |
+|---|---:|---|---:|---:|---:|---|---:|
+| `wnm_k12_20samples.pkl` | 12 | (128, 256, 256) | 0.25 | 20 | 90000 | continuous_density_4.1p | 3.9785 |
+| `wnm_k12_100samples.pkl` | 12 | (128, 256, 256) | 0.25 | 100 | 89000 | continuous_density_4.1o | 3.1657 |
 
-Both use `MirrorAwareMu1Predictor`, mirror-aware augmentation, batch size 32,
-peak learning rate 0.002, and weight decay 1e-4. The 20-observation model is
-resized to the standard periodic 180 × 90 surface only at inference; the
-higher native training grid and the trajectory term reduce column-wise
-oscillation without imposing a generic surface-flattening penalty. The old
-`model_epoch1500_10ktrain_20samples.pkl` is retained only as a historical
-checkpoint and is no longer selected automatically.
+Fresh fitting and prediction calls select these by `n_samples`. The older
+`model_epoch*.pkl` surface-network checkpoints are retained only for historical
+reproduction and must be requested explicitly.
 
 **Sim samples / item**: in the demixing model, the brain runs its mixture-fitting inference over a set of noisy internal samples it has of each presented item.  This number parameterizes how rich that internal representation is — 20 samples means a noisy / lower-evidence regime, 100 samples means a sharper, more-evidence regime.  Different values produce qualitatively similar bias curves but reallocate where the noise lives (more assumed internal samples → more inferred internal spatial noise when fit to the same data).
 
@@ -36,25 +29,11 @@ difference. They are not load-compatible with `shared/utils.py:load_checkpoint`,
 so new code should reach a checkpoint through `shared/surrogate.py:load_surrogate`,
 which reads the family from the file's own content rather than from its name.
 
-Several call sites do not yet: the optimizer still calls `load_checkpoint`
-directly, and `create_unified_subject_plots.py`, `plot_pdf_slices.py`,
-`curve_cache.py`, `surface_simulator.py` and `postprocess_fitted_likelihoods.py`
-each resolve a checkpoint their own way. Two of those resolutions can select a
-different model than the fit used, and are listed under Known gaps below.
-
-| File | K | Hidden | min_scale | Sim samples / item | Selected step | Corpus | NLL |
-|---|---:|---|---:|---:|---:|---|---:|
-| `wnm_k12_20samples.pkl` | 12 | (128, 256, 256) | 0.25 | 20 | 90000 | continuous_density_4.1p | 3.9785 |
-| `wnm_k12_100samples.pkl` | 12 | (128, 256, 256) | 0.25 | 100 | 89000 | continuous_density_4.1o | 3.1657 |
-
-The bundle-native production path uses these WNM artifacts. Some historical
-entry points still default to the surface network; their remaining cutover is
-tracked only in `TODO.md`.
-`fit_model_to_data.py --search continuous` runs them through the gradient
-backend, and the lattice backends refuse a mixture checkpoint (as the continuous
-one refuses a surface checkpoint, having no gradients to descend). Commands
-that reproduce the historical surface pipeline therefore remain explicit legacy
-paths rather than a second production default.
+Both ordinary CSV fitting and compiled-bundle fitting use these WNM artifacts
+through the continuous gradient backend. The lattice backends refuse a mixture
+checkpoint, and the continuous backend refuses a surface checkpoint. Historical
+surface reproduction therefore remains explicit rather than acting as a second
+default.
 
 **The NLL column is in-sample.** Both artifacts come from the `alldata` training
 variant, which trains on every trajectory and picks its stopping step on an
