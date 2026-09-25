@@ -1,5 +1,13 @@
-"""Compatibility shim for surface_computation.generate_wnm_training_data."""
-from surface_computation.generate_wnm_training_data import *  # noqa: F401,F403
+"""Compatibility shim retained during the WNM architecture transition."""
+from surface_computation import generate_wnm_training_data as _impl
+
+globals().update({
+    name: getattr(_impl, name)
+    for name in dir(_impl)
+    if not name.startswith("__")
+})
+
+__all__ = [name for name in dir(_impl) if not name.startswith("_")]
 
 if __name__ == "__main__":
-    main()
+    _impl.main()
