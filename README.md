@@ -114,6 +114,7 @@ results/my_study/
 ├── extended_run_fingerprint.json   # how these results were produced
 ├── extended_progress.json          # resume state
 ├── csv_exports/                    # created by post-fit plotting
+├── pdf_slice_plots/
 ├── summary_plots/
 └── unified_subject_plots/
 ```
