@@ -10,8 +10,8 @@ Maintained WNM components now live in functional locations:
 - simulation and training-data generation: `surface_computation/`
 - WNM training and packaging: `surrogate_training/wnm/`
 
-Files that remain here are compatibility shims or research workflows awaiting
-relocation. Historical findings and the former transition README are archived
+Files that remain here are temporary compatibility shims only. Development-only
+transition and representation workflows have moved under `development/`. Historical findings and the former transition README are archived
 under `docs/history/wnm_transition/`.
 
 No maintained production module should import from `continuous_density`.
