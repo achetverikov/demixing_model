@@ -24,7 +24,7 @@ from model_fit_to_data.wnm_scoring import trial_log_density
 from shared import surrogate
 from shared.prediction import predictor_from_surrogate
 
-pytestmark = pytest.mark.research
+pytestmark = pytest.mark.development
 
 
 ARTIFACT = surrogate.WNM_DEFAULTS[100]
