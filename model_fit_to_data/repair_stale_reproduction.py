@@ -12,7 +12,6 @@ up before any change.
 import argparse
 import os
 import pickle
-import re
 import shutil
 import sys
 import time
@@ -20,16 +19,10 @@ from pathlib import Path
 
 import pandas as pd
 
-
-def sanitize(value):
-    return re.sub(r"[^\w]", "_", str(value)).strip("_")
-
-
-def canonical_key(key):
-    parts = str(key).split("#")
-    if len(parts) < 3:
-        return str(key)
-    return f"{sanitize(parts[0])}#{sanitize(parts[1])}#{sanitize('#'.join(parts[2:]))}"
+from model_fit_to_data.result_identity import (
+    canonical_condition_key,
+    make_condition_key,
+)
 
 
 def main() -> None:
@@ -57,7 +50,7 @@ def main() -> None:
 
     raw_by_canonical: dict[str, list[str]] = {}
     for k in results:
-        raw_by_canonical.setdefault(canonical_key(k), []).append(k)
+        raw_by_canonical.setdefault(canonical_condition_key(k), []).append(k)
     collisions = {key: raw for key, raw in raw_by_canonical.items() if len(raw) > 1}
     if collisions:
         raise ValueError(f"Result-key collisions after sanitization: {collisions}")
@@ -65,7 +58,7 @@ def main() -> None:
     removed = 0
     unmatched = []
     for _, row in failed.iterrows():
-        ck = f"{sanitize(row['subject'])}#{sanitize(row['experiment'])}#{sanitize(row['condition'])}"
+        ck = make_condition_key(row["subject"], row["experiment"], row["condition"])
         raws = raw_by_canonical.get(ck)
         opt = row["optimizer"]
         if not raws:
