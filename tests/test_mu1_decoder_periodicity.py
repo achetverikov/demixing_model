@@ -44,6 +44,8 @@ from mirror_aware_model import (CircularMu1ConvTranspose, MirrorAwareMu1Predicto
                                 periodic_linear_resize_mu1)
 from shared.mu1_axis import legacy_mu1_axis
 
+pytestmark = pytest.mark.legacy_surface
+
 
 @pytest.mark.parametrize(
     "rows,kernel,stride",
