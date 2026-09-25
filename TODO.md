@@ -18,7 +18,7 @@ here.
   multi-condition, motor-noise, and real-data behavior, and use a large-sample
   or expected-target check to separate finite-sample objective displacement
   from model error. Assess curves by dissimilarity rather than pooled mean bias.
-- Unify the research and transition banded-metric frame schemas if banded
+- Unify the development and transition banded-metric frame schemas if banded
   metrics become a maintained production product.
 
 Pipeline and report consolidation is owned by
@@ -32,7 +32,7 @@ The detailed audit and proposed target structure are in
 `continuous_density/` was a temporary transition workspace and should be
 dissolved by moving its production pieces into the repository's functional
 layers: simulator/training-data generation, surrogate training/packaging,
-shared WNM runtime math, fitting/scoring, and explicitly historical research.
+shared WNM runtime math, fitting/scoring, and explicitly development-only workflows.
 
 The pre-refactor test cleanup and maintained WNM baseline have been completed.
 
@@ -57,8 +57,8 @@ compatibility shims only.
 
 Next Phase C items:
 
-- move WNM validation/transition experiments under `research/wnm_transition/`;
-- move local representation experiments under `research/wnm_representation/`;
+- move WNM validation/transition experiments under `development/wnm_transition/`;
+- move local representation experiments under `development/wnm_representation/`;
 - redistribute or remove `continuous_density/tests/`;
 - remove tracked generated validation outputs;
 - delete `continuous_density/` once only compatibility/history content remains.
