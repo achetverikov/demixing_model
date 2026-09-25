@@ -47,13 +47,13 @@ The `--n-samples 20` selects one of the two versions of the model and loads the 
 
 ![Prediction curves for three identifiability-noise parameter values](docs/images/prediction_generation_example.png)
 
-This standard prediction route uses the included trained model and needs no additional surfaces. Predictions for the model's secondary mixture component are an advanced use that requires raw averaged surfaces.
+This standard prediction route uses the included trained model and needs no additional surfaces. The standard WNM prediction API covers the reported mu1 bias distribution. Separate mu2 spatial-bias outputs remain available only from raw averaged simulation surfaces.
 
 See [surface_simulator_for_predictions/README.md](surface_simulator_for_predictions/README.md) for CSV/Parquet details, raw-surface mode, and the R wrapper.
 
 ## Fit behavioral data
 
-### Run the legacy CSV/surface demo
+### Run the WNM demo
 
 From the repository root:
 
@@ -61,14 +61,14 @@ From the repository root:
 python demo_fischer_whitney.py
 ```
 
-The script downloads the <a href="https://doi.org/10.1038/nn.3689" title="Fischer, J., &amp; Whitney, D. (2014). Serial dependence in visual perception. Nature Neuroscience, 17(5), 738–743. https://doi.org/10.1038/nn.3689">Fischer and Whitney (2014)</a> orientation dataset, prepares it for the legacy surface-NN fitting path, fits the 20- and 100-sample observer models using five fitting criteria, and saves plots and spreadsheets under:
+The script downloads the <a href="https://doi.org/10.1038/nn.3689" title="Fischer, J., &amp; Whitney, D. (2014). Serial dependence in visual perception. Nature Neuroscience, 17(5), 738–743. https://doi.org/10.1038/nn.3689">Fischer and Whitney (2014)</a> orientation dataset, prepares a standard CSV, fits the packaged 20- and 100-sample WNM observer models using five fitting criteria, exports fitted curves/parameters, and saves the subject, group-average, and PDF-slice plots under:
 
 ```text
 results/fischer_whitney_20samples_circular/
 results/fischer_whitney_100samples_circular/
 ```
 
-The first run requires an internet connection to download the data. It performs more work than a minimal fit and can be slow on a CPU. This demo deliberately remains on the CSV/surface replay path; production WNM analyses use compiled bundles as described below.
+The first run requires an internet connection to download the data. It performs more work than a minimal fit and can be slow on a CPU. The demo intentionally uses the same CSV-first WNM interface intended for ordinary end users.
 
 ![Empirical bias with a representative Demixing Model fit](docs/images/data_fitting_example.png)
 
@@ -89,22 +89,29 @@ The default column contract is:
 
 The column names can be changed through command-line options. By default, a participant-condition is included only if it contains at least 30 usable trials.
 
-This CSV entry point is the **legacy surface backend**, kept for exploratory and
-recovery work. It derives the trial geometry, outlier rule and bias/dissimilarity
-columns from the file itself, so it cannot be used for production WNM fitting:
-`--data-path` with `--search continuous` is refused, and the fitter directs you to
-compile a bundle (see *Production WNM analyses* below).
+CSV is the standard end-user input. With no checkpoint or search override,
+the command uses the packaged WNM for `--n-samples 20` and the continuous
+multistart optimizer. The CSV itself defines the trial population, column
+mapping, outlier rule, and empirical fitting targets.
+
+For controlled **model-comparison or multi-dataset production analyses**, prefer
+a compiled `contextual_biases_database` bundle instead. A bundle freezes those
+empirical choices upstream so two model families cannot silently use different
+trial populations, bandwidths, or observed-design operators. That extra
+infrastructure is useful for comparative projects, not a prerequisite for
+fitting the Demixing Model to your own data.
 
 ```bash
 python model_fit_to_data/fit_model_to_data.py \
   --data-path path/to/trials.csv \
   --output-dir my_study \
+  --n-samples 20 \
   --include-methods density
 ```
 
 For orientation experiments, add `--circ-space 180`: orientations repeat after 180°, stimulus differences span 0–90°, and response errors span ±90°. For color, direction, or another variable defined around a full circle, keep the 360° default. This choice is important because it changes how angles are represented inside the model.
 
-Useful options include `--min-trials`, `--include-outliers`, and `--no-resume`. The default `density` criterion matches how the asymmetry of the response distribution changes with stimulus dissimilarity. Use `expectation` when the scientific target is specifically the mean bias curve shown in the example figure. The [fitting documentation](model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md) explains all eight criteria and when they differ, along with the surface and continuous search paths and the fingerprint that stops results computed different ways from being mixed.
+Useful options include `--n-samples`, `--min-trials`, `--include-outliers`, `--no-resume`, and `--continuous-starts`. The default `density` criterion matches how the asymmetry of the response distribution changes with stimulus dissimilarity. Use `expectation` when the scientific target is specifically the mean bias curve shown in the example figure. The [fitting documentation](model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md) explains all eight criteria and when they differ, along with the surface and continuous search paths and the fingerprint that stops results computed different ways from being mixed.
 
 The main result file contains fitted parameters, losses, stored empirical targets, and the metadata needed to reproduce predictions. Predicted curves are recomputed from the fingerprinted surrogate rather than stored as an unversioned cache. A progress file allows an interrupted analysis to continue, and a run-fingerprint file records how the results were produced so a later run cannot append fits computed under different settings. After generating plots and exports, the folder will look like this:
 
@@ -119,9 +126,13 @@ results/my_study/
 └── unified_subject_plots/
 ```
 
-Generate plots after fitting:
+Export fitted WNM tables and generate plots after fitting:
 
 ```bash
+python model_fit_to_data/export_wnm_fit_curves.py \
+  --results-dir results/my_study \
+  --output-dir results/my_study/csv_exports
+
 python model_fit_to_data/create_unified_subject_plots.py \
   --results-path results/my_study/extended_fit_results.pkl \
   --output-dir results/my_study \
@@ -140,25 +151,26 @@ exports with `model_fit_to_data/postprocess_fitted_likelihoods.py`. The full
 fitting interface and file descriptions are documented in
 [Batch_Fit_Analysis_Pipeline_Documentation.md](model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md).
 
-Production WNM analyses use a compiled `contextual_biases_database` bundle so
-the fitter does not construct trial geometry, scoring populations, bandwidths,
-or empirical targets. This is the only supported route for production fits, and
-the compiled runner
-(`bias_model_comparison/pipeline/regenerate_compiled_fits.py`) drives it:
+### Compiled bundles for controlled model comparison
+
+The optional compiled-bundle path is intended for projects that need empirical
+definitions shared across model families and datasets. A
+`contextual_biases_database` bundle fixes trial geometry, scoring populations,
+bandwidths, and empirical targets before fitting. The companion comparison
+pipeline (`bias_model_comparison/pipeline/regenerate_compiled_fits.py`) uses
+this route:
 
 ```bash
 python model_fit_to_data/fit_model_to_data.py \
   --bundle ../contextual_biases_database/data/bundles/<dataset>/<analysis> \
-  --checkpoint-path pretrained/wnm_k12_100samples.pkl \
+  --n-samples 100 \
   --output-dir results/<dataset>
 python model_fit_to_data/export_wnm_fit_curves.py \
   --results-dir results/<dataset> \
-  --checkpoint pretrained/wnm_k12_100samples.pkl \
   --output-dir results/<dataset>/csv_exports
 ```
 
-`create_unified_subject_plots.py` is plotting-only. Tabular fit products are written only by `export_wnm_fit_curves.py`, which writes provenance-bound parameters and curves plus
-per-trial likelihoods evaluated at the compiled coordinates. It verifies that
+`create_unified_subject_plots.py` is plotting-only. Tabular WNM fit products are written by `export_wnm_fit_curves.py`. For ordinary CSV fits it writes fitted parameters and curves; for compiled bundles it additionally writes provenance-bound per-trial likelihood products and replay checks because stable upstream row identities are available. It verifies that
 their summed likelihood reproduces the fitted objective under the run's recorded
 matrix-precision setting. Angular parameters and scores are exported in both
 explicit 360° model units (`*_model_deg`, `*_model_deg2`) and study-scale physical
@@ -236,13 +248,16 @@ Full recovery artifacts belong outside the repository under
 `$DEMIXING_ARTIFACT_ROOT`; the JSON file in the repository is a protocol example,
 not a completed panel.
 
-The complete research pipeline is:
+The current WNM research pipeline is:
 
-1. Simulate two-item mixture-inference samples or directly generate averaged surfaces with `surface_computation/simulated_samples_grid.py`.
-2. Build averaged likelihood surfaces with `neural_network_optimization/create_averaged_surfaces_from_samples.py` when the samples were stored separately.
-3. Train the fast model used for fitting and prediction with `neural_network_optimization/mirror_aware_training.py`.
-4. Fit behavioral data with `model_fit_to_data/fit_model_to_data.py`.
-5. Generate plots, exports, and prediction curves with `model_fit_to_data/` and `surface_simulator_for_predictions/`.
+1. Simulate two-item mixture-inference samples and accumulate the WNM training corpus with the tools under `surface_computation/` and `continuous_density/`.
+2. Train/package the conditional wrapped-normal mixture with the `continuous_density/` training and packaging tools.
+3. Fit behavioral data with `model_fit_to_data/fit_model_to_data.py`.
+4. Generate fitted tables/plots and theoretical prediction curves with `model_fit_to_data/` and `surface_simulator_for_predictions/`.
+
+The older averaged-surface and neural-network training pipeline remains in the
+repository for historical reproduction and for retained raw-surface/mu2 analyses;
+it is not the default fitted surrogate.
 
 Recreating the complete 5° parameter grid is a large, distributed GPU analysis, not a normal step in using the model. Consult the detailed computational documentation before launching it:
 
@@ -257,7 +272,8 @@ This repository contains the Demixing Model itself. Preparing all published data
 
 ```bash
 cd ../bias_model_comparison
-pipeline/regenerate_all_fits.sh
+python pipeline/regenerate_compiled_fits.py
+Rscript analysis/build_compiled_comparison_artifact.R --include-motor-noise
 quarto render analysis/compare_demixing_alt_fits.qmd
 ```
 
@@ -271,11 +287,12 @@ The pipeline accepts environment overrides such as `DEMIXING_MODEL`, `RESULTS`, 
 - `model_fit_to_data/` — fitting, postprocessing, and plotting.
 - `surface_simulator_for_predictions/` — Python and R prediction interfaces.
 - `surface_computation/` — simulation and likelihood-surface generation.
-- `neural_network_optimization/` — surface averaging and training code.
+- `continuous_density/` — WNM training, packaging, validation, and recovery code.
+- `neural_network_optimization/` — historical surface-NN averaging/training code retained for reproduction.
 - `surface_browser/` — Streamlit browser for locally available surfaces.
 - `shared/` — internal functions used by several parts of the model.
 - `cloud/` — distributed Vast.ai/object-store tooling and benchmarks.
-- `tests/` — focused tests and three smoke pipelines.
+- `tests/` — focused tests, a WNM end-to-end smoke, and historical surface-generation smokes.
 - `docs/` — README figure assets and their generator.
 
 ## Check that the installation works
@@ -289,6 +306,8 @@ python -m pytest tests
 The following tests recreate small versions of the computational pipeline and are considerably slower:
 
 ```bash
+bash tests/run_smoke_wnm.sh
+# Historical surface-generation checks:
 bash tests/run_smoke_pipeline.sh
 bash tests/run_smoke_standard.sh
 bash tests/run_smoke_compare_seeds.sh
