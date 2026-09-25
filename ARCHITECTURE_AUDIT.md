@@ -23,7 +23,7 @@ The repository architecture has not yet caught up with that runtime state.
 Three eras coexist in the active tree:
 
 1. the original simulator + averaged-surface + surface-NN pipeline;
-2. the temporary `continuous_density/` WNM research/transition workspace;
+2. the temporary `continuous_density/` WNM development/transition workspace;
 3. the current WNM fitting, scoring, prediction, export, and recovery path.
 
 The principal architectural problem is therefore not the WNM mathematics. It is
@@ -31,7 +31,7 @@ that the new runtime was added beside the old architecture instead of being
 fully redistributed through the repository's functional layers. Production WNM
 code still reaches into historical surface modules for neutral objective helpers,
 the maintained WNM model class still lives in a package that labels itself an
-experimental prototype, tests mix product, integration, research, and historical
+experimental prototype, tests mix product, integration, development, and historical
 surface contracts, and several numerical/utilitarian functions have multiple
 implementations.
 
@@ -42,7 +42,7 @@ its components have been moved to functional homes.
 ## Architectural principles for the cleanup
 
 1. **Organize by function, not by transition history.** Simulation, surrogate
-   training, fitting/scoring, prediction, visualization, and research validation
+   training, fitting/scoring, prediction, visualization, and development validation
    should be separate layers, as they were conceptually for the surface approach.
 2. **One production implementation per scientific quantity.** Circular moments,
    SD, density asymmetry, likelihood, result identity, bandwidth rules, and
@@ -60,7 +60,7 @@ its components have been moved to functional homes.
    contracts, fitting integration, plotting integration, cross-repository
    integration, and historical reproduction should not repeatedly test the same
    mathematics.
-7. **Generated research artifacts do not belong in the source tree** unless they
+7. **Generated development artifacts do not belong in the source tree** unless they
    are deliberately small golden fixtures or compact provenance/findings files.
 
 ---
@@ -101,17 +101,17 @@ available. `pytest tests` should validate a standalone Demixing Model checkout.
 There are two substantial test roots:
 
 - `tests/`: current runtime plus historical surface tests
-- `continuous_density/tests/`: WNM research/prototype tests
+- `continuous_density/tests/`: WNM development/prototype tests
 
 Without a `testpaths` policy, a bare `pytest` can collect both and make
-transition research part of the implicit product contract.
+transition development-only code part of the implicit product contract.
 
 **Action:** configure the default suite as `tests/`, then explicitly mark or
 separately invoke:
 
 - `integration`
 - `legacy_surface`
-- `research`
+- `development`
 - `slow`
 - `gpu`
 
@@ -448,8 +448,8 @@ they should not all remain peers of the maintained runtime indefinitely.
 **Target:** classify each as either:
 
 1. reusable primitive and move the primitive into a neutral maintained module;
-2. historical/research workflow and move it under an explicit
-   `research/...` tree;
+2. historical/development workflow and move it under an explicit
+   `development/...` tree;
 3. obsolete after its findings are captured and remove it from the active tree.
 
 Corresponding tests should follow the code rather than remain in the default
@@ -459,7 +459,7 @@ product suite.
 
 # 6. `continuous_density/` must be dissolved
 
-`continuous_density/` was a temporary research/transition workspace. It now
+`continuous_density/` was a temporary development/transition workspace. It now
 contains the production WNM model implementation, training scripts, simulation
 design, validation experiments, plotting/reporting scripts, exploratory local
 representation families, archived findings, generated outputs, and a second
@@ -505,7 +505,7 @@ model_fit_to_data/
 prediction_tools/              # eventual rename of surface_simulator_for_predictions
     python / R user interfaces
 
-research/
+development/
     wnm_transition/
     wnm_representation/
     historical_surface/
@@ -586,7 +586,7 @@ when convenient.
 ## 6.5 Production fitting/scoring/recovery code
 
 Any functionality that has become part of the maintained behavioral fitting
-contract belongs under `model_fit_to_data/`, not the research directory.
+contract belongs under `model_fit_to_data/`, not the development directory.
 
 Most of this migration is already complete. New moves should be rare and should
 primarily consist of extracting reusable primitives from transition scripts, not
@@ -594,7 +594,7 @@ moving entire experiments.
 
 `standardized_recovery.py` should remain the maintained recovery entry point.
 
-## 6.6 Research validation and representation experiments
+## 6.6 Development validation and representation experiments
 
 The following classes of files should move under an explicit research tree,
 because they answer historical/experimental questions rather than implement the
@@ -673,8 +673,8 @@ Redistribute by what they test:
 - WNM mathematical primitive tests should merge into the maintained
   `tests/test_wrapped_mixture.py` or successor.
 - WNM training/design tests should move with the training/simulation code and be
-  marked as training/research tests as appropriate.
-- local representation tests should move with the research experiments and stay
+  marked as training/development tests as appropriate.
+- local representation tests should move with the development experiments and stay
   outside the default product suite.
 - duplicated assertions already covered by product tests should be removed rather
   than mechanically moved.
@@ -737,7 +737,7 @@ Marked and non-default unless sibling dependencies are available:
 Marked `legacy_surface`; run when historical reproduction changes, not as
 implicit WNM product coverage.
 
-## Research
+## Development
 
 Local representation, optimizer-comparison, and transition experiments should
 be explicitly invoked and should not define the default product suite.
@@ -895,7 +895,7 @@ Implemented on the transition branch before establishing the green baseline:
 3. CDB-dependent checks are explicit `integration` tests and skip cleanly
    without the sibling checkout;
 4. transition-comparison and clearly surface-only suites are marked
-   `research` / `legacy_surface` and excluded from the default product run;
+   `development` / `legacy_surface` and excluded from the default product run;
 5. the most misleading current documentation has been corrected;
 6. obvious dead imports found during the audit were removed.
 
@@ -917,7 +917,7 @@ Run tests after each move.
 1. Move WNM runtime math/artifact format to `shared`.
 2. Move simulation/design/training-data code to the simulation layer.
 3. Move training/packaging to a surrogate-training layer.
-4. Move research/validation experiments under `research/`.
+4. Move development/validation experiments under `development/`.
 5. Move transition findings under `docs/history/`.
 6. Consolidate or move its tests.
 7. remove tracked validation outputs.
