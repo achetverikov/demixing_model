@@ -441,6 +441,31 @@ def load_extended_results(results_path: str) -> Dict:
     return results
 
 
+def _resolve_plot_circ_space(extended_results: Dict,
+                             requested: Optional[int] = None) -> int:
+    """Use the circular period recorded by the fit, validating any CLI override."""
+    stored = {
+        float(result['circ_space'])
+        for result in extended_results.values()
+        if result is not None and result.get('circ_space') is not None
+    }
+    if len(stored) > 1:
+        raise ValueError(
+            "plotting requires one circular period per result set, but the fitted "
+            f"results contain {sorted(stored)}")
+    if stored:
+        recorded = stored.pop()
+        if requested is not None and not np.isclose(float(requested), recorded):
+            raise ValueError(
+                f"--circ-space={requested} disagrees with the fitted result period "
+                f"{recorded:g}; plotting in a different physical angular scale would "
+                "mislabel curves and fitted SDs")
+        if not np.isclose(recorded, round(recorded)):
+            raise ValueError(f"unsupported non-integer circular period {recorded:g}")
+        return int(round(recorded))
+    return 360 if requested is None else int(requested)
+
+
 def display_condition_label(value: object) -> str:
     text = str(value)
     if "___" in text:
@@ -1949,7 +1974,7 @@ def create_unified_plots_with_summaries(
         checkpoint_path: Optional[str] = None,
         output_dir: Optional[str] = None,
         results_dir: str = RESULTS_DIR,
-        circ_space: int = 360,
+        circ_space: Optional[int] = None,
 ) -> None:
     """Create unified subject plots and summary exports.
 
@@ -1969,6 +1994,8 @@ def create_unified_plots_with_summaries(
         checkpoint_path: Optional checkpoint path for loading the model.
         output_dir: Optional output directory for plots/exports.
         results_dir: Base directory for resolving relative paths.
+        circ_space: Optional display-period override. Normally inferred from
+            stored fit metadata; a conflicting override raises.
     """
     corr_str = f'_cw_{corr_weight:.2f}' if corr_weight != 0.25 else ''
 
@@ -1980,11 +2007,11 @@ def create_unified_plots_with_summaries(
     )
     resolved_results_path = resolve_input_path(results_path or default_results_path, results_dir)
     # These plots recompute curves, moments and SDs at *stored* parameters, so
-    # they must use the surrogate that produced those parameters -- not whatever
-    # is production today. The run's fingerprint says which by SHA-256; only a
-    # run predating fingerprints falls back to the production artifact for
-    # n_samples, and says so. An explicit --checkpoint-path is honoured and
-    # verified against the recorded digest.
+    # they must use the surrogate that produced those parameters, not whatever
+    # is production today. The run's fingerprint says which by SHA-256. A run
+    # without that identity must supply an explicit checkpoint; it never falls
+    # back to today's production artifact. An explicit --checkpoint-path is
+    # verified against the recorded digest when one exists.
     #
     # Resolving by n_samples alone was wrong twice over: the old default named
     # epoch 1500 while the fitter's named epoch 1425 -- different architectures,
@@ -2012,8 +2039,9 @@ def create_unified_plots_with_summaries(
     # print(f'Reading {resolved_results_path}')
     """Create both unified plots and summary plots with CSV exports."""
 
-    # Load results and organize by subject
+    # Load results and recover the physical circular period recorded by the fit.
     extended_results = load_extended_results(str(resolved_results_path))
+    circ_space = _resolve_plot_circ_space(extended_results, circ_space)
 
     print("Initializing prediction backend...")
     if _family == surrogate.FAMILY_WNM:
@@ -2110,11 +2138,9 @@ def main():
                         help="Create CSV exports (default: true).")
     parser.add_argument("--results-dir", default=RESULTS_DIR,
                         help="Base directory for outputs (default: results).")
-    parser.add_argument("--circ-space", type=int, default=360, choices=[180, 360],
-                        help="Circular space of the fitted data. Use 180 for axial orientation "
-                             "data fitted after doubling into model space; plots/CSVs are shown "
-                             "back in the original data space. Use 360 when data already match "
-                             "model space.")
+    parser.add_argument("--circ-space", type=int, default=None, choices=[180, 360],
+                        help="Optional circular-space override. By default it is inferred from "
+                             "the fitted result metadata; a conflicting override raises.")
     parser.add_argument("--pdf-slices", action=argparse.BooleanOptionalAction, default=True,
                         help="Create PDF slice plots (default: true).")
     parser.add_argument("--pdf-slice-optimizer", nargs='*', default=None,
