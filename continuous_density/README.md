@@ -1,17 +1,25 @@
-# Continuous conditional-density prototype
+# WNM transition and research workspace
 
-Experimental replacement for the numerical representation of the Demixing Model
-likelihood:
+This directory was created as a temporary workspace while replacing the
+surface-NN surrogate with a continuous conditional wrapped-normal mixture (WNM):
 
 ```
 raw EM outcomes → conditional wrapped-normal mixture
 ```
 
-WNM is now the deployed default surrogate, and the transition branch
-packages WNM artifacts and exposes WNM as an opt-in fitting/scoring backend. The
-research trainer here models `p(b | sd_feat1, sd_feat2, sd_ident, feat_diff)`
-directly and trains by raw-sample negative log likelihood—never from a histogram,
-KDE, bias grid, or surface.
+WNM is now the deployed default for prediction and ordinary fitting. The
+directory therefore no longer describes a single architectural component:
+it mixes remaining production WNM runtime/training code with transition
+experiments, validation scripts, findings, and generated evidence.
+
+[`ARCHITECTURE_AUDIT.md`](../ARCHITECTURE_AUDIT.md) defines the cleanup:
+production components are to be redistributed by function and this directory is
+to disappear. Until then, this README primarily documents historical/research
+reproduction rather than the normal end-user workflow.
+
+The trainer here models `p(b | sd_feat1, sd_feat2, sd_ident, feat_diff)`
+directly and trains by raw-sample negative log likelihood, never from a
+histogram, KDE, bias grid, or surface.
 
 ## Model and simulator
 
@@ -369,12 +377,11 @@ production work is listed only in the repository `TODO.md`.
 ## Notes for developers
 
 Generated NPZs, checkpoints, CSVs, and figures belong under
-`$DEMIXING_ARTIFACT_ROOT/continuous_density/`; they are not shipped with or
-expected in a normal checkout. The prototype training and large evaluation
-artifacts remain separate from runtime code. Bundle-native production fits and
-their maintained stored-result/plot consumers use the packaged WNM backend
-directly. The shared bare surrogate default still resolves to the surface NN for
-the separate generic prediction interface, which has not been migrated in this
-result/plot pass. Stored fit consumers recover their artifact from the run
-fingerprint instead of using that default. Current transition status is tracked
-in the root `TODO.md`.
+`$DEMIXING_ARTIFACT_ROOT/continuous_density/`; they are not expected in a
+normal checkout. Fresh prediction and ordinary fitting now default to the
+packaged WNM. Stored fit consumers recover the exact artifact from the run
+fingerprint rather than substituting today's default.
+
+This directory is temporary. Current cleanup status is tracked in the root
+`TODO.md`; the target functional redistribution is documented in
+`ARCHITECTURE_AUDIT.md`.
