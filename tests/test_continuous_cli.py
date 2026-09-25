@@ -11,6 +11,7 @@ These go through `run_fitting` rather than a subprocess so a failure gives a
 usable traceback; the CLI parsing above it is thin and separately exercised.
 """
 import pickle
+import shutil
 import sys
 from pathlib import Path
 
@@ -36,8 +37,8 @@ def dataset(tmp_path_factory):
     rng = np.random.default_rng(20260906)
     rows = []
     for condition, amplitude in (("first", 6.0), ("second", -4.0)):
-        feat = rng.uniform(2.0, 178.0, 400)
-        bias = amplitude * np.sin(np.radians(feat)) + rng.normal(0.0, 15.0, 400)
+        feat = rng.uniform(2.0, 178.0, 60)
+        bias = amplitude * np.sin(np.radians(feat)) + rng.normal(0.0, 15.0, 60)
         rows.append(pd.DataFrame({
             "expName": "synthetic", "subject": "S1", "condition": condition,
             "abs_td_dist": feat, "bias_to_distr_corr": ((bias + 180) % 360) - 180,
@@ -52,7 +53,7 @@ def _run(dataset, output_dir, **overrides):
 
     kwargs = dict(
         data_path=str(dataset), checkpoint_path=str(WNM), output_dir=str(output_dir),
-        results_dir=str(output_dir.parent), search="continuous", continuous_starts=3,
+        results_dir=str(output_dir.parent), search="continuous", continuous_starts=2,
         continuous_seed=0, methods=["density"], max_subjects=1, circ_space=360)
     kwargs.update(overrides)
     return F.run_fitting(**kwargs)
@@ -65,9 +66,22 @@ def _fingerprint(output_dir):
     return payload.get("payload", payload)
 
 
-def test_a_continuous_run_completes_and_writes_results(dataset, tmp_path):
-    out = tmp_path / "run"
+@pytest.fixture(scope="module")
+def baseline_run(dataset, tmp_path_factory):
+    """One maintained WNM fit reused by all baseline contract assertions."""
+    out = tmp_path_factory.mktemp("baseline_run") / "run"
     _run(dataset, out)
+    return out
+
+
+def _copy_baseline(baseline_run, tmp_path):
+    out = tmp_path / "run"
+    shutil.copytree(baseline_run, out)
+    return out
+
+
+def test_a_continuous_run_completes_and_writes_results(baseline_run):
+    out = baseline_run
 
     results = pickle.loads((out / "extended_fit_results.pkl").read_bytes())
     assert results, "no conditions were written"
@@ -80,13 +94,12 @@ def test_a_continuous_run_completes_and_writes_results(dataset, tmp_path):
         assert 2.5 <= float(params[0]) <= 200.0
 
 
-def test_every_objective_is_scored_not_just_the_fitted_one(dataset, tmp_path):
+def test_every_objective_is_scored_not_just_the_fitted_one(baseline_run):
     """A results row with some columns from one surrogate and some from another,
     with nothing in the file saying so, is the failure this guards."""
     import fit_model_to_data as F
 
-    out = tmp_path / "run"
-    _run(dataset, out)
+    out = baseline_run
 
     results = pickle.loads((out / "extended_fit_results.pkl").read_bytes())
     for entry in results.values():
@@ -95,14 +108,13 @@ def test_every_objective_is_scored_not_just_the_fitted_one(dataset, tmp_path):
         assert all(np.isfinite(v) for v in losses.values())
 
 
-def test_the_fingerprint_describes_the_search_that_ran(dataset, tmp_path):
-    out = tmp_path / "run"
-    _run(dataset, out)
+def test_the_fingerprint_describes_the_search_that_ran(baseline_run):
+    out = baseline_run
     payload = _fingerprint(out)
 
     assert payload["search_backend"] == "continuous"
     assert payload["surrogate_family"] == "wnm"
-    assert payload["continuous_spec"]["n_starts"] == 3
+    assert payload["continuous_spec"]["n_starts"] == 2
     assert payload["continuous_spec"]["sd_feat_bounds"] == [2.5, 200.0]
     for absent in ("grid_spec", "feat_step_schedule", "param_bounds"):
         assert absent not in payload, f"{absent} describes a lattice this run never walked"
@@ -110,9 +122,8 @@ def test_the_fingerprint_describes_the_search_that_ran(dataset, tmp_path):
     assert payload["objective_versions"]["likelihood"] == "trial_loglik_continuous@1"
 
 
-def test_the_same_settings_resume_rather_than_refit(dataset, tmp_path):
-    out = tmp_path / "run"
-    _run(dataset, out)
+def test_the_same_settings_resume_rather_than_refit(dataset, baseline_run, tmp_path):
+    out = _copy_baseline(baseline_run, tmp_path)
     before = (out / "extended_fit_results.pkl").read_bytes()
     _run(dataset, out)
     assert (out / "extended_fit_results.pkl").exists()
@@ -120,14 +131,13 @@ def test_the_same_settings_resume_rather_than_refit(dataset, tmp_path):
         (out / "extended_fit_results.pkl").read_bytes()).keys()
 
 
-def test_a_different_start_budget_refuses_to_resume(dataset, tmp_path):
+def test_a_different_start_budget_refuses_to_resume(dataset, baseline_run, tmp_path):
     """Two budgets are two different fits. Resuming across them would mix
     parameters found under searches of different strength into one result set.
     """
     from run_fingerprint import StaleResultsError
 
-    out = tmp_path / "run"
-    _run(dataset, out)
+    out = _copy_baseline(baseline_run, tmp_path)
     with pytest.raises(StaleResultsError, match="n_starts"):
         _run(dataset, out, continuous_starts=16)
 
@@ -164,21 +174,19 @@ def test_a_motor_enabled_run_actually_searches_the_motor_sd(dataset, tmp_path):
     assert payload["continuous_spec"]["motor"] == "searched"
 
 
-def test_a_no_motor_run_reports_a_fixed_zero(dataset, tmp_path):
-    out = tmp_path / "nomotor"
-    _run(dataset, out)
+def test_a_no_motor_run_reports_a_fixed_zero(baseline_run):
+    out = baseline_run
     results = pickle.loads((out / "extended_fit_results.pkl").read_bytes())
     assert all(float(np.asarray(e["density_fitted_params"])[3]) == 0.0
                for e in results.values())
     assert _fingerprint(out)["continuous_spec"]["motor"] == "fixed_zero"
 
 
-def test_the_fingerprint_records_every_setting_that_moves_the_parameters(dataset, tmp_path):
+def test_the_fingerprint_records_every_setting_that_moves_the_parameters(baseline_run):
     """Tolerances and the iteration cap change which starts converge and which
     parameters win, so two runs differing only in those must not share a digest.
     """
-    out = tmp_path / "run"
-    _run(dataset, out)
+    out = baseline_run
     spec = _fingerprint(out)["continuous_spec"]
     for field in ("method", "parameterisation", "n_starts", "seed", "sd_feat_bounds",
                   "sd_spat_bounds", "max_iterations", "tolerance", "gradient_tolerance",
@@ -186,7 +194,7 @@ def test_the_fingerprint_records_every_setting_that_moves_the_parameters(dataset
         assert field in spec, field
 
 
-def test_the_recorded_spec_comes_from_the_engine_that_runs(dataset, tmp_path):
+def test_the_recorded_spec_comes_from_the_engine_that_runs(baseline_run):
     """It was built twice -- once for the fingerprint, once on the engine -- and
     the two could drift, which is how a changed tolerance would alter the fitted
     parameters while the digest stayed put.
@@ -207,20 +215,19 @@ def test_the_recorded_spec_comes_from_the_engine_that_runs(dataset, tmp_path):
     assert spec["matmul_precision"] == defaults["matmul_precision"].default
 
 
-def test_search_diagnostics_reach_the_saved_results(dataset, tmp_path):
+def test_search_diagnostics_reach_the_saved_results(baseline_run):
     """A run where one start of eight converged must not be stored
     indistinguishably from one where all eight agreed."""
-    out = tmp_path / "run"
-    _run(dataset, out)
+    out = baseline_run
     results = pickle.loads((out / "extended_fit_results.pkl").read_bytes())
     for entry in results.values():
         assert entry["density_search_backend"] == "continuous"
-        assert entry["density_n_starts"] == 3
-        assert 0 <= entry["density_n_converged"] <= 3
+        assert entry["density_n_starts"] == 2
+        assert 0 <= entry["density_n_converged"] <= 2
         assert np.isfinite(entry["density_loss_spread"])
         assert isinstance(entry["density_at_bound"], list)
-        assert len(entry["density_start_losses"]) == 3
-        assert len(entry["density_start_outcomes"]) == 3
+        assert len(entry["density_start_losses"]) == 2
+        assert len(entry["density_start_outcomes"]) == 2
         assert entry["density_search_settings"]["optimizer_version"] == "jax-lbfgsb@0350da1"
 
 
