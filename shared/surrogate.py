@@ -424,7 +424,7 @@ def load_surrogate(family: Optional[str] = None,
             "The artifact's own metadata decides its family.")
 
     if actual == FAMILY_WNM:
-        from continuous_density.wrapped_mixture_model import ConditionalWrappedMixture
+        from shared.wnm import ConditionalWrappedMixture
 
         meta = dict(blob.get("meta") or {})
         declared = meta.get("n_samples")
