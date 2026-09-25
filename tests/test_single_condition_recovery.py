@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT / "model_fit_to_data"))
 
 import single_condition_recovery as panel  # noqa: E402
 
-pytestmark = pytest.mark.research
+pytestmark = pytest.mark.development
 
 
 def test_the_script_entry_point_runs_outside_the_repository(tmp_path):
