@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Create Unified Subject Plots
+Create Unified Subject and Summary Plots
 
 This script creates unified plots for each subject, combining all conditions
 in a single plot with parameter information displayed.
@@ -35,7 +35,6 @@ if str(ROOT) not in sys.path:
 from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
     GridBasedMultiConditionOptimizer,
 )
-from model_fit_to_data import density_objective
 from model_fit_to_data.run_fingerprint import read_fingerprint_sidecar
 from shared import surrogate
 from shared.config import config
@@ -79,19 +78,6 @@ OPTIMIZER_LABELS = {
     'bias_weighted_crps': 'Bias-weighted CRPS',
     'smoothed_exp': 'Smoothed Exp',
 }
-LOSS_EVALUATION_METHODS = [
-    'density', 'density_legacy', 'expectation', 'smoothed_exp', 'likelihood', 'crps',
-    'balanced_crps', 'bias_weighted_crps',
-]
-
-#: Placeholder when a density CCC decomposition cannot be formed.
-_NAN_CCC_COMPONENTS = {'ccc': np.nan, 'r': np.nan, 'C_b': np.nan}
-
-#: The decomposition itself lives with the objective, so the exported components
-#: and the fitted loss cannot come from two different definitions of CCC.
-_ccc_components = density_objective.ccc_components
-
-
 def _angle_display_scale(circ_space: int = 360) -> float:
     """Scale angular model-space values back to the data circular space."""
     return circ_space / (2 * config.feat_diff_range[1])
@@ -1191,37 +1177,28 @@ def organize_preprocessed_results_by_experiment(prepared_all_subjects: Dict) -> 
 def create_extended_summary_plots(prepared_all_subjects: Dict,
                                  output_dir: str = 'model_fit_to_data_results_v2',
                                  create_individual_plots: bool = True,
-                                 circ_space: int = 360) -> Tuple[List, List]:
+                                 circ_space: int = 360) -> None:
     """Create extended summary plots using preprocessed data.
 
-    Aggregation caveat (see MODEL_PIPELINE_FOR_AGENTS.md S10.4, D.14): only
-    optimizers present in EVERY prepared result of an experiment+condition are
-    aggregated, and that intersection is computed before the "combined"
-    pseudo-subject is excluded from the statistics — a method missing only from
-    "combined" is dropped from the plots AND from the CSV rows returned here,
-    so the exports are not necessarily complete over all stored fits.
+    Only optimizers present in every prepared result of an
+    experiment+condition are aggregated. The intersection is computed before
+    the "combined" pseudo-subject is excluded from the statistics, preserving
+    the historical plotting behavior without coupling plots to tabular exports.
 
     Args:
         prepared_all_subjects: Dictionary from prepare_all_subjects_data() with all precomputed curves
         output_dir: Output directory for plots
         create_individual_plots: Whether to create individual plots
-
-    Returns:
-        Tuple of (curve_data_for_csv, parameter_data_for_csv) for CSV export
     """
 
     print("Creating extended summary plots using preprocessed data...")
-
-    # Data collection for CSV export
-    curve_data_for_csv = []
-    parameter_data_for_csv = []
 
     # Organize preprocessed data by experiment and condition
     experiments = organize_preprocessed_results_by_experiment(prepared_all_subjects)
 
     if len(experiments) == 0:
         print("No experiments found with sufficient data for summary plots")
-        return [], []
+        return
 
     # Create plots directory
     plots_dir = Path(output_dir) / 'summary_plots'
@@ -1278,13 +1255,12 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
             # Collect precomputed curves from all subjects for this experiment+condition
             stage_bias_curves = {opt: [] for opt in available_optimizers}
             stage_asymm_curves = {opt: [] for opt in available_optimizers}
-            # Fine-grid SD feeds the CSV export; the bin-pooled twin is what the
-            # SD panel plots against the empirical curve.
+            # Fine-grid SD remains as a fallback for older prepared results;
+            # current results use the bin-pooled twin for comparison with data.
             stage_sd_curves = {opt: [] for opt in available_optimizers}
             stage_sd_pooled_curves = {opt: [] for opt in available_optimizers}
 
-            # Collect parameters and empirical curves
-            all_parameters = {opt: [] for opt in available_optimizers}
+            # Collect empirical curves
             all_empirical_bias = []
             all_empirical_bias_smoothed = []
             all_empirical_asymm = []
@@ -1307,8 +1283,6 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                 # Get precomputed optimizer curves for this subject+condition
                 optimizer_curves = experiment_data['optimizer_curves'].get(noise_condition_key, {})
                 empirical_curves = experiment_data['empirical_curves'].get(noise_condition_key, {})
-                parameters = experiment_data['parameters'].get(noise_condition_key, {})
-
                 for opt in available_optimizers:
                     if opt in optimizer_curves:
                         stage_bias_curves[opt].append(optimizer_curves[opt]['bias'])
@@ -1318,9 +1292,6 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                         if optimizer_curves[opt].get('predicted_sd_pooled') is not None:
                             stage_sd_pooled_curves[opt].append(
                                 optimizer_curves[opt]['predicted_sd_pooled'])
-                        params = parameters.get('params', {}).get(opt, parameters.get(opt))
-                        if params is not None:
-                            all_parameters[opt].append(params)
 
                 # Collect empirical curves and separate feature grids
                 if empirical_curves.get('bias') is not None:
@@ -1348,7 +1319,6 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                 if stage_bias_curves[opt]:
                     stage_bias_curves[opt] = jnp.array(stage_bias_curves[opt])
                     stage_asymm_curves[opt] = jnp.array(stage_asymm_curves[opt])
-                    all_parameters[opt] = jnp.array(all_parameters[opt])
                 if len(stage_sd_curves[opt]) > 0:
                     stage_sd_curves[opt] = jnp.array(stage_sd_curves[opt])
                 if len(stage_sd_pooled_curves[opt]) > 0:
@@ -1358,148 +1328,6 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
             # stage_bias_curves[opt] stays a plain list when conversion was skipped.
             available_optimizers = [opt for opt in available_optimizers
                                     if not isinstance(stage_bias_curves[opt], list)]
-
-            # Collect data for CSV export using preprocessed data
-            valid_results = []
-            for prepared_result in prepared_results_list:
-                subject_id = prepared_result['subject_id']
-                if subject_id == "combined":
-                    continue
-                experiment_data = prepared_result['experiment_data']
-                noise_condition_key = prepared_result['noise_condition']
-                noise_condition = display_condition_label(noise_condition_key)
-
-                valid_results.append({
-                    'subject': subject_id,
-                    'experiment': exp_name,
-                    'condition': noise_condition,
-                    'condition_key': noise_condition_key,
-                    'experiment_data': experiment_data
-                })
-
-            if len(valid_results) > 0:
-                # Create curve and parameter data for CSV export
-                n_subjects = len(valid_results)
-                n_feat_points = len(feat_vals)
-
-                subjects = np.array([r['subject'] for r in valid_results])
-                experiments = np.array([r['experiment'] for r in valid_results])
-                conditions = np.array([r['condition'] for r in valid_results])
-
-                # Process all available optimizers
-                for opt in available_optimizers:
-                    # Curve data
-                    opt_bias_data = stage_bias_curves[opt][:n_subjects]
-                    opt_asymm_data = stage_asymm_curves[opt][:n_subjects]
-                    if opt in stage_sd_curves and len(stage_sd_curves[opt]) > 0:
-                        opt_sd_data = stage_sd_curves[opt][:n_subjects]
-                    else:
-                        opt_sd_data = np.full((n_subjects, n_feat_points), np.nan)
-
-                    opt_curve_df = pd.DataFrame({
-                        'subject': np.repeat(subjects, n_feat_points),
-                        'experiment': np.repeat(experiments, n_feat_points),
-                        'condition': np.repeat(conditions, n_feat_points),
-                        'optimizer': opt,
-                        'feat_diff': np.tile(display_feat_vals, n_subjects),
-                        'mu_bias': (opt_bias_data * angle_display_scale).flatten(),
-                        'sd_deg': (opt_sd_data * angle_display_scale).flatten(),
-                        'density_asymmetry': opt_asymm_data.flatten()
-                    })
-                    identity = first_subject_data['surrogate_identity']
-                    for field in ('dm_version', 'surrogate_family', 'surrogate_artifact',
-                                  'surrogate_n_samples', 'surrogate_evaluator_version'):
-                        if field in identity:
-                            opt_curve_df[field] = identity[field]
-
-                    curve_data_for_csv.extend(opt_curve_df.to_dict('records'))
-
-                    # Parameter data from preprocessed results
-                    opt_params_list = []
-                    opt_losses = []
-                    opt_eval_losses = {method: [] for method in LOSS_EVALUATION_METHODS}
-                    opt_pooled_bwcrps = []
-                    opt_ccc_stats = []
-
-                    for result in valid_results:
-                        experiment_data = result['experiment_data']
-                        noise_condition = result['condition_key']
-                        parameters = experiment_data['parameters'].get(noise_condition, {})
-
-                        # Handle both old format (parameters[opt]) and new format (parameters['params'][opt])
-                        opt_params = parameters.get('params', {}).get(opt, parameters.get(opt))
-                        opt_loss = parameters.get('losses', {}).get(opt, 0.0)
-                        eval_losses = parameters.get('eval_losses', {}).get(opt, {})
-                        pooled_bwcrps = parameters.get('pooled_bwcrps', {}).get(opt, np.nan)
-
-                        if opt_params is not None:
-                            opt_params_list.append(opt_params)
-                            opt_losses.append(opt_loss)
-                            for loss_method in LOSS_EVALUATION_METHODS:
-                                opt_eval_losses[loss_method].append(eval_losses.get(loss_method, np.nan))
-                            opt_pooled_bwcrps.append(pooled_bwcrps)
-
-                            # Decompose the density fit into CCC and its two
-                            # factors. CCC = r * C_b splits the score into
-                            # precision (r, how well the curve shapes track) and
-                            # accuracy (C_b, whether the amplitude and offset are
-                            # right) -- and it was the missing accuracy term that
-                            # let the old objective accept curves an order of
-                            # magnitude too small, so exporting them separately is
-                            # what makes that visible per condition.
-                            if opt == 'density':
-                                optimizer_curves = experiment_data['optimizer_curves'].get(noise_condition, {})
-                                empirical_curves = experiment_data['empirical_curves'].get(noise_condition, {})
-
-                                if opt in optimizer_curves and empirical_curves.get('asymmetry') is not None:
-                                    predicted_asymm = np.asarray(optimizer_curves[opt]['asymmetry']).reshape(-1)
-                                    target_asymm = np.asarray(empirical_curves['asymmetry']).reshape(-1)
-                                    opt_ccc_stats.append(_ccc_components(predicted_asymm, target_asymm))
-                                else:
-                                    opt_ccc_stats.append(_NAN_CCC_COMPONENTS)
-                            else:
-                                opt_ccc_stats.append(_NAN_CCC_COMPONENTS)
-
-                    if not opt_params_list:
-                        continue
-
-                    opt_params_array = np.vstack([np.asarray(params).reshape(-1) for params in opt_params_list])
-
-                    param_df_data = {
-                        'subject': subjects,
-                        'experiment': experiments,
-                        'condition': conditions,
-                        'optimizer': opt,
-                        'sd_feat1': opt_params_array[:, 0],
-                        'sd_feat2': opt_params_array[:, 1],
-                        'sd_spat': opt_params_array[:, 2],
-                        f'{opt}_loss': opt_losses
-                    }
-                    identity = first_subject_data['surrogate_identity']
-                    for field in ('dm_version', 'surrogate_family', 'surrogate_artifact',
-                                  'surrogate_n_samples', 'surrogate_evaluator_version'):
-                        if field in identity:
-                            param_df_data[field] = identity[field]
-                    for loss_method, values in opt_eval_losses.items():
-                        param_df_data[f'eval_{loss_method}_loss'] = values
-                    param_df_data['eval_bias_weighted_crps_pooled_loss'] = opt_pooled_bwcrps
-
-                    # Add density loss components for density optimizer. NaN (not
-                    # 0) wherever a component is undefined: 0 is a real, meaningful
-                    # value for both r and C_b and would be indistinguishable from
-                    # a measurement. `density_loss` itself keeps its name and its
-                    # lower-is-better convention -- it now carries 1 - CCC.
-                    if opt == 'density':
-                        param_df_data['density_ccc'] = [s['ccc'] for s in opt_ccc_stats]
-                        param_df_data['density_r'] = [s['r'] for s in opt_ccc_stats]
-                        param_df_data['density_C_b'] = [s['C_b'] for s in opt_ccc_stats]
-
-                    # Add sd_motor if available
-                    if opt_params_array.shape[1] > 3:
-                        param_df_data['sd_motor'] = opt_params_array[:, 3]
-
-                    opt_param_df = pd.DataFrame(param_df_data)
-                    parameter_data_for_csv.extend(opt_param_df.to_dict('records'))
 
             # Compute statistics for plotting
             avg_stage_bias = {}
@@ -1680,7 +1508,7 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
 
         print(f"  Saved extended summary: {plot_path}")
 
-    return curve_data_for_csv, parameter_data_for_csv
+    return None
 
 
 def _model_slice(log_surf: np.ndarray, feat_grid: np.ndarray, mu1_grid: np.ndarray,
@@ -1905,58 +1733,6 @@ def create_pdf_slice_plots(
             print(f"    Saved: {out}")
 
 
-def export_fitted_parameters_csv(parameter_data: List[Dict], output_dir: str = 'model_fit_to_data_results_v2') -> None:
-    """Export fitted parameters to CSV in long format using pre-collected data.
-
-    Values are in MODEL space (360-degree; sd_* columns in model degrees) —
-    unlike fitted_curves.csv, which is display-scaled. Downstream joins must
-    convert one of the two (MODEL_PIPELINE_FOR_AGENTS.md D.1).
-    """
-
-    print("Exporting fitted parameters to CSV...")
-
-    # Save to CSV
-    df = pd.DataFrame(parameter_data)
-
-    # Create output directory
-    csv_dir = Path(output_dir) / 'csv_exports'
-    csv_dir.mkdir(exist_ok=True)
-
-    # Save parameters CSV
-    params_path = csv_dir / 'fitted_parameters.csv'
-    df.to_csv(params_path, index=False)
-
-    print(f"  Saved fitted parameters: {params_path}")
-    print(f"  Shape: {df.shape} (rows: {df.shape[0]}, columns: {df.shape[1]})")
-
-
-def export_fitted_curves_csv(curve_data: List[Dict], output_dir: str = 'model_fit_to_data_results_v2') -> None:
-    """Export fitted bias, SD, and density asymmetry curves to CSV in long format.
-
-    Values are in DISPLAY (data) space: feat_diff, mu_bias, and sd_deg are
-    multiplied by circ_space/360; density_asymmetry is unitless and unscaled.
-    Model curves only — empirical curves are not exported. Rows inherit the
-    summary loop's common-optimizer filtering (see create_extended_summary_plots
-    docstring; MODEL_PIPELINE_FOR_AGENTS.md D.1/D.14).
-    """
-
-    print("Exporting fitted curves to CSV...")
-
-    # Save to CSV
-    df = pd.DataFrame(curve_data)
-
-    # Create output directory
-    csv_dir = Path(output_dir) / 'csv_exports'
-    csv_dir.mkdir(exist_ok=True)
-
-    # Save curves CSV
-    curves_path = csv_dir / 'fitted_curves.csv'
-    df.to_csv(curves_path, index=False)
-
-    print(f"  Saved fitted curves: {curves_path}")
-    print(f"  Shape: {df.shape} (rows: {df.shape[0]}, columns: {df.shape[1]})")
-
-
 def create_unified_plots_with_summaries(
         n_samples: int = 20,
         outliers: bool = False,
@@ -1964,7 +1740,6 @@ def create_unified_plots_with_summaries(
         max_subjects: Optional[int] = None,
         create_summary_plots: bool = True,
         create_individual_plots: bool = True,
-        create_csv_exports: bool = True,
         create_pdf_slices: bool = True,
         pdf_slice_optimizers=None,
         pdf_slice_n_subjects: int = 3,
@@ -1985,7 +1760,6 @@ def create_unified_plots_with_summaries(
         max_subjects: Optional limit on subjects to process.
         create_summary_plots: Whether to generate summary plots.
         create_individual_plots: Whether to generate per-subject plots.
-        create_csv_exports: Whether to write CSV exports.
         skip_motor_noise: Whether motor noise was skipped in fitting.
         corr_weight: Correlation weight used during fitting. Only affects the
             output path name here, and only reaches the `density_legacy`
@@ -2037,7 +1811,7 @@ def create_unified_plots_with_summaries(
         resolved_output_dir = Path(resolve_results_path(output_dir, results_dir))
 
     # print(f'Reading {resolved_results_path}')
-    """Create both unified plots and summary plots with CSV exports."""
+    """Create unified subject, group-summary, and optional PDF-slice plots."""
 
     # Load results and recover the physical circular period recorded by the fit.
     extended_results = load_extended_results(str(resolved_results_path))
@@ -2084,17 +1858,12 @@ def create_unified_plots_with_summaries(
         print(f"Plots saved to: {output_dir}/unified_subject_plots/")
 
     # Create summary plots if requested
-    if create_summary_plots or create_csv_exports:
-        print("\n=== Creating Summary Plots and Exports ===")
-        curve_data_for_csv, parameter_data_for_csv = create_extended_summary_plots(
+    if create_summary_plots:
+        print("\n=== Creating Summary Plots ===")
+        create_extended_summary_plots(
             prepared_all_subjects, resolved_output_dir, create_individual_plots=False,
             circ_space=circ_space,
         )
-
-        if create_csv_exports:
-            export_fitted_parameters_csv(parameter_data_for_csv, resolved_output_dir)
-            export_fitted_curves_csv(curve_data_for_csv, resolved_output_dir)
-            print(f"CSV files saved to: {resolved_output_dir}/csv_exports/")
 
     if create_pdf_slices:
         print("\n=== Creating PDF Slice Plots ===")
@@ -2134,8 +1903,6 @@ def main():
                         help="Create per-subject plots (default: false).")
     parser.add_argument("--summary-plots", action=argparse.BooleanOptionalAction, default=True,
                         help="Create summary plots (default: true).")
-    parser.add_argument("--csv-exports", action=argparse.BooleanOptionalAction, default=True,
-                        help="Create CSV exports (default: true).")
     parser.add_argument("--results-dir", default=RESULTS_DIR,
                         help="Base directory for outputs (default: results).")
     parser.add_argument("--circ-space", type=int, default=None, choices=[180, 360],
@@ -2158,7 +1925,6 @@ def main():
         max_subjects=args.max_subjects,
         create_individual_plots=args.individual_plots,
         create_summary_plots=args.summary_plots,
-        create_csv_exports=args.csv_exports,
         create_pdf_slices=args.pdf_slices,
         pdf_slice_optimizers=args.pdf_slice_optimizer,
         pdf_slice_n_subjects=args.pdf_slice_n_subjects,
