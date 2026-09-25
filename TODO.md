@@ -49,7 +49,7 @@ Phase B is implemented:
 - result-key identity, streaming file hashing, and WNM likelihood
   export/rescoring each have one maintained implementation.
 
-Phase C is now in progress. The production WNM runtime lives in `shared/wnm.py`;
+Phase C is complete. The production WNM runtime lives in `shared/wnm.py`;
 training and packaging live in `surrogate_training/wnm/`; simulation,
 continuous design, training-data generation, and legacy raw-sample import live
 in `surface_computation/`. Development-only transition validation now lives in
@@ -58,17 +58,18 @@ in `surface_computation/`. Development-only transition validation now lives in
 
 Completed Phase C cleanup:
 
-- moved WNM validation/transition workflows under `development/wnm_transition/`;
-- moved local representation experiments under `development/wnm_representation/`;
-- moved the old `continuous_density/tests/` development checks alongside those workflows;
-- removed tracked generated `continuous_density/validation_outputs/`;
-- renamed the non-production pytest category from `research` to `development`.
+- production WNM runtime moved to `shared/wnm.py`;
+- WNM training and packaging moved to `surrogate_training/wnm/`;
+- simulation, continuous design, training-data generation, and legacy raw-sample import moved to `surface_computation/`;
+- WNM transition/validation workflows moved to `development/wnm_transition/`;
+- local representation experiments moved to `development/wnm_representation/`;
+- the old `continuous_density/tests/` development checks moved alongside those workflows;
+- tracked generated `continuous_density/validation_outputs/` were removed;
+- the non-production pytest category was renamed from `research` to `development`;
+- stale maintained imports and command paths were updated to the functional package layout;
+- the remaining compatibility shims were deleted and `continuous_density/` was removed;
+- the maintained pytest suite and WNM public-path smoke both passed after namespace deletion.
 
-Next Phase C items:
-
-- run the maintained suite after the development-tree move;
-- run the maintained suite and WNM public-path smoke after the namespace deletion;
-- fix any stale import or command references revealed by that final CI pass.
 
 ## 3. Decide the zero-width pooled-SD convention
 
