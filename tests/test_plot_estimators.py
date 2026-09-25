@@ -37,8 +37,10 @@ if not GOLDEN_PATH.exists():
         "estimators and is tracked in git; restore it rather than re-recording it, which "
         "against rerouted code would make this check vacuous.")
 
-pytestmark = pytest.mark.skipif(not CHECKPOINT.exists(),
-                                reason="no pretrained surface checkpoint")
+pytestmark = [
+    pytest.mark.legacy_surface,
+    pytest.mark.skipif(not CHECKPOINT.exists(), reason="no pretrained surface checkpoint"),
+]
 
 from shared import surrogate  # noqa: E402
 from shared.config import config  # noqa: E402
