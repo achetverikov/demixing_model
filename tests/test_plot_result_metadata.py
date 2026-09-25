@@ -118,8 +118,15 @@ def test_standalone_pdf_plot_uses_wnm_backend_from_run_identity(monkeypatch, tmp
         lambda checkpoint_path: loaded,
     )
     monkeypatch.setattr(plot_pdf_slices, "predictor_from_surrogate", lambda obj: predictor)
+    monkeypatch.setattr(plot_pdf_slices, "read_fingerprint_sidecar", lambda _: {
+        "payload": {
+            "density_curve_spec": {"emp_density_weights_sd": 15.0},
+            "continuous_spec": {"matmul_precision": "highest"},
+        }
+    })
 
     def fake_create_pdf(loaded_results, backend, output_dir, **kwargs):
+        assert plot_pdf_slices.jax.config.jax_default_matmul_precision == "highest"
         calls["results"] = loaded_results
         calls["backend"] = backend
         calls["output_dir"] = output_dir
@@ -143,3 +150,4 @@ def test_standalone_pdf_plot_uses_wnm_backend_from_run_identity(monkeypatch, tmp
     assert calls["output_dir"] == str(tmp_path)
     assert calls["kwargs"]["optimizer_names"] == ["bias_weighted_crps"]
     assert calls["kwargs"]["circ_space"] == 180
+    assert calls["kwargs"]["weights_sd_model"] == 15.0
