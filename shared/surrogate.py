@@ -42,9 +42,9 @@ FAMILIES = (FAMILY_SURFACE_NN, FAMILY_WNM)
 
 #: Kept as the name older code imports; it is the production family, not a
 #: second setting. There was briefly a separate ``PRODUCTION_FAMILY``, which
-#: meant promotion took two edits and a half-promoted state was reachable:
-#: ``production_checkpoint(20)`` returning one family while a bare
-#: ``load_surrogate(n_samples=20)`` returned another. One switch.
+#: made the 2026 WNM cutover require two edits and allowed a half-promoted state:
+#: ``production_checkpoint(20)`` could return one family while a bare
+#: ``load_surrogate(n_samples=20)`` returned another. One switch prevents that.
 DEFAULT_FAMILY = FAMILY_WNM
 
 #: Sample identity for the historical surface checkpoints, which predate any
@@ -81,7 +81,8 @@ def production_family() -> str:
     count, and :data:`DEFAULT_FAMILY` is the one switch that says which pair.
     (There was briefly a second constant named ``PRODUCTION_FAMILY``; it is gone,
     and a test asserts it has not come back.)
-    Promotion flips it once, after acceptance (transition plan step 6).
+    The 2026 WNM cutover flipped this switch once; historical surface artifacts
+    remain reachable only when explicitly requested.
 
     A function rather than a second constant, so that reading it cannot pick up a
     stale copy and so there is nowhere for a second switch to appear.
