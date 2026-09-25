@@ -25,7 +25,21 @@ Pipeline and report consolidation is owned by
 `bias_model_comparison/TODO.md`; canonical data and bundle work is owned by
 `contextual_biases_database/TODO.md`.
 
-## 2. Decide the zero-width pooled-SD convention
+## 2. Consolidate repository architecture after the WNM cutover
+
+The detailed audit and proposed target structure are in
+[`ARCHITECTURE_AUDIT.md`](ARCHITECTURE_AUDIT.md). In particular,
+`continuous_density/` was a temporary transition workspace and should be
+dissolved by moving its production pieces into the repository's functional
+layers: simulator/training-data generation, surrogate training/packaging,
+shared WNM runtime math, fitting/scoring, and explicitly historical research.
+
+Before interpreting a full test run, fix the audit's pre-test hygiene items:
+the stale CCC test import, default pytest collection boundaries, and CDB-dependent
+integration-test isolation. After a green baseline, carry out the architectural
+moves incrementally with tests between stages.
+
+## 3. Decide the zero-width pooled-SD convention
 
 The float32 upper clamp in pooled-SD reporting is currently inert, so a
 distribution concentrated in one reporting cell yields exactly zero degrees.
@@ -34,7 +48,7 @@ should have a resolution floor. This is low priority because current real fits
 do not reach the degenerate case, but changing it changes exported values and
 therefore requires a contract/version bump and regression fixture.
 
-## 3. Remove the repository-local secret exposure
+## 4. Remove the repository-local secret exposure
 
 The ignored `.env` file's local permissions were restricted from `0777` to
 `0600` without reading or copying its values. Move runtime secrets out of the
