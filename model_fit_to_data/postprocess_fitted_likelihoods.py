@@ -43,6 +43,10 @@ except ModuleNotFoundError:
     )
 from shared.config import config
 from shared.behavioral_data import filter_data_for_fitting
+from model_fit_to_data.wnm_likelihood import (
+    evaluate_trial_likelihoods,
+    exact_cell_log_probability,
+)
 
 # Motor-noise density floor (B1 floor-aware reproduction gate).
 #
@@ -453,110 +457,42 @@ def predict_log_surface(
 
 
 def wnm_trial_log_density(predictor, fit_row: pd.Series, feat_diff_deg, bias_deg):
-    """Continuous log density per model degree, at each trial's own coordinates.
-
-    The surface backend reads a trial's density out of the 180-row grid, at the
-    centre of the cell the observation falls in. The mixture evaluates at the
-    observation itself. That is a different observation-scoring convention rather
-    than a better implementation of the same one, which is why the exported rows
-    carry ``loglik_convention`` and why a head-to-head information criterion
-    needs one convention applied to both families.
-    """
-    import wnm_scoring
-
-    sd_motor = float(fit_row.get("sd_motor", 0.0) or 0.0)
-    scorer = predictor.with_motor_noise(sd_motor) if sd_motor > 0 else predictor
-    return np.asarray(wnm_scoring.trial_log_density(
-        scorer,
-        float(fit_row["sd_feat1"]), float(fit_row["sd_feat2"]), float(fit_row["sd_spat"]),
-        jnp.asarray(np.asarray(feat_diff_deg), dtype=jnp.float32),
-        jnp.asarray(np.asarray(bias_deg), dtype=jnp.float32)))
-
+    """Compatibility wrapper for the canonical WNM likelihood evaluator."""
+    parameters = [
+        float(fit_row["sd_feat1"]), float(fit_row["sd_feat2"]),
+        float(fit_row["sd_spat"]), float(fit_row.get("sd_motor", 0.0) or 0.0),
+    ]
+    return evaluate_trial_likelihoods(
+        predictor, parameters, feat_diff_deg, bias_deg
+    )["loglik_density_model_deg"]
 
 def wnm_cell_log_probability(predictor, fit_row: pd.Series, feat_diff_deg, bias_deg):
-    """Exact log mass of the reporting cell each observation falls in.
-
-    Computed on the host in float64, from the mixture parameters, rather than by
-    converting a float32 result. That distinction is the whole point: the interval
-    mass of a component far from its cell is small but *representable* -- a
-    sigma-11 component 180 degrees away has mass 7.3e-60, log -136 -- and float32
-    cannot hold it. It underflows to zero, the log becomes -inf, and a first
-    attempt at this fixed the symptom by widening the floor afterwards, which
-    reported -708 for a value whose true log is -136. A 572-nat error per cell,
-    dressed as a precision guard.
-
-    Kept separate from ``loglik_mass`` rather than replacing it. ``loglik_mass``
-    is the historical density-times-cell-width rectangle rule and stays that on
-    both families, so legacy columns keep comparing like with like; this is the
-    integral the mixture can actually compute, which differs from the rectangle
-    rule exactly where a component is narrow relative to the 2-degree cell.
-    """
-    from scipy.stats import norm
-
-    from shared.mu1_axis import bin_indices, mu1_cell_width, mu1_grid
-
-    sd_motor = float(fit_row.get("sd_motor", 0.0) or 0.0)
-    scorer = predictor.with_motor_noise(sd_motor) if sd_motor > 0 else predictor
-
-    centres = np.asarray(mu1_grid())
-    half = mu1_cell_width() / 2.0
-    indices = np.asarray(bin_indices(jnp.asarray(np.asarray(bias_deg), dtype=jnp.float32)))
-
-    rows = jnp.stack([
-        jnp.full(len(indices), float(fit_row["sd_feat1"]), jnp.float32),
-        jnp.full(len(indices), float(fit_row["sd_feat2"]), jnp.float32),
-        jnp.full(len(indices), float(fit_row["sd_spat"]), jnp.float32),
-        jnp.asarray(np.asarray(feat_diff_deg), dtype=jnp.float32)], axis=-1)
-    dist = scorer.distribution(rows, validate=False)
-
-    # The mixture parameters are float32 -- that is what the network emits -- but
-    # everything downstream of them is done in float64, so the CDF difference and
-    # the wrap sum keep the precision the parameters allow.
-    mu = np.asarray(dist["mu"], dtype=np.float64)
-    sigma = np.asarray(dist["sigma"], dtype=np.float64)
-    weights = np.asarray(jnp.exp(dist["log_pi"]), dtype=np.float64)
-
-    lows = (centres[indices] - half)[:, None]
-    highs = (centres[indices] + half)[:, None]
-    shifts = np.arange(-8, 9, dtype=np.float64) * 360.0
-
-    mass = np.zeros(len(indices), dtype=np.float64)
-    for shift in shifts:
-        upper = (highs + shift - mu) / sigma
-        lower = (lows + shift - mu) / sigma
-        mass += np.sum(weights * (norm.cdf(upper) - norm.cdf(lower)), axis=-1)
-
-    floored = int(np.sum(mass <= 0.0))
-    if floored:
-        # Once per process. These are true zeros at float64 -- a quarter-degree
-        # component 90 degrees from a cell is below 1e-308 -- not a precision
-        # failure, and not the float32 underflow this function exists to avoid.
-        warnings.warn(
-            f"{floored} of {mass.size} cell masses are below the smallest positive normal "
-            "double and were floored; these are genuine tail zeros, not lost precision.",
-            RuntimeWarning, stacklevel=2)
-    return np.log(np.maximum(mass, np.finfo(np.float64).tiny))
-
+    """Compatibility wrapper for exact float64 WNM reporting-cell mass."""
+    parameters = [
+        float(fit_row["sd_feat1"]), float(fit_row["sd_feat2"]),
+        float(fit_row["sd_spat"]), float(fit_row.get("sd_motor", 0.0) or 0.0),
+    ]
+    return exact_cell_log_probability(
+        predictor, parameters, feat_diff_deg, bias_deg)
 
 def _score_fit_row_wnm(predictor, scored, data_source, fit_row, circ_space):
     """Rescore one fit against the wrapped-normal mixture."""
     feat_diff = scored["feat_diff_model_deg"].to_numpy(float)
     bias = scored["bias_model_deg"].to_numpy(float)
-    loglik_density_model_deg = wnm_trial_log_density(
-        predictor, fit_row, feat_diff, bias)
+    parameters = [
+        float(fit_row["sd_feat1"]), float(fit_row["sd_feat2"]),
+        float(fit_row["sd_spat"]), float(fit_row.get("sd_motor", 0.0) or 0.0),
+    ]
     model_bin_width_deg = float(config.mu1_bias_step)
     bin_width_deg = physical_bin_width_deg(circ_space)
-
-    scored["loglik_density_model_deg"] = loglik_density_model_deg
-    scored["nll_density_model_deg"] = -loglik_density_model_deg
-    scored["loglik_mass"] = loglik_density_model_deg + np.log(model_bin_width_deg)
-    scored["nll_mass"] = -scored["loglik_mass"]
-    scored["loglik_density_deg"] = scored["loglik_mass"] - np.log(bin_width_deg)
-    scored["nll_density_deg"] = scored["nll_mass"] + np.log(bin_width_deg)
-    scored["loglik_cell_probability"] = wnm_cell_log_probability(
-        predictor, fit_row, feat_diff, bias)
-    scored["bin_width_deg"] = bin_width_deg
-    scored["loglik_convention"] = "continuous_at_observation"
+    likelihood = evaluate_trial_likelihoods(
+        predictor, parameters, feat_diff, bias,
+        physical_bin_width_deg=bin_width_deg,
+        include_cell_probability=True,
+    )
+    loglik_density_model_deg = likelihood["loglik_density_model_deg"]
+    for column, values in likelihood.items():
+        scored[column] = values
     for column in ("subject", "experiment", "condition", "optimizer"):
         scored[f"fit_{column}" if column != "optimizer" else "optimizer"] = fit_row[column]
     for column in ("sd_feat1", "sd_feat2", "sd_spat", "sd_motor"):
