@@ -112,10 +112,19 @@ def test_wnm_fit_rows_export_both_likelihood_conventions(monkeypatch):
         "optimizer": "likelihood", "sd_feat1": 20.0, "sd_feat2": 30.0,
         "sd_spat": 10.0, "sd_motor": 0.0, "eval_likelihood_loss": 3.0,
     })
-    monkeypatch.setattr(P, "wnm_trial_log_density",
-                        lambda *_: np.array([-1.0, -2.0]))
-    monkeypatch.setattr(P, "wnm_cell_log_probability",
-                        lambda *_: np.array([-0.8, -1.8]))
+    def fake_likelihood(*_args, **_kwargs):
+        return {
+            "loglik_density_model_deg": np.array([-1.0, -2.0]),
+            "nll_density_model_deg": np.array([1.0, 2.0]),
+            "loglik_mass": np.array([-1.0, -2.0]) + np.log(2.0),
+            "nll_mass": np.array([1.0, 2.0]) - np.log(2.0),
+            "loglik_density_deg": np.array([-1.0, -2.0]),
+            "nll_density_deg": np.array([1.0, 2.0]),
+            "loglik_cell_probability": np.array([-0.8, -1.8]),
+            "bin_width_deg": 2.0,
+            "loglik_convention": "continuous_at_observation",
+        }
+    monkeypatch.setattr(P, "evaluate_trial_likelihoods", fake_likelihood)
 
     out, check = P._score_fit_row_wnm(object(), scored, "prepared.csv", fit, 360)
 
