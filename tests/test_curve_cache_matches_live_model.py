@@ -34,6 +34,8 @@ import jax.numpy as jnp
 import curve_cache as cc
 import density_objective as do
 from grid_based_multi_condition_optimizer_jax_loops import (
+
+pytestmark = pytest.mark.legacy_surface
     GridBasedMultiConditionOptimizer,
     _compute_curve_losses,
     generate_nn_density_asymmetry_batch,
