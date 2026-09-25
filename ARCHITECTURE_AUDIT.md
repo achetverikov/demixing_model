@@ -35,8 +35,8 @@ bundles remain available for controlled model-comparison work, fitted-result
 plots and exports are WNM-aware, and the public demo and WNM smoke path use the
 new model.
 
-The repository architecture has not yet caught up with that runtime state.
-Three eras coexist in the active tree:
+At the time of the audit, the repository architecture had not yet caught up with that runtime state.
+Three eras coexisted in the active tree:
 
 1. the original simulator + averaged-surface + surface-NN pipeline;
 2. the temporary `continuous_density/` WNM development/transition workspace;
@@ -51,9 +51,9 @@ experimental prototype, tests mix product, integration, development, and histori
 surface contracts, and several numerical/utilitarian functions have multiple
 implementations.
 
-The intended end state should have **no production import from
-`continuous_density/`**. That directory was temporary and should disappear once
-its components have been moved to functional homes.
+The intended end state was **no production import from `continuous_density/`**.
+That target has now been reached: its components were moved to functional homes
+and the directory was deleted.
 
 ## Architectural principles for the cleanup
 
