@@ -134,7 +134,7 @@ def load_source(source: str, corpus_files: Optional[int] = None,
     if path.suffix == '.npz':
         return load_npz(path)
 
-    from continuous_density import existing_samples  # historical raw-corpus loader
+    from surface_computation import legacy_sample_import as existing_samples
     directory = path if path.is_dir() else existing_samples.corpus_dir(source)
     design, bias = existing_samples.load_corpus(
         directory, n_files=corpus_files, max_sims=corpus_sims, seed=seed,
