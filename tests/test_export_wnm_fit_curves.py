@@ -145,3 +145,64 @@ def test_compiled_likelihood_export_uses_stored_trial_coordinates(monkeypatch):
                                [-1.0 + np.log(2.0), -2.0 + np.log(2.0)])
     assert likelihood["include_common_eval"].all()
     assert checks.loc[0, "abs_diff"] == 0.0
+
+
+
+def test_direct_export_supports_plain_csv_fit_identity(tmp_path, monkeypatch):
+    results_dir = tmp_path / "fit"
+    output_dir = tmp_path / "curves"
+    results_dir.mkdir()
+    checkpoint = tmp_path / "wnm.pkl"
+    checkpoint.write_bytes(b"checkpoint")
+    result = {
+        "n_trials": 2,
+        "data_df": np.array([[2.0, -1.0], [4.0, 3.0]], dtype=np.float32),
+        "circ_space": 360.0,
+        "angle_scale_to_model": 1.0,
+        "empirical_curves": {
+            "feature_operator": np.eye(2, dtype=np.float32),
+            "density_bandwidth": 5.0,
+            "target_bias_curve": np.array([0.0, 0.0]),
+            "matched_density_target": np.array([0.0, 0.0]),
+            "prediction_coordinates": np.array([2.0, 4.0]),
+        },
+        "density_fitted_params": np.array([10.0, 20.0, 30.0, 0.0]),
+        "density_loss": 0.5,
+        "density_eval_density_loss": 0.5,
+        "density_eval_smoothed_exp_loss": 1.0,
+        "density_eval_likelihood_loss": 2.0,
+        "density_eval_bias_weighted_crps_loss": 3.0,
+    }
+    with (results_dir / "extended_fit_results.pkl").open("wb") as handle:
+        pickle.dump({"S1#experiment_a#condition_b": result}, handle)
+
+    monkeypatch.setattr(export_module, "read_fingerprint_sidecar", lambda _: {
+        "digest": "run-digest",
+        "payload": {
+            "surrogate_family": "wnm",
+            "checkpoint_sha256": "digest",
+            "continuous_spec": {"matmul_precision": "highest"},
+        },
+    })
+    monkeypatch.setattr(export_module, "file_sha256", lambda _: "digest")
+    monkeypatch.setattr(export_module.surrogate, "load_surrogate", lambda **_: object())
+    predictor = SimpleNamespace(identity=lambda: SimpleNamespace(
+        as_dict=lambda: {"dm_version": "wnm_k12_20samples", "surrogate_family": "wnm"}))
+    monkeypatch.setattr(export_module, "predictor_from_surrogate", lambda _: predictor)
+    monkeypatch.setattr(export_module.config, "create_grid",
+                        lambda _: np.array([2.0, 4.0], dtype=np.float32))
+    monkeypatch.setattr(export_module, "mixture_plot_curves", lambda *_args, **_kwargs: {
+        "bias": np.array([[1.0, 2.0]]),
+        "asymmetry": np.array([[0.1, 0.2]]),
+        "sd": np.array([[5.0, 6.0]]),
+    })
+
+    export_module.export_curves(
+        results_dir, checkpoint, output_dir, methods=("density",))
+
+    parameters = export_module.pd.read_csv(output_dir / "fitted_parameters.csv")
+    assert parameters.loc[0, "subject"] == "S1"
+    assert parameters.loc[0, "experiment"] == "experiment_a"
+    assert parameters.loc[0, "condition"] == "condition_b"
+    assert parameters.loc[0, "fit_group_id"] == "S1#experiment_a"
+    assert not (output_dir / "trial_loglik_split").exists()
