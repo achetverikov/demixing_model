@@ -135,7 +135,7 @@ def test_a_different_start_budget_refuses_to_resume(dataset, baseline_run, tmp_p
     """Two budgets are two different fits. Resuming across them would mix
     parameters found under searches of different strength into one result set.
     """
-    from run_fingerprint import StaleResultsError
+    from model_fit_to_data.run_fingerprint import StaleResultsError
 
     out = _copy_baseline(baseline_run, tmp_path)
     with pytest.raises(StaleResultsError, match="n_starts"):
