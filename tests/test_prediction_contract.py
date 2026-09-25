@@ -430,6 +430,14 @@ def test_zero_motor_noise_is_still_allowed(predictor):
 
 
 @needs_artifact
+@pytest.mark.parametrize("bad", [-20.0, float("nan"), float("inf")])
+def test_concrete_motor_override_uses_the_same_validation(predictor, bad):
+    """Direct public overrides must not bypass the constructor-level contract."""
+    with pytest.raises(ValueError, match="sd_motor override"):
+        predictor.circular_sd(PARAMS, sd_motor=bad)
+
+
+@needs_artifact
 def test_smoothing_refuses_a_shuffled_or_unevenly_spaced_feature_axis(predictor):
     """The kernel is symmetric about each row and its width is in grid steps, so
     the rows must be the feature axis, in order, evenly spaced. Either violation
