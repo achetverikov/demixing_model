@@ -292,7 +292,6 @@ class ContinuousEngine:
     """
 
     def __init__(self, predictor, *, curve_losses, energy_score,
-                 degenerate_targets, bwcrps_condition_targets, target_bias_curve_core,
                  emp_density_weights_sd: float, density_smoothing_sigma=None,
                  density_bandwidth_rule: str = "sj", density_bandwidth_mode: str = "pooled",
                  corr_weight: float = 0.25, skip_motor_noise: bool = True,
@@ -314,9 +313,6 @@ class ContinuousEngine:
         self._build_targets = build_fitting_targets
         self._curve_losses = curve_losses
         self._energy_score = energy_score
-        self._degenerate_targets = degenerate_targets
-        self._bwcrps_condition_targets = bwcrps_condition_targets
-        self._target_bias_curve_core = target_bias_curve_core
 
         self.feat_diff_grid = config.create_grid('feat_diff')
         bias_grid = config.create_grid('mu1_bias')
@@ -348,9 +344,6 @@ class ContinuousEngine:
             emp_density_weights_sd=self.emp_density_weights_sd,
             density_bandwidth_rule=self.density_bandwidth_rule,
             density_bandwidth_mode=self.density_bandwidth_mode,
-            degenerate_targets=self._degenerate_targets,
-            bwcrps_condition_targets=self._bwcrps_condition_targets,
-            target_bias_curve_core=self._target_bias_curve_core,
             feature_coordinate_mode="exact",
             prediction_capacity=prediction_capacity)
         low, high = self.predictor.domain["feat_diff"]
