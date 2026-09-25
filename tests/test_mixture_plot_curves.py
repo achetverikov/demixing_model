@@ -78,6 +78,7 @@ def _stored_result(feat_grid, params):
             "density_feat_grid": feat_grid,
             "feature_operator": operator,
             "density_bandwidth": 7.5,
+            "prediction_coordinates": feat_grid,
         },
     }
 
@@ -261,7 +262,7 @@ def test_standard_subject_pipeline_uses_direct_matched_wnm_curves(predictor, fea
         predictor, params[None, :3], feat_grid,
         bin_weights=bin_weights, sd_motor_by_row=[params[3]],
         feature_operators=result["empirical_curves"]["feature_operator"][None, :, :],
-        density_bandwidths=[7.5])
+        density_bandwidths=[7.5], operator_feature_coordinates=feat_grid)
     for actual_name, expected_name in (
             ("bias", "bias"), ("asymmetry", "asymmetry"),
             ("predicted_sd", "sd"), ("predicted_sd_pooled", "pooled_sd")):
@@ -270,6 +271,66 @@ def test_standard_subject_pipeline_uses_direct_matched_wnm_curves(predictor, fea
         "surrogate_family"] == "wnm"
     assert prepared["S"]["experiments"]["exp"]["surrogate_identity"][
         "dm_version"] == "wnm_k12_20samples"
+
+
+def _observed_design_result(feat_grid, params, coordinates):
+    """A stored fit whose operator maps onto its own observed coordinates."""
+    result = _stored_result(feat_grid, params)
+    coordinates = np.asarray(coordinates, dtype=np.float32)
+    operator = np.zeros((len(feat_grid), len(coordinates)), dtype=np.float32)
+    for index in range(len(coordinates)):
+        operator[index, index] = 1.0
+    result["empirical_curves"]["feature_operator"] = operator
+    result["empirical_curves"]["prediction_coordinates"] = coordinates
+    return result
+
+
+def test_standard_pipeline_uses_each_fit_s_own_observed_coordinates(
+        predictor, feat_grid):
+    """Real fits store operators over their observed trial coordinates, not the
+    plot grid, and fits differ in how many coordinates they have. Each fit's curve
+    must be drawn through its own coordinates, never a neighbour's."""
+    first_params = np.array([25.0, 40.0, 30.0, 12.0])
+    second_params = np.array([10.0, 60.0, 20.0, 0.0])
+    first = _observed_design_result(feat_grid, first_params, [3.25, 17.5, 44.75])
+    second = _observed_design_result(feat_grid, second_params, [5.5, 9.0, 21.25, 60.0])
+    subjects = {"S": {"exp": [
+        {"noise_condition": "low", "result": first},
+        {"noise_condition": "high", "result": second},
+    ]}}
+    prepared = subject_plots.prepare_all_subjects_data(
+        subjects, predictor,
+        {"emp_density_weights_sd": 20.0, "density_smoothing_sigma": None})
+    curves = prepared["S"]["experiments"]["exp"]["optimizer_curves"]
+
+    for condition, result, params in (("low", first, first_params),
+                                      ("high", second, second_params)):
+        empirical = result["empirical_curves"]
+        bin_weights = subject_plots.compute_feat_bin_weights(
+            result["data_df"][:, 0], feat_grid)[None, :, :]
+        expected = mixture_plot_curves(
+            predictor, params[None, :3], feat_grid,
+            bin_weights=bin_weights, sd_motor_by_row=[params[3]],
+            feature_operators=empirical["feature_operator"][None, :, :],
+            density_bandwidths=[7.5],
+            operator_feature_coordinates=empirical["prediction_coordinates"])
+        got = curves[condition]["density"]
+        for actual_name, expected_name in (
+                ("bias", "bias"), ("asymmetry", "asymmetry"),
+                ("predicted_sd", "sd"), ("predicted_sd_pooled", "pooled_sd")):
+            np.testing.assert_allclose(
+                np.asarray(got[actual_name]), expected[expected_name][0],
+                rtol=1e-6, err_msg=f"{condition}/{actual_name}")
+
+
+def test_a_wnm_fit_without_its_observed_coordinates_is_refused(predictor, feat_grid):
+    result = _stored_result(feat_grid, np.array([25.0, 40.0, 30.0, 12.0]))
+    del result["empirical_curves"]["prediction_coordinates"]
+    subjects = {"S": {"exp": [{"noise_condition": "condition", "result": result}]}}
+    with pytest.raises(ValueError, match="prediction_coordinates"):
+        subject_plots.prepare_all_subjects_data(
+            subjects, predictor,
+            {"emp_density_weights_sd": 20.0, "density_smoothing_sigma": None})
 
 
 def test_standard_pipeline_pools_report_orders_from_exact_wnm_cell_masses(

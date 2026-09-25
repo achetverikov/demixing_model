@@ -397,24 +397,42 @@ def _mixture_probability_surfaces(predictor, params_batch, motor_noise, feat_val
 
 def _mixture_plot_bundle(predictor, params_batch, motor_noise, feat_vals,
                          bin_weights_batch, feature_operators,
-                         density_bandwidths, density_curve_spec):
-    """Direct fitted WNM curves in bounded observed-operator batches."""
-    chunks = []
-    for start in range(0, len(params_batch), 16):
-        stop = min(start + 16, len(params_batch))
-        chunks.append(mixture_plot_curves(
-            predictor, params_batch[start:stop], feat_vals,
-            bin_weights=bin_weights_batch[start:stop],
-            sd_motor_by_row=motor_noise[start:stop],
-            emp_density_weights_sd=density_curve_spec["emp_density_weights_sd"],
-            density_smoothing_sigma=density_curve_spec["density_smoothing_sigma"],
-            feature_operators=np.stack(feature_operators[start:stop]),
-            density_bandwidths=density_bandwidths[start:stop],
-        ))
-    return {
-        name: np.concatenate([chunk[name] for chunk in chunks])
-        for name in ("bias", "asymmetry", "sd", "pooled_sd")
-    }
+                         density_bandwidths, density_curve_spec,
+                         operator_coordinates):
+    """Direct fitted WNM curves in bounded observed-operator batches.
+
+    Each stored operator maps the plot grid onto its own fit's observed
+    coordinates, and ``mixture_plot_curves`` takes one coordinate set per call,
+    so rows are batched only with rows that share their coordinates.
+    """
+    n_rows = len(params_batch)
+    groups = {}
+    for index, coordinates in enumerate(operator_coordinates):
+        coordinates = np.asarray(coordinates, dtype=np.float32)
+        groups.setdefault((coordinates.shape, coordinates.tobytes()), []).append(index)
+    motor_noise = np.asarray(motor_noise)
+    names = ("bias", "asymmetry", "sd", "pooled_sd")
+    out = {}
+    for indices in groups.values():
+        coordinates = operator_coordinates[indices[0]]
+        for start in range(0, len(indices), 16):
+            rows = np.asarray(indices[start:start + 16])
+            chunk = mixture_plot_curves(
+                predictor, params_batch[rows], feat_vals,
+                bin_weights=bin_weights_batch[rows],
+                sd_motor_by_row=motor_noise[rows],
+                emp_density_weights_sd=density_curve_spec["emp_density_weights_sd"],
+                density_smoothing_sigma=density_curve_spec["density_smoothing_sigma"],
+                feature_operators=np.stack([feature_operators[i] for i in rows]),
+                density_bandwidths=density_bandwidths[rows],
+                operator_feature_coordinates=coordinates,
+            )
+            for name in names:
+                values = np.asarray(chunk[name])
+                if name not in out:
+                    out[name] = np.empty((n_rows,) + values.shape[1:], values.dtype)
+                out[name][rows] = values
+    return out
 
 
 def load_extended_results(results_path: str) -> Dict:
@@ -576,6 +594,7 @@ def prepare_all_subjects_data(
     all_motor_noise = []
     all_feature_operators = []
     all_density_bandwidths = []
+    all_operator_coordinates = []
     param_mapping = {}  # Maps (subject_id, experiment, condition, optimizer) -> index in batch
     # Maps (subject_id, experiment, condition) -> feature differences of the
     # trials the empirical SD curve will be built from, used to pool the model
@@ -647,13 +666,17 @@ def prepare_all_subjects_data(
                         all_motor_noise.append(motor_noise)
                         if backend_family == surrogate.FAMILY_WNM:
                             empirical = result.get("empirical_curves", {})
-                            if "feature_operator" not in empirical or "density_bandwidth" not in empirical:
+                            missing = [key for key in ("feature_operator", "density_bandwidth",
+                                                       "prediction_coordinates")
+                                       if key not in empirical]
+                            if missing:
                                 raise ValueError(
                                     f"WNM fit {result.get('condition', condition_name)!r} lacks "
-                                    "its stored feature_operator or density_bandwidth; direct curves "
-                                    "cannot reproduce the fitted objective without both")
+                                    f"its stored {', '.join(missing)}; direct curves cannot "
+                                    "reproduce the fitted objective without them")
                             all_feature_operators.append(empirical["feature_operator"])
                             all_density_bandwidths.append(empirical["density_bandwidth"])
+                            all_operator_coordinates.append(empirical["prediction_coordinates"])
                         param_mapping[(subject_id, experiment, condition_name, opt)] = batch_idx
                         batch_idx += 1
 
@@ -679,7 +702,8 @@ def prepare_all_subjects_data(
             bundle = _mixture_plot_bundle(
                 prediction_backend, params_batch, all_motor_noise, feat_vals,
                 weight_rows[weight_index], all_feature_operators,
-                np.asarray(all_density_bandwidths), density_curve_spec)
+                np.asarray(all_density_bandwidths), density_curve_spec,
+                all_operator_coordinates)
         else:
             bundle = _surface_plot_bundle(
                 prediction_backend, params_batch, all_motor_noise, feat_vals,
