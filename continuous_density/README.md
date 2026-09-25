@@ -7,7 +7,7 @@ likelihood:
 raw EM outcomes → conditional wrapped-normal mixture
 ```
 
-The deployed default still uses the surface NN, but the transition branch now
+WNM is now the deployed default surrogate, and the transition branch
 packages WNM artifacts and exposes WNM as an opt-in fitting/scoring backend. The
 research trainer here models `p(b | sd_feat1, sd_feat2, sd_ident, feat_diff)`
 directly and trains by raw-sample negative log likelihood—never from a histogram,
