@@ -70,8 +70,9 @@ ground truth here. Generate fresh raw off-grid references. A second independent
 seed can be passed to `evaluate.py` to quantify Monte Carlo repeat uncertainty.
 
 The 20- and 100-observation simulators are distinct estimands. Checkpoint and
-reference metadata are checked for `n_samples` mismatches; use epoch 1425 for the
-20-observation production competitor and epoch 1500 for the 100-observation one.
+reference metadata are checked for `n_samples` mismatches. Historical
+surface-NN comparison runs used epoch 1425 for the 20-observation comparator and
+epoch 1500 for the 100-observation comparator.
 
 ## Reproducing
 
