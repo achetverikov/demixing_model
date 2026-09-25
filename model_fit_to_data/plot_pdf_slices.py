@@ -6,12 +6,13 @@ Rows = subjects (those with the clearest bias signal / dissociation selected aut
 Columns = feature difference values.
 
 Run from the repo root:
-    PYTHONPATH=.:neural_network_optimization \
-        python model_fit_to_data/plot_pdf_slices.py \
+    python model_fit_to_data/plot_pdf_slices.py \
         --results-path results/<dataset>/extended_fit_results.pkl \
-        --checkpoint-path pretrained/model_epoch1425_10ktrain_20samples.pkl \
         --output-dir results/<dataset> \
         --circ-space 180
+
+The run fingerprint selects and verifies the surrogate that produced the fit.
+Use --checkpoint-path only when that recorded artifact is not installed locally.
 """
 
 import argparse
@@ -32,6 +33,7 @@ from model_fit_to_data.create_unified_subject_plots import (
     create_pdf_slice_plots,
     load_extended_results,
 )
+from shared.prediction import predictor_from_surrogate
 
 
 def main():
@@ -42,10 +44,10 @@ def main():
     parser.add_argument("--results-path", required=True,
                         help="Path to extended_fit_results.pkl.")
     parser.add_argument("--n-samples", type=int, default=20, choices=[20, 100],
-                        help="Observer evidence samples per trial. Selects the production "
-                             "artifact for that observer model; --checkpoint-path overrides it.")
+                        help="Observer evidence samples per trial. Used to validate an explicit "
+                             "legacy checkpoint when no fingerprint identity is available.")
     parser.add_argument("--checkpoint-path", default=None,
-                        help="Path to trained NN checkpoint.")
+                        help="Optional surrogate artifact override. It must match the fit fingerprint.")
     parser.add_argument("--output-dir", required=True,
                         help="Directory for output plots.")
     parser.add_argument("--circ-space", type=int, default=360, choices=[180, 360],
@@ -53,7 +55,8 @@ def main():
                              "data fitted after doubling into model space; use 360 when data "
                              "already match model space.")
     parser.add_argument("--optimizer", default="density",
-                        choices=["density", "expectation", "likelihood", "crps", "balanced_crps"],
+                        choices=["density", "density_legacy", "expectation", "smoothed_exp",
+                                 "likelihood", "crps", "balanced_crps", "bias_weighted_crps"],
                         help="Which optimizer's parameters to use.")
     parser.add_argument("--n-subjects", type=int, default=3,
                         help="Number of subjects to show per plot.")
@@ -69,19 +72,17 @@ def main():
     # is verified against the run's recorded digest.
     checkpoint = surrogate.checkpoint_for_run(
         args.results_path, explicit=args.checkpoint_path, n_samples=args.n_samples)
-    family = surrogate.detect_family(checkpoint)
-    if family != surrogate.FAMILY_SURFACE_NN:
-        raise NotImplementedError(
-            f"plot_pdf_slices draws from the surface optimizer and cannot drive a {family} "
-            f"artifact ({Path(checkpoint).name}); see transition plan step 4c.")
-
-    dummy = jnp.asarray(np.random.uniform(-180, 180, (100, 2)))
-    optimizer = GridBasedMultiConditionOptimizer(
-        str(checkpoint), {"dummy": dummy}, skip_motor_noise=True,
-    )
+    loaded = surrogate.load_surrogate(checkpoint_path=checkpoint)
+    if loaded.family == surrogate.FAMILY_WNM:
+        prediction_backend = predictor_from_surrogate(loaded)
+    else:
+        dummy = jnp.asarray(np.random.default_rng(0).uniform(-180, 180, (100, 2)))
+        prediction_backend = GridBasedMultiConditionOptimizer(
+            str(checkpoint), {"dummy": dummy}, skip_motor_noise=True,
+        )
 
     create_pdf_slice_plots(
-        results, optimizer, args.output_dir,
+        results, prediction_backend, args.output_dir,
         circ_space=args.circ_space,
         optimizer_names=[args.optimizer],
         n_subjects=args.n_subjects,
