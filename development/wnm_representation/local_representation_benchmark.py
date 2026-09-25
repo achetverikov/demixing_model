@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from continuous_density.benchmark_manifest import assert_operation_allowed
+from development.wnm_transition.benchmark_manifest import assert_operation_allowed
 
 
 def trajectory_records(reference: Path) -> list[tuple[str, np.ndarray]]:
@@ -65,13 +65,13 @@ def main() -> None:
             wrapped = root / "wrapped"
             fourier = root / "fourier"
             spline = root / "spline"
-            _run([python, "-m", "continuous_density.fit_local_wrapped_mixture",
+            _run([python, "-m", "development.wnm_representation.fit_local_wrapped_mixture",
                   str(args.reference), *common, "--components",
                   *map(str, args.wrapped_sizes), "--starts", str(args.starts),
                   "--steps", str(args.wrapped_steps), "--lr", str(args.wrapped_lr),
                   "--split-seed", str(args.split_seed),
                   "--resume", "--out-dir", str(wrapped)])
-            _run([python, "-m", "continuous_density.fit_local_fourier",
+            _run([python, "-m", "development.wnm_representation.fit_local_fourier",
                   str(args.reference), *common, "--harmonics",
                   *map(str, args.fourier_sizes), "--maxiter", str(args.fourier_maxiter),
                   "--split-seed", str(args.split_seed), "--resume",
@@ -79,12 +79,12 @@ def main() -> None:
             metric_paths = [wrapped / "local_wrapped_metrics.csv",
                             fourier / "local_fourier_metrics.csv"]
             if args.spline_knots:
-                _run([python, "-m", "continuous_density.fit_local_spline",
+                _run([python, "-m", "development.wnm_representation.fit_local_spline",
                       str(args.reference), *common, "--knots",
                       *map(str, args.spline_knots), "--split-seed", str(args.split_seed),
                       "--out-dir", str(spline)])
                 metric_paths.append(spline / "local_spline_metrics.csv")
-            _run([python, "-m", "continuous_density.bootstrap_local_metrics",
+            _run([python, "-m", "development.wnm_representation.bootstrap_local_metrics",
                   str(args.reference), *map(str, metric_paths), *common,
                   "--split-seed", str(args.split_seed),
                   "--independent-indices", "--bootstrap", str(args.bootstrap),
@@ -100,7 +100,7 @@ def main() -> None:
             for size in args.spline_knots:
                 candidates.extend(["--candidate", f"s{size}:periodic_spline:{size}:"
                                    f"{spline / 'local_spline_parameters.npz'}"])
-            _run([python, "-m", "continuous_density.local_distribution_gate",
+            _run([python, "-m", "development.wnm_representation.local_distribution_gate",
                   str(args.reference), *common, *candidates,
                   "--split-seed", str(args.split_seed),
                   "--bootstrap", str(args.bootstrap),
