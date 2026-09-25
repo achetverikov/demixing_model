@@ -2,6 +2,11 @@
 
 Run commands from the repository root. Override the interpreter with `PYTHON_BIN` where needed.
 
+The pre-refactor cleanup and runtime-reduction work is tracked in
+[`TEST_SUITE_IMPROVEMENT_PLAN.md`](../TEST_SUITE_IMPROVEMENT_PLAN.md). That plan
+also requires a version-controlled `tests/AGENTS.md` describing how future tests
+should be layered, marked, minimized, and justified.
+
 ## Maintained pytest baseline
 
 ```bash
