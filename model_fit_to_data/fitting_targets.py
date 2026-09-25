@@ -27,20 +27,13 @@ import numpy as np
 from scipy.special import ndtr
 
 from shared.config import config
-try:
-    from density_objective import degenerate_targets as _default_degenerate_targets
-    from empirical_targets import (
-        compute_bwcrps_condition_targets as _default_bwcrps_condition_targets,
-        compute_target_bias_curve_core as _default_target_bias_curve_core,
-    )
-except ModuleNotFoundError:
-    from model_fit_to_data.density_objective import (
-        degenerate_targets as _default_degenerate_targets,
-    )
-    from model_fit_to_data.empirical_targets import (
-        compute_bwcrps_condition_targets as _default_bwcrps_condition_targets,
-        compute_target_bias_curve_core as _default_target_bias_curve_core,
-    )
+from model_fit_to_data.density_objective import (
+    degenerate_targets as _default_degenerate_targets,
+)
+from model_fit_to_data.empirical_targets import (
+    compute_bwcrps_condition_targets as _default_bwcrps_condition_targets,
+    compute_target_bias_curve_core as _default_target_bias_curve_core,
+)
 from shared.empirical import (
     _compute_empirical_density_asymmetry_core,
     compute_target_bias_rolling_curve_core,
