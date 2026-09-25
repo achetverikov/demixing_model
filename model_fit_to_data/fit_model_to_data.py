@@ -121,11 +121,6 @@ console = Console(color_system="auto") if USE_RICH else None
 
 def _create_continuous_engine(checkpoint_path, *, corr_weight, skip_motor_noise,
                               continuous_starts, continuous_seed):
-    from density_objective import degenerate_targets as _degenerate
-    from empirical_targets import (
-        compute_bwcrps_condition_targets as _bwcrps_targets,
-        compute_target_bias_curve_core as _bias_core,
-    )
     from objectives import (
         bwcrps_energy_score as _energy,
         compute_curve_losses as _curve_losses,
@@ -135,9 +130,7 @@ def _create_continuous_engine(checkpoint_path, *, corr_weight, skip_motor_noise,
     loaded = surrogate.load_surrogate(checkpoint_path=checkpoint_path)
     return ContinuousEngine(
         predictor_from_surrogate(loaded),
-        curve_losses=_curve_losses, energy_score=_energy,
-        degenerate_targets=_degenerate, bwcrps_condition_targets=_bwcrps_targets,
-        target_bias_curve_core=_bias_core, corr_weight=corr_weight,
+        curve_losses=_curve_losses, energy_score=_energy, corr_weight=corr_weight,
         skip_motor_noise=skip_motor_noise, n_starts=continuous_starts,
         seed=continuous_seed, **DENSITY_CURVE_SPEC,
     )
