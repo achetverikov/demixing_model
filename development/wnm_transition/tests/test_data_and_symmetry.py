@@ -5,7 +5,7 @@ GPU run of the EM and is skipped unless ``DM_RUN_SIM_TESTS=1``.
 
 Run from the repo root::
 
-    PYTHONPATH=. python -m pytest continuous_density/tests/test_data_and_symmetry.py
+    PYTHONPATH=. python -m pytest development/wnm_transition/tests/test_data_and_symmetry.py
 """
 
 import gzip
@@ -17,7 +17,7 @@ import pytest
 
 from surrogate_training.wnm import data as data_mod
 from surface_computation import wnm_design as design_mod
-from continuous_density import existing_samples
+from surface_computation import legacy_sample_import as existing_samples
 
 
 def _fake_store(n_rows=40, n_sims=7, seed=0):
@@ -87,7 +87,7 @@ def test_low_dprime_augmentation_design_targets_off_grid_unequal_noise():
 
 
 def test_mixed_batch_uses_requested_augmentation_fraction():
-    from continuous_density import train
+    from surrogate_training.wnm import train
     primary = _fake_store(n_rows=4, n_sims=3)
     augmentation = _fake_store(n_rows=4, n_sims=3, seed=1)
     primary.bias[:] = 1.
@@ -269,7 +269,7 @@ def test_grouped_batch_keeps_parameter_and_component_fixed_within_group():
 
 
 def test_mixed_grouped_batch_uses_requested_augmentation_fraction():
-    from continuous_density import train
+    from surrogate_training.wnm import train
     primary = _fake_store(n_rows=4, n_sims=3)
     augmentation = _fake_store(n_rows=4, n_sims=3, seed=1)
     primary.bias[:] = 1.
