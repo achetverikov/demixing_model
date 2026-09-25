@@ -125,9 +125,19 @@ python model_fit_to_data/create_unified_subject_plots.py \
   --results-path results/my_study/extended_fit_results.pkl \
   --output-dir results/my_study \
   --summary-plots --csv-exports --no-individual-plots
+
+python model_fit_to_data/plot_pdf_slices.py \
+  --results-path results/my_study/extended_fit_results.pkl \
+  --output-dir results/my_study \
+  --optimizer density
 ```
 
-Advanced users can create per-trial likelihood exports with `model_fit_to_data/postprocess_fitted_likelihoods.py`. The full fitting interface and file descriptions are documented in [Batch_Fit_Analysis_Pipeline_Documentation.md](model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md).
+Both plotters recover the fitted surrogate from the run fingerprint. For
+compiled bundle fits they use stored analysis-cell metadata instead of parsing
+the opaque analysis-cell ID. Advanced users can create per-trial likelihood
+exports with `model_fit_to_data/postprocess_fitted_likelihoods.py`. The full
+fitting interface and file descriptions are documented in
+[Batch_Fit_Analysis_Pipeline_Documentation.md](model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md).
 
 Production WNM analyses use a compiled `contextual_biases_database` bundle so
 the fitter does not construct trial geometry, scoring populations, bandwidths,
