@@ -75,10 +75,20 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
         }
 
     monkeypatch.setattr(export_module, "mixture_plot_curves", fake_curves)
-    def fake_log_density(*_args, **_kwargs):
+    def fake_likelihood(*_args, **_kwargs):
         assert export_module.jax.config.jax_default_matmul_precision == "highest"
-        return np.array([-1.0, -1.0])
-    monkeypatch.setattr(export_module, "trial_log_density", fake_log_density)
+        log_density = np.array([-1.0, -1.0])
+        return {
+            "loglik_density_model_deg": log_density,
+            "nll_density_model_deg": -log_density,
+            "loglik_mass": log_density + np.log(2.0),
+            "nll_mass": -log_density - np.log(2.0),
+            "loglik_density_deg": log_density + np.log(2.0),
+            "nll_density_deg": -log_density - np.log(2.0),
+            "bin_width_deg": 1.0,
+            "loglik_convention": "continuous_at_observation",
+        }
+    monkeypatch.setattr(export_module, "evaluate_trial_likelihoods", fake_likelihood)
     frame = export_module.export_curves(
         results_dir, checkpoint, output_dir, methods=("density",))
 
@@ -126,13 +136,24 @@ def test_compiled_likelihood_export_uses_stored_trial_coordinates(monkeypatch):
         "density_eval_likelihood_loss": 3.0,
     }
 
-    def fake_log_density(_predictor, sd1, sd2, sd_spat, feature, bias, sd_motor):
-        assert (sd1, sd2, sd_spat, sd_motor) == (10.0, 20.0, 30.0, 0.0)
+    def fake_likelihood(_predictor, parameters, feature, bias, **kwargs):
+        np.testing.assert_array_equal(parameters, [10.0, 20.0, 30.0, 0.0])
         np.testing.assert_array_equal(feature, [4.0, 8.0])
         np.testing.assert_array_equal(bias, [-2.0, 6.0])
-        return np.array([-1.0, -2.0])
+        assert kwargs["physical_bin_width_deg"] == 1.0
+        log_density = np.array([-1.0, -2.0])
+        return {
+            "loglik_density_model_deg": log_density,
+            "nll_density_model_deg": -log_density,
+            "loglik_mass": log_density + np.log(2.0),
+            "nll_mass": -log_density - np.log(2.0),
+            "loglik_density_deg": log_density + np.log(2.0),
+            "nll_density_deg": -log_density - np.log(2.0),
+            "bin_width_deg": 1.0,
+            "loglik_convention": "continuous_at_observation",
+        }
 
-    monkeypatch.setattr(export_module, "trial_log_density", fake_log_density)
+    monkeypatch.setattr(export_module, "evaluate_trial_likelihoods", fake_likelihood)
     likelihood, checks = export_module.compiled_trial_likelihoods(
         {"cell-a": result}, object(), {"dm_version": "wnm"}, ("density",))
 
