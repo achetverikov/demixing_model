@@ -64,6 +64,14 @@ from shared import surrogate
 from shared.config import DENSITY_CURVE_SPEC
 from shared.behavioral_data import filter_data_for_fitting
 from shared.paths import resolve_input_path, resolve_results_path
+from model_fit_to_data.result_identity import (
+    canonical_condition_key as _canonical_condition_key,
+    canonicalize_result_keys,
+    make_condition_key,
+    make_experiment_key,
+    sanitize_result_key_part as _sanitize,
+    validate_group_key_uniqueness as _validate_group_key_uniqueness,
+)
 
 
 LOSS_EVALUATION_METHODS = [
@@ -169,59 +177,6 @@ def make_progress() -> Optional[Progress]:
         TimeRemainingColumn(),
         console=console,
     )
-
-
-def _sanitize(value: str) -> str:
-    """Replace characters that are problematic in filenames/keys."""
-    return re.sub(r'[^\w]', '_', str(value)).strip('_')
-
-
-def _canonical_condition_key(key: str) -> str:
-    """Canonicalize legacy result keys to the current sanitized form."""
-    parts = str(key).split('#')
-    if len(parts) < 3:
-        return str(key)
-    subject, experiment = parts[0], parts[1]
-    condition = "#".join(parts[2:])
-    return f"{_sanitize(subject)}#{_sanitize(experiment)}#{_sanitize(condition)}"
-
-
-def canonicalize_result_keys(results: Dict) -> Dict:
-    """Canonicalize legacy result keys, rejecting lossy-key collisions."""
-    canonical = {}
-    source_keys = {}
-    for key, entry in results.items():
-        ckey = _canonical_condition_key(key)
-        if ckey in canonical and source_keys[ckey] != str(key):
-            raise ValueError(
-                "Result-key collision after sanitization: "
-                f"{source_keys[ckey]!r} and {str(key)!r} both map to {ckey!r}"
-            )
-        canonical[ckey] = entry
-        source_keys[ckey] = str(key)
-    return canonical
-
-
-def _validate_group_key_uniqueness(
-    df: pd.DataFrame, exp_col: str, subject_col: str, condition_col: str
-) -> None:
-    """Fail before fitting if distinct labels collapse to the same result key."""
-    seen_subjects = {}
-    seen_conditions = {}
-    label_cols = [subject_col, exp_col, condition_col]
-    for values in df[label_cols].drop_duplicates().itertuples(index=False, name=None):
-        raw = tuple(str(value) for value in values)
-        for source, sanitized, seen in (
-            (raw[:2], "#".join(_sanitize(value) for value in raw[:2]), seen_subjects),
-            (raw, "#".join(_sanitize(value) for value in raw), seen_conditions),
-        ):
-            previous = seen.get(sanitized)
-            if previous is not None and previous != source:
-                raise ValueError(
-                    "Distinct labels collide after result-key sanitization: "
-                    f"{previous!r} and {source!r} both map to {sanitized!r}"
-                )
-            seen[sanitized] = source
 
 
 def load_data(data_path: str, outlier_col: Optional[str], include_outliers: bool) -> pd.DataFrame:
@@ -371,13 +326,13 @@ def group_conditions(
         exp_data = df[df[exp_col] == exp]
         for subject in exp_data[subject_col].unique():
             subject_data = exp_data[exp_data[subject_col] == subject]
-            exp_key = f"{_sanitize(subject)}#{_sanitize(exp)}"
+            exp_key = make_experiment_key(subject, exp)
 
             conditions = {}
             for condition in subject_data[condition_col].unique():
                 cond_data = subject_data[subject_data[condition_col] == condition]
                 if len(cond_data) >= min_trials:
-                    cond_key = f"{exp_key}#{_sanitize(condition)}"
+                    cond_key = make_condition_key(subject, exp, condition)
                     conditions[cond_key] = cond_data
 
             if len(conditions) >= 1:
