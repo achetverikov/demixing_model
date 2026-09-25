@@ -42,7 +42,7 @@ except ModuleNotFoundError:
         create_motor_noise_kernel_fft,
     )
 from shared.config import config
-from shared.utils import filter_data_for_fitting
+from shared.behavioral_data import filter_data_for_fitting
 
 # Motor-noise density floor (B1 floor-aware reproduction gate).
 #
