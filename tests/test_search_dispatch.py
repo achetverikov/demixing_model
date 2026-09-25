@@ -33,6 +33,8 @@ import fit_model_to_data as F
 from grid_based_multi_condition_optimizer_jax_loops import GridBasedMultiConditionOptimizer
 from shared.config import config
 
+pytestmark = pytest.mark.legacy_surface
+
 CACHE_STEP = 10.0
 #: Routing, not search quality. One coarse stage keeps a CPU run to seconds.
 TINY_GRID = {'shared_grid_size': 4, 'feat_grid_size': 4,
