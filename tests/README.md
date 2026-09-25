@@ -25,16 +25,17 @@ than mocking it, which is the only way they can check what they claim:
 
 ## Smoke pipelines
 
-Three shell workflows exercise the compute pipeline:
+Four shell workflows exercise the public/model-generation paths:
 
 ```bash
+PYTHON_BIN=python bash tests/run_smoke_wnm.sh
 PYTHON_BIN=python bash tests/run_smoke_pipeline.sh
 PYTHON_BIN=python bash tests/run_smoke_standard.sh
 PYTHON_BIN=python bash tests/run_smoke_compare_seeds.sh
 ```
 
-- `run_smoke_pipeline.sh` generates averaged surfaces directly in memory, trains a short-run NN, fits two subject groups, and creates plots/exports.
-- `run_smoke_standard.sh` writes simulated samples first, then averages, trains, fits, and plots.
-- `run_smoke_compare_seeds.sh` checks that the direct and stored-sample routes agree under the same seed within the documented float16 tolerance.
+- `run_smoke_wnm.sh` exercises the current end-user chain: ordinary CSV fit with the packaged WNM, tabular export, individual/group/PDF plots, and the public prediction API.
+- `run_smoke_pipeline.sh` and `run_smoke_standard.sh` are historical surface-generation/training checks retained for reproduction of that research pipeline.
+- `run_smoke_compare_seeds.sh` checks that the direct and stored-sample simulation routes agree under the same seed within the documented float16 tolerance.
 
-The two fit-producing scripts use the tracked input `example_data/data_color_comb_color2_two_subjects.csv`; the seed comparison builds its own small parameter list. These workflows are compute-heavy and should normally run on an NVIDIA GPU. `run_smoke_pipeline.sh` explicitly requires one unless `ALLOW_CPU=1` is set; CPU execution can be very slow.
+The fit-producing scripts use the tracked input `example_data/data_color_comb_color2_two_subjects.csv`; the seed comparison builds its own small parameter list. These workflows are compute-heavy and should normally run on an NVIDIA GPU. `run_smoke_pipeline.sh` explicitly requires one unless `ALLOW_CPU=1` is set; CPU execution can be very slow.
