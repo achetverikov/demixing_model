@@ -5,7 +5,7 @@ corpus.
 
 Run from the repo root::
 
-    PYTHONPATH=. python -m pytest continuous_density/tests/test_evaluation.py
+    PYTHONPATH=. python -m pytest development/wnm_transition/tests/test_evaluation.py
 """
 
 import jax
@@ -248,7 +248,7 @@ def test_validation_coverage_reports_missing_behaviours():
 
 
 def test_training_trajectory_metrics_report_maxima_and_group_names():
-    from continuous_density import train
+    from surrogate_training.wnm import train
 
     model, variables = _model(k=4)
     design, labels = design_mod.low_dprime_trajectory_design(2, 3, seed=3)
@@ -271,7 +271,7 @@ def test_training_trajectory_metrics_report_maxima_and_group_names():
 
 
 def test_grouped_objective_reduces_to_raw_nll_without_auxiliary_terms():
-    from continuous_density import train
+    from surrogate_training.wnm import train
 
     model, variables = _model(k=4)
     rng = np.random.default_rng(8)
@@ -285,7 +285,7 @@ def test_grouped_objective_reduces_to_raw_nll_without_auxiliary_terms():
 
 
 def test_grouped_moment_and_cvar_terms_are_finite_and_change_objective():
-    from continuous_density import train
+    from surrogate_training.wnm import train
 
     model, variables = _model(k=4)
     rng = np.random.default_rng(9)
