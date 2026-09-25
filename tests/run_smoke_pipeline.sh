@@ -79,13 +79,12 @@ $PYTHON_BIN model_fit_to_data/fit_model_to_data.py \
   --no-resume \
   --max-subjects 2
 
-# Step 4: Generate unified plots/exports from smoke results
+# Step 4: Generate unified plots from smoke results
 $PYTHON_BIN model_fit_to_data/create_unified_subject_plots.py \
   --results-path "model_fit_to_data_smoke_pipeline/extended_fit_results.pkl" \
   --checkpoint-path "checkpoints_smoke_pipeline/model_epoch_0025.pkl" \
   --output-dir "model_fit_to_data_smoke_pipeline" \
   --individual-plots \
-  --summary-plots \
-  --csv-exports
+  --summary-plots
 
 echo "Smoke pipeline (pipeline mode) completed successfully."
