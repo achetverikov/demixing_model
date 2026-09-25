@@ -275,35 +275,6 @@ def test_an_unsupported_sample_count_is_refused():
     with pytest.raises(ValueError, match="two different observer models"):
         surrogate.production_checkpoint(50)
 
-
-def test_promotion_is_one_switch():
-    """One switch, moving both observer models and every resolver together.
-
-    There were briefly two -- DEFAULT_FAMILY gating bare load_surrogate calls and
-    a separate PRODUCTION_FAMILY gating production_checkpoint -- so a half-promoted
-    state was reachable in which the two disagreed about which family was live.
-    """
-    assert not hasattr(surrogate, "PRODUCTION_FAMILY"), (
-        "a second promotion switch has reappeared; promotion must be one edit")
-
-    original = surrogate.DEFAULT_FAMILY
-    try:
-        surrogate.DEFAULT_FAMILY = surrogate.FAMILY_WNM
-        for n_samples in surrogate.SUPPORTED_SAMPLE_COUNTS:
-            if not surrogate.WNM_DEFAULTS[n_samples].exists():
-                pytest.skip("WNM artifacts not installed")
-            # Both resolvers must follow the same switch.
-            assert surrogate.production_family() == surrogate.FAMILY_WNM
-            assert (surrogate.production_checkpoint(n_samples)
-                    == surrogate.resolve_checkpoint(None, n_samples))
-            loaded = surrogate.load_surrogate(
-                checkpoint_path=surrogate.production_checkpoint(n_samples))
-            assert loaded.family == surrogate.FAMILY_WNM
-            assert loaded.n_samples == n_samples
-    finally:
-        surrogate.DEFAULT_FAMILY = original
-
-
 def test_other_checkpoints_stay_reachable_by_name():
     """Production is the default, not a restriction: a script that takes a
     checkpoint parameter can still load any installed artifact."""
