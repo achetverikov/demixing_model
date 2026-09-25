@@ -11,6 +11,22 @@ in the root `TODO.md`. The concrete pre-refactor test cleanup, deletion, and
 runtime-reduction work is specified separately in
 [`TEST_SUITE_IMPROVEMENT_PLAN.md`](TEST_SUITE_IMPROVEMENT_PLAN.md).
 
+## Implementation status after refactor
+
+As of the final Phase C checkpoint, the architectural redistribution described in this audit has been implemented on `dev/continuous-density-fixes`:
+
+- maintained WNM runtime lives in `shared/wnm.py`;
+- fitting/scoring and likelihood evaluation live under `model_fit_to_data/`;
+- WNM training/packaging lives under `surrogate_training/wnm/`;
+- simulation/design/training-data generation lives under `surface_computation/`;
+- development-only transition and representation work lives under `development/`;
+- historical findings live under `docs/history/wnm_transition/`;
+- `continuous_density/` has been deleted;
+- the non-production pytest category is `development`;
+- the maintained pytest suite and WNM public-path smoke both passed after namespace deletion.
+
+The remainder of this document preserves the original audit findings and proposed target structure for traceability. Statements describing the pre-refactor tree should therefore be read as historical diagnosis unless explicitly marked otherwise.
+
 ## Executive summary
 
 The scientific/runtime WNM transition is substantially complete: WNM is the
