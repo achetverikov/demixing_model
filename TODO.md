@@ -52,16 +52,26 @@ Phase B is implemented:
 Phase C is now in progress. The production WNM runtime lives in `shared/wnm.py`;
 training and packaging live in `surrogate_training/wnm/`; simulation,
 continuous design, training-data generation, and legacy raw-sample import live
-in `surface_computation/`. Their former `continuous_density/` modules are
-compatibility shims only.
+in `surface_computation/`. Development-only transition validation now lives in
+`development/wnm_transition/`, and local representation experiments live in
+`development/wnm_representation/`. Their former `continuous_density/`
+production modules are compatibility shims only.
+
+Completed Phase C cleanup:
+
+- moved WNM validation/transition workflows under `development/wnm_transition/`;
+- moved local representation experiments under `development/wnm_representation/`;
+- moved the old `continuous_density/tests/` development checks alongside those workflows;
+- removed tracked generated `continuous_density/validation_outputs/`;
+- renamed the non-production pytest category from `research` to `development`.
 
 Next Phase C items:
 
-- move WNM validation/transition experiments under `development/wnm_transition/`;
-- move local representation experiments under `development/wnm_representation/`;
-- redistribute or remove `continuous_density/tests/`;
-- remove tracked generated validation outputs;
-- delete `continuous_density/` once only compatibility/history content remains.
+- run the maintained suite after the development-tree move;
+- remove the remaining `continuous_density/` compatibility shims once no maintained
+  or development entry point depends on them;
+- run the maintained suite and WNM public-path smoke again after deleting the
+  compatibility namespace.
 
 ## 3. Decide the zero-width pooled-SD convention
 
