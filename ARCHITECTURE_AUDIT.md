@@ -459,7 +459,7 @@ product suite.
 
 # 6. `continuous_density/` must be dissolved
 
-`continuous_density/` was a temporary development/transition workspace. It now
+`continuous_density/` was a temporary development/transition workspace. It has now
 contains the production WNM model implementation, training scripts, simulation
 design, validation experiments, plotting/reporting scripts, exploratory local
 representation families, archived findings, generated outputs, and a second
