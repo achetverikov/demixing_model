@@ -170,7 +170,9 @@ likelihood and BWCRPS, while density and smoothed expectation weakly identify
 parameters for both model families. In the completed objective-matched CSH2026
 refit, common-WNM rescoring favors the WNM parameter solutions, but the surface
 NN has lower native density and smoothed-expectation loss on average. This is a
-forward-representation qualification, not evidence to abandon the selected
-batched optimizer. The surface NN therefore remains the deployed default. The
-2° lower-domain limitation must also be resolved if zero/one-degree trials are
-required.
+forward-representation qualification, not evidence against the selected batched
+optimizer. The comparison gate recorded here was later superseded by the
+repository-level decision to replace the surface NN with WNM. The packaged WNM
+artifacts now support exact bundle-native fitting and direct result/plot
+prediction; the surface NN is retained only for legacy replay and transition
+comparisons. See the root `HISTORY.md` and live `TODO.md` for current status.
