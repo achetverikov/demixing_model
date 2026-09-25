@@ -277,6 +277,17 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
     if skip_motor_noise:
         params_df = params_df.copy()
         params_df['sd_motor'] = 0.0
+
+    try:
+        motor_values = np.asarray(params_df['sd_motor'], dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("sd_motor values must be numeric, finite, and non-negative") from exc
+    if not np.all(np.isfinite(motor_values)) or np.any(motor_values < 0):
+        raise ValueError(
+            f"sd_motor values must be finite and non-negative, got {motor_values.tolist()}")
+    params_df = params_df.copy()
+    params_df['sd_motor'] = motor_values
+
     parameters_array = jnp.asarray(
         params_df[['sd_feat1', 'sd_feat2', 'sd_spat', 'sd_motor']].values,
         dtype=jnp.float32)
