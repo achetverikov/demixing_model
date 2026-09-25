@@ -26,6 +26,8 @@ import curve_cache as cc
 import density_objective as do
 from exhaustive_density import fit_exhaustive_density
 
+pytestmark = pytest.mark.legacy_surface
+
 N_POINTS = 12
 
 
