@@ -24,7 +24,8 @@ from model_fit_to_data.run_fingerprint import file_sha256, read_fingerprint_side
 from shared import surrogate
 from shared.config import DENSITY_CURVE_SPEC, config
 from shared.prediction import mixture_plot_curves, predictor_from_surrogate
-from model_fit_to_data.wnm_scoring import SUPPORTED_METHODS, trial_log_density
+from model_fit_to_data.wnm_scoring import SUPPORTED_METHODS
+from model_fit_to_data.wnm_likelihood import evaluate_trial_likelihoods
 
 SELECTED_METHODS = tuple(SUPPORTED_METHODS)
 MAX_LIKELIHOOD_REPLAY_ABS_DIFF = 0.01
@@ -53,14 +54,15 @@ def compiled_trial_likelihoods(results, predictor, identity, methods):
             if key not in result:
                 continue
             parameters = np.asarray(result[key], dtype=float)
-            log_density = np.asarray(trial_log_density(
-                predictor, *parameters[:3], jnp.asarray(data[:, 0]),
-                jnp.asarray(data[:, 1]), sd_motor=float(parameters[3])))
+            physical_bin_width = float(config.mu1_bias_step) / scale
+            likelihood = evaluate_trial_likelihoods(
+                predictor, parameters, data[:, 0], data[:, 1],
+                physical_bin_width_deg=physical_bin_width,
+            )
+            log_density = likelihood["loglik_density_model_deg"]
             if not np.isfinite(log_density).all():
                 raise RuntimeError(
                     f"non-finite WNM likelihood for {analysis_cell_id}/{method}")
-            log_mass = log_density + np.log(float(config.mu1_bias_step))
-            physical_bin_width = float(config.mu1_bias_step) / scale
             metadata = {
                 "analysis_cell_id": analysis_cell_id,
                 "fit_group_id": result["fit_group_id"],
@@ -87,14 +89,7 @@ def compiled_trial_likelihoods(results, predictor, identity, methods):
                 "trial_index_within_fit": np.arange(len(data), dtype=np.int64),
                 "valid_model_eval": True,
                 "include_common_eval": True,
-                "loglik_density_model_deg": log_density,
-                "nll_density_model_deg": -log_density,
-                "loglik_mass": log_mass,
-                "nll_mass": -log_mass,
-                "loglik_density_deg": log_density + np.log(scale),
-                "nll_density_deg": -log_density - np.log(scale),
-                "bin_width_deg": physical_bin_width,
-                "loglik_convention": "continuous_at_observation",
+                **likelihood,
                 **metadata,
             }))
             checks.append({
