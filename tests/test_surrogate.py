@@ -89,6 +89,7 @@ def test_explicit_path_wins_over_the_defaults(tmp_path):
     assert surrogate.resolve_checkpoint(None, 20, explicit) == explicit
 
 
+@pytest.mark.legacy_surface
 def test_unregistered_surface_checkpoint_has_no_inferable_identity(tmp_path):
     """`..._20samples.pkl` in the name is not evidence of the observer model."""
     stranger = tmp_path / "model_epoch900_10ktrain_20samples.pkl"
@@ -97,6 +98,7 @@ def test_unregistered_surface_checkpoint_has_no_inferable_identity(tmp_path):
     assert surrogate._surface_sample_count(stranger, 20) == 20
 
 
+@pytest.mark.legacy_surface
 def test_registered_surface_checkpoint_rejects_a_contradicting_request():
     known = Path("model_epoch1500_10ktrain_100samples.pkl")
     assert surrogate._surface_sample_count(known, None) == 100
@@ -207,6 +209,7 @@ def test_production_loading_does_not_need_the_corpus_or_training_scripts():
 # Search bounds belong to the surrogate, not to a module constant
 # ---------------------------------------------------------------------------
 
+@pytest.mark.legacy_surface
 def test_surface_search_bounds_are_its_documented_training_range():
     """Substituting these for the old config constants must be a strict no-op.
 
@@ -275,6 +278,7 @@ def test_an_unsupported_sample_count_is_refused():
     with pytest.raises(ValueError, match="two different observer models"):
         surrogate.production_checkpoint(50)
 
+@pytest.mark.legacy_surface
 def test_other_checkpoints_stay_reachable_by_name():
     """Production is the default, not a restriction: a script that takes a
     checkpoint parameter can still load any installed artifact."""
