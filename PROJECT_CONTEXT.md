@@ -18,7 +18,7 @@ Phase B is complete:
 - maintained imports use package-qualified `model_fit_to_data.*` paths;
 - result identity, file hashing, and WNM likelihood evaluation are centralized.
 
-Phase C is in progress:
+Phase C is complete:
 
 - production WNM runtime: `shared/wnm.py`;
 - WNM prediction: `shared/prediction.py`;
@@ -45,6 +45,6 @@ Generated `continuous_density/validation_outputs/` was removed before the namesp
 
 ## CI checkpoint
 
-The maintained test suite was green on `b4e31b94c7a841e099e0e42a78f79d63147a58cd` before the subsequent Phase C development-file moves.
+The final Phase C workflow passed on `fc98692f18fd4af493ee047e57ed0ca85d577034`: both the maintained pytest suite and the WNM public-path smoke succeeded after `continuous_density/` was deleted.
 
 The Tests workflow is also present on `main` so `workflow_dispatch` can manually run the workflow against `dev/continuous-density-fixes`.
