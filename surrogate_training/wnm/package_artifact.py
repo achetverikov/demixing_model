@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Package a research WNM fit into a self-contained production artifact.
 
-The training scripts under ``results/continuous_density_4.1*/scripts`` write a
+The training scripts under ``results/wnm_4.1*/scripts`` write a
 fit dictionary -- ``variables``, ``selected_step``, ``final_step``,
 ``validation_nll`` and the path of the run checkpoint it was selected from.  That
 is enough to continue research and not enough to run in production: it records no
@@ -18,7 +18,7 @@ Usage (from the repo root)::
 
     python -m surrogate_training.wnm.package_artifact \\
         --fit /path/to/wnm_k12_full_n20_alldata-<digest>-best.pkl \\
-        --corpus-stage /path/to/results/continuous_density_4.1p \\
+        --corpus-stage /path/to/results/wnm_4.1p \\
         --out pretrained/wnm_k12_20samples.pkl
 
 The packaged file is verified before it reaches its destination: it is written to
@@ -281,7 +281,7 @@ def main():
                         help="Research fit pickle (variables + selected_step).")
     parser.add_argument("--corpus-stage", type=Path, required=True,
                         help="Stage directory whose corpus trained the fit, e.g. "
-                             "results/continuous_density_4.1p.")
+                             "results/wnm_4.1p.")
     parser.add_argument("--n-samples", type=int, required=True, choices=[20, 100],
                         help="Observer evidence samples per trial the corpus was simulated at.")
     parser.add_argument("--out", type=Path, required=True,
