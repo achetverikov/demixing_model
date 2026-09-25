@@ -34,12 +34,10 @@ import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 
-from grid_based_multi_condition_optimizer_jax_loops import (
-    DEGENERATE_TARGET_EPS,
-    GridBasedMultiConditionOptimizer,
-    apply_motor_noise_with_precomputed_kernel,
-    create_motor_noise_kernel_fft,
-)
+try:
+    from density_objective import DEGENERATE_TARGET_EPS
+except ModuleNotFoundError:
+    from model_fit_to_data.density_objective import DEGENERATE_TARGET_EPS
 try:
     import curve_cache
     from exhaustive_density import fit_exhaustive_density
@@ -456,6 +454,17 @@ def evaluate_parameter_losses(
     if isinstance(optimizer, ContinuousEngine):
         return optimizer.evaluate(params_by_condition, fitting_methods)
 
+    try:
+        from grid_based_multi_condition_optimizer_jax_loops import (
+            apply_motor_noise_with_precomputed_kernel,
+            create_motor_noise_kernel_fft,
+        )
+    except ModuleNotFoundError:
+        from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
+            apply_motor_noise_with_precomputed_kernel,
+            create_motor_noise_kernel_fft,
+        )
+
     params_by_condition = jnp.asarray(params_by_condition)
     if params_by_condition.ndim != 2 or params_by_condition.shape[0] != optimizer.n_conditions:
         raise ValueError(
@@ -498,7 +507,7 @@ def evaluate_parameter_losses(
 def process_subject(
     subject_id: str,
     subject_conditions: Dict[str, pd.DataFrame],
-    optimizer: GridBasedMultiConditionOptimizer,
+    optimizer,
     methods: List[str],
     x_col: str,
     y_col: str,
@@ -945,6 +954,14 @@ def run_fitting(
         if continuous_engine is not None:
             optimizer = continuous_engine
         else:
+            try:
+                from grid_based_multi_condition_optimizer_jax_loops import (
+                    GridBasedMultiConditionOptimizer,
+                )
+            except ModuleNotFoundError:
+                from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
+                    GridBasedMultiConditionOptimizer,
+                )
             optimizer = GridBasedMultiConditionOptimizer(
                 str(resolved_checkpoint), {'dummy': dummy},
                 skip_motor_noise=skip_motor_noise, corr_weight=corr_weight,
