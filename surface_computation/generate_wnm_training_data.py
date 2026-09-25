@@ -7,9 +7,9 @@ surface.
 Usage (from the repo root)::
 
     PYTHONPATH=. python -m surface_computation.generate_wnm_training_data \
-        --n-points 4000 --n-simulations 200 --out $DEMIXING_ARTIFACT_ROOT/continuous_density/train.npz
+        --n-points 4000 --n-simulations 200 --out $DEMIXING_ARTIFACT_ROOT/wnm/train.npz
 
-    PYTHONPATH=. python continuous_density/generate_training_data.py \
+    PYTHONPATH=. python -m surface_computation.generate_wnm_training_data \
         --validation --n-simulations 100000 --simulation-chunk 250 \
         --shard-rows 1 --resume \
         --out .../validation.npz
@@ -51,7 +51,7 @@ def _code_digest(paths=None) -> str:
     paths = paths or (
         Path(__file__),
         root / 'surface_computation' / 'wnm_design.py',
-        root / 'continuous_density' / 'wnm_simulation.py',
+        root / 'surface_computation' / 'wnm_simulation.py',
         root / 'surface_computation' / 'jax_fit_main.py',
         root / 'surface_computation' / 'jax_fit_functions.py',
     )
