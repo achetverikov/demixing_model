@@ -1,8 +1,12 @@
-# Neural Network Optimization Pipeline
+# Historical Surface-NN Optimization Pipeline
 
 ## Overview
 
-Two-step pipeline for training the mirror-aware neural network:
+This document describes the historical surface-NN surrogate pipeline retained
+for reproduction. WNM is now the production surrogate for fitting and
+prediction; see the root README and `pretrained/README.md` for current usage.
+
+The historical pipeline has two steps:
 
 1. Create averaged surfaces from simulated samples.
 2. Train the mirror-aware network on those surfaces.
@@ -57,14 +61,15 @@ with appropriate component flipping, and builds the KDE surfaces in one step.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-The flags above reproduce the architecture and objective of the production
-20-observation run. The CLI defaults remain `circular`, 64 native mu1 rows, and
-90 training feature columns so older experiments stay reproducible; omitting
-the three production flags therefore starts a different model.
+The flags above reproduce the architecture and objective of the former
+20-observation surface-NN run. The CLI defaults remain `circular`, 64 native
+mu1 rows, and 90 training feature columns so older experiments stay
+reproducible; omitting the three historical run flags therefore starts a
+different model.
 
-## Production 20-observation surrogate
+## Former 20-observation surface surrogate
 
-The production checkpoint is
+The historical checkpoint is
 `pretrained/model_epoch1425_10ktrain_20samples.pkl`. It was selected from a
 1500-epoch run trained on the 10k-simulation surfaces using:
 
