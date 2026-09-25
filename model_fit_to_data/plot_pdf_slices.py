@@ -8,11 +8,11 @@ Columns = feature difference values.
 Run from the repo root:
     python model_fit_to_data/plot_pdf_slices.py \
         --results-path results/<dataset>/extended_fit_results.pkl \
-        --output-dir results/<dataset> \
-        --circ-space 180
+        --output-dir results/<dataset>
 
-The run fingerprint selects and verifies the surrogate that produced the fit.
-Use --checkpoint-path only when that recorded artifact is not installed locally.
+The run fingerprint selects and verifies the surrogate that produced the fit,
+and the saved results provide the study's circular period. Use --checkpoint-path
+or --circ-space only as explicit overrides/validation when necessary.
 """
 
 import argparse
