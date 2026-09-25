@@ -58,7 +58,7 @@ def test_family_comes_from_content_not_filename(tmp_path):
 def test_research_fit_is_refused_with_a_pointer_to_the_packager(tmp_path):
     fit = _write(tmp_path, "wnm_k12_full_n20_alldata-abc-best.pkl",
                  {"variables": {}, "selected_step": 90000, "validation_nll": 3.9})
-    with pytest.raises(ValueError, match="package_wnm_artifact"):
+    with pytest.raises(ValueError, match="surrogate_training/wnm/package_artifact"):
         surrogate.detect_family(fit)
 
 
