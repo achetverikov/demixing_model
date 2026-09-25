@@ -1176,7 +1176,6 @@ def organize_preprocessed_results_by_experiment(prepared_all_subjects: Dict) -> 
 
 def create_extended_summary_plots(prepared_all_subjects: Dict,
                                  output_dir: str = 'model_fit_to_data_results_v2',
-                                 create_individual_plots: bool = True,
                                  circ_space: int = 360) -> None:
     """Create extended summary plots using preprocessed data.
 
@@ -1188,7 +1187,6 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
     Args:
         prepared_all_subjects: Dictionary from prepare_all_subjects_data() with all precomputed curves
         output_dir: Output directory for plots
-        create_individual_plots: Whether to create individual plots
     """
 
     print("Creating extended summary plots using preprocessed data...")
@@ -1240,7 +1238,7 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
             # before motor-noise runs excluded "expectation", alongside subjects
             # fit later under the current --include-methods set); trusting just
             # the first subject's optimizer list produces ragged per-optimizer
-            # arrays below and crashes the DataFrame construction.
+            # arrays below and corrupts the group summaries.
             common_optimizers = set(first_subject_data['available_optimizers'])
             for prepared_result in prepared_results_list[1:]:
                 common_optimizers &= set(prepared_result['experiment_data']['available_optimizers'])
@@ -1861,8 +1859,7 @@ def create_unified_plots_with_summaries(
     if create_summary_plots:
         print("\n=== Creating Summary Plots ===")
         create_extended_summary_plots(
-            prepared_all_subjects, resolved_output_dir, create_individual_plots=False,
-            circ_space=circ_space,
+            prepared_all_subjects, resolved_output_dir, circ_space=circ_space,
         )
 
     if create_pdf_slices:
@@ -1881,14 +1878,14 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Create unified subject plots and summary exports from model-fit results."
+        description="Create unified subject, group-summary, and PDF-slice plots from model-fit results."
     )
     parser.add_argument("--results-path", default=None,
                         help="Path to extended_fit_results.pkl (overrides defaults).")
     parser.add_argument("--checkpoint-path", default=None,
                         help="Path to model checkpoint (overrides defaults).")
     parser.add_argument("--output-dir", default=None,
-                        help="Directory to write plots/exports (defaults to results parent).")
+                        help="Directory to write plots (defaults to results parent).")
     parser.add_argument("--n-samples", type=int, default=20,
                         help="Sample count used for training (default: 20).")
     parser.add_argument("--include-outliers", action=argparse.BooleanOptionalAction, default=True,
