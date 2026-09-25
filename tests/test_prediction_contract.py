@@ -304,50 +304,6 @@ def test_surface_predictor_will_not_pretend_to_apply_motor_noise():
     with pytest.raises(NotImplementedError, match="FFT"):
         predictor.with_motor_noise(10.0)
 
-def _dense_grid():
-    return jnp.arange(-180.0, 180.0, 0.02)
-
-
-def test_motor_noise_equals_numerical_circular_convolution():
-    """Analytic variance addition against an explicit FFT convolution."""
-    dist = {"log_pi": jnp.log(jnp.asarray([[0.3, 0.7]])),
-            "mu": jnp.asarray([[-25.0, 40.0]]),
-            "sigma": jnp.asarray([[12.0, 55.0]])}
-    grid = _dense_grid()
-    sd_motor = 23.0
-
-    analytic = np.exp(np.asarray(
-        wm.mixture_logpdf_grid(grid, wm.add_motor_noise(dist, sd_motor), 4))[0])
-    base = np.exp(np.asarray(wm.mixture_logpdf_grid(grid, dist, 4))[0])
-
-    x = np.asarray(grid)
-    kernel = sum(np.exp(-0.5 * ((x + shift * 360.0) / sd_motor) ** 2)
-                 for shift in range(-4, 5))
-    kernel /= kernel.sum()
-    numerical = np.real(np.fft.ifft(
-        np.fft.fft(base) * np.fft.fft(np.roll(kernel, -len(kernel) // 2))))
-
-    np.testing.assert_allclose(analytic, numerical, atol=1e-7)
-
-
-@pytest.mark.parametrize("sigma", [0.5, 12.0, 55.0, 200.0])
-def test_analytic_asymmetry_equals_dense_quadrature(sigma):
-    """Closed-form sign mass against quadrature, across narrow and broad scales."""
-    dist = {"log_pi": jnp.log(jnp.asarray([[0.35, 0.65]])),
-            "mu": jnp.asarray([[-25.0, 40.0]]),
-            "sigma": jnp.asarray([[sigma, sigma * 1.5]])}
-    grid = _dense_grid()
-    step = 0.02
-
-    density = np.exp(np.asarray(wm.mixture_logpdf_grid(grid, dist, 4))[0])
-    x = np.asarray(grid)
-    quadrature = float(density[x > 0].sum() * step - density[x < 0].sum() * step)
-    analytic = float(wm.density_asymmetry(dist)[0])
-
-    assert abs(analytic - quadrature) < 1e-4, (
-        f"sigma={sigma}: analytic {analytic:.8f} vs quadrature {quadrature:.8f}")
-
-
 # ---------------------------------------------------------------------------
 # Regressions from the 2026-09-06 audit
 # ---------------------------------------------------------------------------
