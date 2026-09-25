@@ -30,6 +30,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from shared.hashing import file_sha256 as _shared_file_sha256
+
 #: Bump on ANY change to the payload field set or to how a field is derived.
 #: v2: `degenerate_eps` became live and `density_legacy` joined the objective map
 #: when the density objective moved to CCC.
@@ -131,12 +133,8 @@ def effective_feat_step_schedule(
 
 
 def file_sha256(path: os.PathLike | str, chunk_size: int = 1 << 20) -> str:
-    """SHA-256 of a file's bytes, streamed so large CSVs do not land in memory."""
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(chunk_size), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    """Compatibility wrapper around the repository's canonical file hasher."""
+    return _shared_file_sha256(path, chunk_size=chunk_size)
 
 
 def compute_run_fingerprint(
