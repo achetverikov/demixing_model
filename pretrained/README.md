@@ -71,7 +71,7 @@ accepting a sliver of extrapolation (largest 1.89 degrees, at `sd_feat1`'s top).
 neither has to be taken on trust. The packager refuses a declared box that rounds
 inward past the corpus, and one that rounds outward by more than 5 degrees.
 
-Note that `sd_feat` extends *below* the production fitting floor of 5: that wider
+Note that `sd_feat` extends *below* the historical surface fitting floor of 5: that wider
 narrow-density coverage is what motivates this surrogate. Search bounds now come
 from the loaded artifact's own domain (`shared/surrogate.py:search_bounds`), so a
 WNM fit searches `sd_feat` from 2.5 while the surface backend keeps its trained
