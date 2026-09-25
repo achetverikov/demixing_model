@@ -228,7 +228,10 @@ Use `create_unified_subject_plots.py` to generate unified subject plots and CSV
 exports from saved results. Bundle-native result keys are opaque analysis-cell
 IDs; the plotter reads subject, experiment, condition, and report-order labels
 from the stored `analysis_cell_values` metadata. The run fingerprint identifies
-and verifies the fitted surrogate, so no checkpoint should normally be supplied.
+and verifies the fitted surrogate, and the saved results identify the physical
+circular period, so neither checkpoint nor `--circ-space` should normally be
+supplied. A conflicting period override raises rather than silently relabeling
+curves or fitted SDs.
 
 ```bash
 python model_fit_to_data/create_unified_subject_plots.py \
