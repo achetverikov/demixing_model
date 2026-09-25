@@ -34,10 +34,12 @@ dissolved by moving its production pieces into the repository's functional
 layers: simulator/training-data generation, surrogate training/packaging,
 shared WNM runtime math, fitting/scoring, and explicitly historical research.
 
-Before interpreting a full test run, fix the audit's pre-test hygiene items:
-the stale CCC test import, default pytest collection boundaries, and CDB-dependent
-integration-test isolation. After a green baseline, carry out the architectural
-moves incrementally with tests between stages.
+The audit's pre-test source hygiene is implemented: the stale CCC test is fixed,
+pytest has a maintained default collection boundary, CDB checks are isolated as
+integration tests, and transition/surface-only suites are explicit opt-ins.
+Next establish the green baseline by running the maintained pytest suite and
+`tests/run_smoke_wnm.sh`. Only after that should the architectural moves begin,
+with tests between stages.
 
 ## 3. Decide the zero-width pooled-SD convention
 
