@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Head-to-head: exhaustive lattice scan vs hierarchical zoom, same code, same data.
+"""Historical surface-NN search comparison.
+
+This utility is retained to reproduce lattice-search diagnostics. Current WNM
+fitting uses the continuous optimizer and its maintained recovery framework.
+
+Head-to-head: exhaustive lattice scan vs hierarchical zoom, same code, same data.
 
 This replaces ``validate_exhaustive_reference.py`` as the meaningful acceptance
 check. That script compares against ``reference_optima_temp.csv``, which was
