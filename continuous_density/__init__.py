@@ -1,5 +1,7 @@
-"""Prototype: continuous conditional-density representation of Demixing Model bias.
+"""Temporary WNM transition/research workspace.
 
-Experimental. Kept out of the production fitting pipeline on purpose; see
-``README.md``.
+The packaged WNM is now the production surrogate, but some production runtime
+math still lives here temporarily. ARCHITECTURE_AUDIT.md defines the migration:
+production pieces move to functional homes, research/history moves out, and this
+package is removed once no maintained runtime imports it.
 """
