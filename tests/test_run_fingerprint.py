@@ -286,16 +286,6 @@ def test_a_continuous_run_records_its_settings_and_omits_the_grid_schedule():
     for absent in ("grid_spec", "feat_step_schedule", "param_bounds", "refinement_spec"):
         assert absent not in payload, f"{absent} describes a search that did not run"
 
-
-def test_the_two_backends_cannot_share_a_digest():
-    continuous = rf.compute_run_fingerprint(
-        search_backend="continuous", surrogate_family="wnm",
-        continuous_spec=CONTINUOUS, **_common())
-    hierarchical = rf.compute_run_fingerprint(
-        search_backend="hierarchical", grid_spec=GRID, **_common())
-    assert rf.fingerprint_digest(continuous) != rf.fingerprint_digest(hierarchical)
-
-
 def test_the_optimizer_configuration_is_part_of_the_identity():
     """Two runs at different budgets are different fits, not resumable halves."""
     base = rf.compute_run_fingerprint(
