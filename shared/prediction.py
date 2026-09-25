@@ -377,7 +377,7 @@ class WrappedMixturePredictor(BiasPredictor):
     def __init__(self, model, variables, n_samples: int, artifact: str,
                  meta: Optional[dict] = None, sd_motor: float = 0.0,
                  n_wraps: int = 4, arc_wraps: int = 8):
-        from continuous_density import wrapped_mixture_model as wm
+        from shared import wnm as wm
 
         self._wm = wm
         self.model = model
