@@ -141,6 +141,7 @@ def test_a_different_start_budget_refuses_to_resume(dataset, baseline_run, tmp_p
     with pytest.raises(StaleResultsError, match="n_starts"):
         _run(dataset, out, continuous_starts=16)
 
+
 def test_the_backends_refuse_each_other_s_checkpoints(dataset, tmp_path):
     """The surface backend emits a sampled grid and has no gradients; the
     lattice backends cannot drive a mixture."""
@@ -202,8 +203,7 @@ def test_the_recorded_spec_comes_from_the_engine_that_runs(baseline_run):
     import continuous_fit
     import inspect
 
-    out = tmp_path / "run"
-    _run(dataset, out)
+    out = baseline_run
     spec = _fingerprint(out)["continuous_spec"]
 
     defaults = inspect.signature(continuous_fit.minimize_continuous).parameters
