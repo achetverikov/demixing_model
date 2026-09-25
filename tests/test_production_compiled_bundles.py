@@ -1,15 +1,21 @@
 from pathlib import Path
 
-import yaml
+import pytest
+
+yaml = pytest.importorskip("yaml")
 
 from model_fit_to_data.compiled_bundle import load_compiled_wnm_bundle
 
 
+pytestmark = pytest.mark.integration
 DATABASE = Path(__file__).resolve().parents[2] / "contextual_biases_database"
 
 
 def test_dm_loads_every_cataloged_production_bundle():
-    registry = yaml.safe_load((DATABASE / "production_bundles.yaml").read_text())
+    registry_path = DATABASE / "production_bundles.yaml"
+    if not registry_path.exists():
+        pytest.skip("requires sibling contextual_biases_database checkout")
+    registry = yaml.safe_load(registry_path.read_text())
     loaded = []
     for item in registry["bundles"]:
         if "dm" not in item["consumers"]:
