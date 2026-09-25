@@ -4,25 +4,26 @@
 
 This document describes the reusable model fitting and result pipeline in `model_fit_to_data/`.
 
-There are two intentionally different input paths:
+There are two WNM input paths with different intended uses:
 
-- **Production WNM:** `fit_model_to_data.py --bundle ...` consumes a compiled
-  `contextual_biases_database` bundle. The bundle fixes the cleaned trial
-  population, analysis cells, observed-design operators, bandwidths, and target
-  arrays before Demixing Model fitting begins.
-- **Legacy CSV/surface replay:** `fit_model_to_data.py --data-path ...` derives
-  those semantics from a CSV and remains available for historical reproduction,
-  recovery tooling, and exploratory work. It is not a production WNM input path.
+- **Ordinary end-user CSV fitting:** `fit_model_to_data.py --data-path ...`
+  derives the participant/condition groups, filtering, empirical targets, and
+  observed-design operators directly from the supplied table. This is the
+  default user-facing path.
+- **Compiled comparison fitting:** `fit_model_to_data.py --bundle ...` consumes
+  a validated `contextual_biases_database` bundle. Use this when multiple model
+  families or datasets must share exactly the same cleaned trial population,
+  analysis cells, bandwidths, targets, and row identities.
 
-Both paths write fingerprinted results to `--output-dir`; plotting and rescoring
-must recover the surrogate from that fingerprint rather than substituting the
-current default.
+Both WNM paths use the same analytic predictor and continuous optimizer and write
+fingerprinted results to `--output-dir`. The historical surface NN remains
+reachable only through an explicit surface checkpoint plus a lattice search.
 
 ---
 
 ## Pipeline Flow Diagram
 
-Production bundle path:
+Compiled comparison path:
 
 ```text
 compiled bundle
@@ -41,100 +42,62 @@ extended_fit_results.pkl + extended_run_fingerprint.json
       └── export_wnm_fit_curves.py
 ```
 
-The historical CSV/surface path is retained as follows:
+The ordinary CSV/WNM path performs the same target construction locally:
 
+```text
+CSV trials
+   │
+   ▼
+load/filter/group conditions
+   │
+   ▼
+build exact-coordinate empirical targets
+   │
+   ▼
+ContinuousEngine + packaged WNM
+   │
+   ▼
+extended_fit_results.pkl + extended_run_fingerprint.json
+   │
+   ├── export_wnm_fit_curves.py
+   ├── create_unified_subject_plots.py
+   └── plot_pdf_slices.py
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│ START: fit_model_to_data.py                                     │
-└───────────────┬──────────────────────────────────────────────────┘
-                │
-                ▼
-┌──────────────────────────────────────────────────────────────────┐
-│ 1. Load & Filter Data                                            │
-│                                                                  │
-│    - CSV specified via --data-path                               │
-│    - Optional outlier removal (outlier_col='is_outlier')         │
-│                                                                  │
-│    Function: load_data()                                         │
-└───────────────┬──────────────────────────────────────────────────┘
-                │
-                ▼
-┌──────────────────────────────────────────────────────────────────┐
-│ 2. Group Conditions                                              │
-│                                                                  │
-│    - Groups by subject + experiment                              │
-│    - Conditions need at least --min-trials observations          │
-│                                                                  │
-│    Function: group_conditions()                                  │
-└───────────────┬──────────────────────────────────────────────────┘
-                │
-                ▼
-┌──────────────────────────────────────────────────────────────────┐
-│ 3. Initialize Optimizer                                          │
-│                                                                  │
-│    Class: GridBasedMultiConditionOptimizer                       │
-│    File: grid_based_multi_condition_optimizer_jax_loops.py       │
-│                                                                  │
-│    - Loads checkpoint (default: pretrained/model_epoch1425_10ktrain_20samples.pkl) │
-│    - Uses dummy data for initial setup                           │
-└───────────────┬──────────────────────────────────────────────────┘
-                │
-                ▼
-┌──────────────────────────────────────────────────────────────────┐
-│ 4. Per-Subject Optimization                                      │
-│                                                                  │
-│    For each subject group:                                       │
-│    - Filter data for fitting                                     │
-│    - Search: hierarchical zoom, or an exhaustive scan over a      │
-│      precomputed curve cache (density only, --search)            │
-│    - Methods: density (default) + 7 others, see below            │
-│                                                                  │
-│    Function: process_subject()                                   │
-└───────────────┬──────────────────────────────────────────────────┘
-                │
-                ▼
-┌──────────────────────────────────────────────────────────────────┐
-│ 5. Save Extended Results                                         │
-│                                                                  │
-│    Output: <output-dir>/                                         │
-│    Files:                                                        │
-│    - extended_fit_results.pkl                                    │
-│    - extended_run_fingerprint.json                               │
-│    - extended_progress.json                                      │
-│                                                                  │
-│    Function: save_results()                                      │
-└──────────────────────────────────────────────────────────────────┘
-```
+
+Historical surface-NN reproduction remains available explicitly with a surface
+checkpoint and `--search hierarchical` or `--search exhaustive`; it is not a
+default path.
 
 ---
 
 ## Default Settings (`fit_model_to_data.py`)
 
-The bare CLI defaults are retained for legacy CSV compatibility:
+The bare CLI now selects the packaged WNM:
 
 - `--include-methods density`
-- `--checkpoint-path pretrained/model_epoch1425_10ktrain_20samples.pkl`
+- `--n-samples 20`
+- packaged `wnm_k12_20samples.pkl` unless `--checkpoint-path` overrides it
 - `--min-trials 30`
-- `--search hierarchical`
-- Outliers excluded by default
+- `--search continuous`
+- 64 deterministic starts in two sequential batches of 32
+- outliers excluded by default
 
-They are **not** the production WNM configuration. A production run supplies a
-compiled `--bundle` and a packaged WNM artifact (for example
-`pretrained/wnm_k12_100samples.pkl`). Bundle-native fitting uses the continuous
-WNM engine and records that backend, the artifact digest, and bundle identity in
-the run fingerprint. The CLI refuses `--data-path` together with
-`--search continuous` so CSV-derived empirical semantics cannot be mistaken for
-a production WNM run.
+For a normal one-model analysis, `--data-path` is sufficient. For controlled
+cross-model comparisons, use `--bundle`; the bundle freezes empirical semantics
+upstream and adds stable row identities for likelihood exports.
+
+Historical surface fitting requires both an explicit surface checkpoint and an
+explicit lattice search mode.
 
 ## Search backends
 
 | Backend | What it does | When |
 |---|---|---|
-| `continuous` | Bounded multistart gradient optimization of the analytic WNM objectives | Production bundle-native WNM fitting |
-| `hierarchical` | Zooming grid search, refining between grid points | Legacy surface/CSV fitting; generic CLI default |
-| `exhaustive` | Scans a precomputed 1-degree lattice of density-asymmetry curves | Legacy surface `density` only |
+| `continuous` | Bounded multistart gradient optimization of the analytic WNM objectives | Default for both ordinary CSV and compiled-bundle WNM fitting |
+| `hierarchical` | Zooming grid search over the sampled surface surrogate | Historical surface-NN reproduction only |
+| `exhaustive` | Scans a precomputed 1-degree lattice of density-asymmetry curves | Historical surface `density` only |
 
-On the legacy surface path dispatch is per **method**: `--search exhaustive`
+On the historical surface path dispatch is per **method**: `--search exhaustive`
 routes `density` to the scan and leaves every other method hierarchical,
 because the cache holds density curves and nothing else. Bundle-native WNM runs
 do not use the surface curve cache.
@@ -262,30 +225,41 @@ replay checks.
 
 ## How To Run
 
-### Production WNM from a compiled bundle
-
-```bash
-python model_fit_to_data/fit_model_to_data.py \
-  --bundle ../contextual_biases_database/data/bundles/<dataset>/<bundle> \
-  --checkpoint-path pretrained/wnm_k12_100samples.pkl \
-  --output-dir results/<dataset>
-```
-
-### Legacy CSV/surface replay
+### Ordinary WNM fit from CSV
 
 ```bash
 python model_fit_to_data/fit_model_to_data.py \
   --data-path example_data/fritsche_prepared.csv \
-  --output-dir results/fritsche_legacy
+  --n-samples 20 \
+  --output-dir results/fritsche
+```
+
+### Compiled WNM fit for model comparison
+
+```bash
+python model_fit_to_data/fit_model_to_data.py \
+  --bundle ../contextual_biases_database/data/bundles/<dataset>/<bundle> \
+  --n-samples 100 \
+  --output-dir results/<dataset>
+```
+
+### Historical surface-NN replay
+
+```bash
+python model_fit_to_data/fit_model_to_data.py \
+  --data-path example_data/fritsche_prepared.csv \
+  --checkpoint-path pretrained/model_epoch1425_10ktrain_20samples.pkl \
+  --search hierarchical \
+  --output-dir results/fritsche_surface_replay
 ```
 
 ---
 
 ## Related Files
 
-- `fit_model_to_data.py` — fitting entry point for compiled WNM and legacy CSV runs
+- `fit_model_to_data.py` — WNM-first fitting entry point for ordinary CSVs and compiled comparison bundles
 - `compiled_bundle.py` — strict reader for bundle-native WNM inputs
 - `create_unified_subject_plots.py` — family-aware post-fit subject, summary, and PDF-slice plots
 - `plot_pdf_slices.py` — family-aware conditional-density slice plots
-- `export_wnm_fit_curves.py` — sole production WNM tabular exporter for curves, parameters, and trial likelihoods
+- `export_wnm_fit_curves.py` — WNM tabular exporter for fitted curves/parameters, plus row-level likelihood products when compiled row identities are available
 - `grid_based_multi_condition_optimizer_jax_loops.py` — legacy surface optimizer core
