@@ -22,6 +22,7 @@ history rather than being repeated as future work here.
 - Added bundle-native fitting, strict compiled-input validation, exact observed
   dissimilarities, fit fingerprints, per-trial likelihood replay, parameter and
   curve exports, and production-bundle coverage tests.
+- Retired the duplicate CSV-export path from `create_unified_subject_plots.py`. The plotter now produces figures only; `export_wnm_fit_curves.py` is the single provenance-bound WNM tabular export path.
 - Completed the maintained result/plot consumer transition: unified plots now
   recover bundle-native subject/experiment/condition labels from stored
   `analysis_cell_values`, preserve report-order pairing, infer and validate the
