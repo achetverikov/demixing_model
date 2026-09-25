@@ -36,6 +36,11 @@ from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
     GridBasedMultiConditionOptimizer,
 )
 from model_fit_to_data.run_fingerprint import read_fingerprint_sidecar
+from model_fit_to_data.result_identity import (
+    canonical_condition_key as _canonical_condition_key,
+    canonicalize_result_keys,
+    sanitize_result_key_part as _sanitize_result_key_part,
+)
 from shared import surrogate
 from shared.config import config
 from shared.mu1_axis import mu1_cell_width, periodic_integral, sign_masks
@@ -294,39 +299,6 @@ def compute_predicted_sd_curves_batch_pooled(log_surfaces_batch, bin_weights_bat
 
     predictor = SurfacePredictor(log_surfaces_batch, n_samples=0, artifact="plots")
     return predictor.pooled_circular_sd(bin_weights_batch)
-
-
-def _sanitize_result_key_part(value: str) -> str:
-    """Match fit_model_to_data.py's result-key sanitization."""
-    return re.sub(r'[^\w]', '_', str(value)).strip('_')
-
-
-def _canonical_condition_key(key: str) -> str:
-    parts = str(key).split('#')
-    if len(parts) < 3:
-        return str(key)
-    subject, experiment = parts[0], parts[1]
-    condition = "#".join(parts[2:])
-    return (
-        f"{_sanitize_result_key_part(subject)}#"
-        f"{_sanitize_result_key_part(experiment)}#"
-        f"{_sanitize_result_key_part(condition)}"
-    )
-
-
-def canonicalize_result_keys(results: Dict) -> Dict:
-    canonical = {}
-    source_keys = {}
-    for key, entry in results.items():
-        ckey = _canonical_condition_key(key)
-        if ckey in canonical and source_keys[ckey] != str(key):
-            raise ValueError(
-                "Result-key collision after sanitization: "
-                f"{source_keys[ckey]!r} and {str(key)!r} both map to {ckey!r}"
-            )
-        canonical[ckey] = entry
-        source_keys[ckey] = str(key)
-    return canonical
 
 
 def _surface_plot_bundle(optimizer, params_batch, motor_noise, feat_vals,
