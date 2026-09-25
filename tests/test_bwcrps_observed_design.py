@@ -28,7 +28,15 @@ ROOT = Path(__file__).resolve().parents[1]
 for path in (ROOT, ROOT / "model_fit_to_data"):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
-CBD_SRC = ROOT.parent / "contextual_biases_database" / "src"
+
+pytestmark = pytest.mark.integration
+CBD_ROOT = ROOT.parent / "contextual_biases_database"
+CBD_SRC = CBD_ROOT / "src"
+if not CBD_SRC.exists():
+    pytest.skip(
+        "requires sibling contextual_biases_database checkout",
+        allow_module_level=True,
+    )
 if str(CBD_SRC) not in sys.path:
     sys.path.insert(0, str(CBD_SRC))
 
