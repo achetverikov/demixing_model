@@ -1527,21 +1527,26 @@ def _model_slice(log_surf: np.ndarray, feat_grid: np.ndarray, mu1_grid: np.ndarr
 
 def _empirical_slice(fd_vals: np.ndarray, bias_vals: np.ndarray,
                      target_fd: float, bias_grid: np.ndarray, weights_sd: float,
-                     period: float = 360.0):
-    """Return Gaussian-weighted KDE of bias values around target_fd.
+                     period: float = 360.0,
+                     bias_bandwidth: Optional[float] = None):
+    """Return Gaussian-weighted wrapped KDE of bias values around target_fd.
 
-    The bias kernel is wrapped over `period` (model space, so 360 by default),
-    matching the fit-side target in shared/utils.py. Note this twin still floors
-    the bandwidth at 1.0 while the fit side has no floor — the two empirical KDEs
-    remain inconsistent in that one respect (MODEL_PIPELINE_FOR_AGENTS.md D.11).
+    WNM fits store the exact empirical bias bandwidth used by the fitted density
+    target; passing it here keeps the illustrative slice on that same estimator.
+    Historical results without stored bandwidth retain the old local fallback.
     """
     w = np.exp(-0.5 * ((fd_vals - target_fd) / weights_sd) ** 2)
     if w.sum() < 1e-10:
         return np.zeros_like(bias_grid)
     w /= w.sum()
-    bias_std = bias_vals.std()
-    iqr = np.percentile(bias_vals, 75) - np.percentile(bias_vals, 25)
-    bw  = max(0.9 * min(bias_std, iqr / 1.34) * len(bias_vals) ** (-0.2), 1.0)
+    if bias_bandwidth is None:
+        bias_std = bias_vals.std()
+        iqr = np.percentile(bias_vals, 75) - np.percentile(bias_vals, 25)
+        bw = max(0.9 * min(bias_std, iqr / 1.34) * len(bias_vals) ** (-0.2), 1.0)
+    else:
+        bw = float(bias_bandwidth)
+        if not np.isfinite(bw) or bw <= 0:
+            raise ValueError(f"bias_bandwidth must be positive and finite, got {bw!r}")
     diff    = bias_grid[:, None] - bias_vals[None, :]
     offsets = period * np.arange(-KDE_WRAPS, KDE_WRAPS + 1)
     kernels = sum(np.exp(-0.5 * ((diff + o) / bw) ** 2) for o in offsets)
@@ -1592,7 +1597,7 @@ def create_pdf_slice_plots(
     optimizer_names=None,
     n_subjects: int = 3,
     feat_diffs_data: Optional[List[float]] = None,
-    weights_sd: float = 20.0,
+    weights_sd_model: float = 20.0,
 ) -> None:
     """For each experiment × condition × fitting method, plot p(mu1_bias | feat_diff) slices.
 
@@ -1619,7 +1624,7 @@ def create_pdf_slice_plots(
 
     # Convert to model space for surrogate evaluation
     feat_diffs_model = [fd / angle_display_scale for fd in feat_diffs_data]
-    weights_sd_model = weights_sd / angle_display_scale  # scale sigma too
+    weights_sd_model = float(weights_sd_model)
 
     # Auto-detect available methods if not specified
     if optimizer_names is None:
@@ -1672,13 +1677,16 @@ def create_pdf_slice_plots(
             for row, (dissoc, _, subject_id, result, log_surf, params) in enumerate(selected):
                 fd_vals  = np.array(result['data_df'])[:, 0]  # model space
                 bias_vals = np.array(result['data_df'])[:, 1]
+                empirical_bandwidth = (
+                    result.get("empirical_curves", {}).get("density_bandwidth"))
 
                 for col, (fd_data, fd_model) in enumerate(zip(feat_diffs_data, feat_diffs_model)):
                     ax = axes[row, col]
                     prob, E, asym = _model_slice(log_surf, feat_grid, mu1_grid,
                                                  fd_model, weights_sd_model)
-                    emp = _empirical_slice(fd_vals, bias_vals, fd_model,
-                                           bias_plot_grid_model, weights_sd_model)
+                    emp = _empirical_slice(
+                        fd_vals, bias_vals, fd_model, bias_plot_grid_model,
+                        weights_sd_model, bias_bandwidth=empirical_bandwidth)
                     prob_display = prob / angle_display_scale
                     E_display = E * angle_display_scale
 
@@ -1870,6 +1878,7 @@ def create_unified_plots_with_summaries(
                 circ_space=circ_space,
                 optimizer_names=pdf_slice_optimizers,
                 n_subjects=pdf_slice_n_subjects,
+                weights_sd_model=density_curve_spec["emp_density_weights_sd"],
             )
 
 
