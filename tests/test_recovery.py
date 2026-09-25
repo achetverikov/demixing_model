@@ -508,7 +508,13 @@ def test_running_cases_in_parallel_gives_the_same_numbers(tmp_path):
     from its own case, so nothing crosses between workers -- but that is the kind
     of claim that is easy to assert and easy to have wrong, and a panel whose
     numbers depended on the worker count would be worthless. Checked on the
-    fitted parameters and both losses, not just the diagnosis.
+    fitted parameters and both losses, not just the diagnosis. The diagnosis must
+    match exactly. The numbers need not be bit-identical: workers run XLA
+    single-threaded (see ``main``) while the serial run uses multithreaded Eigen,
+    so float32 reductions are ordered differently, and on this small panel
+    L-BFGS-B carries that last-bit difference into the fitted point at ~0.1%.
+    Losses stay within float32 rounding; a case crossing between workers would
+    move any of these by far more than the tolerances.
     """
     import run_recovery_panel as panel
 
@@ -527,9 +533,14 @@ def test_running_cases_in_parallel_gives_the_same_numbers(tmp_path):
     for one, other in zip(left, right):
         assert one["case"] == other["case"]
         for column, value in one.items():
-            if column.startswith(("fit_", "true_", "log_ratio_")) or column in (
-                    "loss_at_fit", "loss_at_truth", "diagnosis"):
+            if column == "diagnosis":
                 assert value == other[column], (one["case"], column)
+            elif column.startswith("true_") or column in ("loss_at_fit", "loss_at_truth"):
+                assert float(value) == pytest.approx(
+                    float(other[column]), rel=1e-5, abs=1e-6), (one["case"], column)
+            elif column.startswith(("fit_", "log_ratio_")):
+                assert float(value) == pytest.approx(
+                    float(other[column]), rel=1e-2, abs=1e-3), (one["case"], column)
 
 
 def test_the_start_sweep_uses_the_worst_cases_and_optimizer_truth_layout(
