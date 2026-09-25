@@ -146,7 +146,7 @@ def test_a_discrete_design_only_visits_its_own_feature_values(predictor):
 # The attribution
 # ---------------------------------------------------------------------------
 
-@pytest.mark.research
+@pytest.mark.development
 @pytest.mark.slow
 def test_a_noise_free_target_recovers_the_generating_parameters(predictor, grids):
     """The reference point for every other recovery number.
@@ -278,7 +278,7 @@ def test_a_zero_motor_override_beats_the_predictors_own_noise(predictor):
     np.testing.assert_array_equal(plain, overridden)
 
 
-@pytest.mark.research
+@pytest.mark.development
 @pytest.mark.slow
 def test_a_case_with_motor_noise_is_fitted_at_that_motor_noise(predictor, grids):
     """The loop is only closed if the motor SD the data was drawn at reaches the
@@ -316,7 +316,7 @@ def test_a_case_with_motor_noise_is_fitted_at_that_motor_noise(predictor, grids)
     assert outcome.loss_at_truth == pytest.approx(with_motor, rel=1e-6)
 
 
-@pytest.mark.research
+@pytest.mark.development
 @pytest.mark.slow
 def test_a_replicate_runs_and_records_what_it_needs(predictor, grids):
     feat_grid, d_circ = grids
@@ -346,7 +346,7 @@ def test_a_replicate_runs_and_records_what_it_needs(predictor, grids):
 # The protocol
 # ---------------------------------------------------------------------------
 
-@pytest.mark.research
+@pytest.mark.development
 @pytest.mark.slow
 def test_the_panel_runner_writes_rows_and_reproducible_settings(tmp_path):
     """The runner exists because the first panel was run interactively and only
@@ -509,7 +509,7 @@ def test_the_same_seed_gives_the_same_truths_at_every_trial_count():
     assert len(truths(25, 100)) != len(truths(50, 100))
 
 
-@pytest.mark.research
+@pytest.mark.development
 @pytest.mark.slow
 def test_running_cases_in_parallel_gives_the_same_numbers(tmp_path):
     """Parallelism here must be a wall-clock change and nothing else.
