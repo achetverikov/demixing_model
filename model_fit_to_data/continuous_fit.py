@@ -30,13 +30,15 @@ import jax.numpy as jnp
 import numpy as np
 import numpy as _np
 
-from continuous_optimizer import (build_bounds, condition_parameter_layout,
-                                  DEFAULT_MATMUL_PRECISION, DEFAULT_N_STARTS,
-                                  OPTIMIZER_VERSION,
-                                  minimize_continuous)
+from model_fit_to_data.continuous_optimizer import (
+    build_bounds, condition_parameter_layout, DEFAULT_MATMUL_PRECISION,
+    DEFAULT_N_STARTS, OPTIMIZER_VERSION, minimize_continuous,
+)
 from shared import surrogate as surrogate_module
-from wnm_scoring import (MEAN_ONLY_METHODS, SUPPORTED_METHODS, packed_curve_loss,
-                         score_all_conditions, validate_feature_grid)
+from model_fit_to_data.wnm_scoring import (
+    MEAN_ONLY_METHODS, SUPPORTED_METHODS, packed_curve_loss,
+    score_all_conditions, validate_feature_grid,
+)
 
 
 def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
@@ -297,7 +299,7 @@ class ContinuousEngine:
                  corr_weight: float = 0.25, skip_motor_noise: bool = True,
                  n_starts: int = DEFAULT_N_STARTS, seed: int = 0):
         import jax.numpy as _jnp
-        from fitting_targets import build_fitting_targets
+        from model_fit_to_data.fitting_targets import build_fitting_targets
         from shared.config import config
 
         self.predictor = predictor
@@ -367,7 +369,7 @@ class ContinuousEngine:
     def update_compiled(self, group, shared_targets, manifest):
         """Install one upstream-compiled fit group without deriving empirical data."""
         try:
-            from compiled_bundle import fitting_targets_from_compiled
+            from model_fit_to_data.compiled_bundle import fitting_targets_from_compiled
         except ModuleNotFoundError:
             from model_fit_to_data.compiled_bundle import fitting_targets_from_compiled
 
@@ -464,7 +466,7 @@ class ContinuousEngine:
 
     def evaluate(self, params_by_condition, fitting_methods):
         """Every objective's loss per condition, at fixed parameters."""
-        from wnm_scoring import evaluate_condition_losses
+        from model_fit_to_data.wnm_scoring import evaluate_condition_losses
 
         with jax.default_matmul_precision(DEFAULT_MATMUL_PRECISION):
             return evaluate_condition_losses(
