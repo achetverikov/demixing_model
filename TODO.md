@@ -4,12 +4,14 @@ This is the sole live work plan for this repository. Completed and superseded
 work is recorded in `HISTORY.md`; result-specific evidence remains in the
 `continuous_density/*FINDINGS.md` files.
 
-## 1. Complete the bundle-native WNM production cutover
+## 1. Finish retained WNM validation follow-ups
 
-The fits, gates, input-path restriction and run documentation are done for the
-datasets in the transition. `andriushchenko` is a new dataset rather than a
-migrated one, and its BBZ side is still fitting; it is tracked with the compiled
-comparison in `bias_model_comparison/TODO.md`, not here.
+The runtime cutover is complete: WNM is the default surrogate for fresh
+prediction and ordinary CSV fitting, compiled bundles remain available for
+controlled model-comparison work, fitted-result plots/exports are WNM-aware, and
+the public demo plus an end-to-end WNM smoke use the new path. `andriushchenko`
+is tracked with the compiled comparison in `bias_model_comparison/TODO.md`, not
+here.
 
 - Close the retained WNM BWCRPS validation gaps while the production bundles
   are built: confirm the common 64-start policy on held-out cases, inspect its
