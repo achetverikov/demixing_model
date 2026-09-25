@@ -12,7 +12,7 @@ from typing import Dict
 
 def sanitize_result_key_part(value) -> str:
     """Replace non-word characters with underscores and trim edge underscores."""
-    return re.sub(r"[^\\w]", "_", str(value)).strip("_")
+    return re.sub(r"[^\w]", "_", str(value)).strip("_")
 
 
 def canonical_condition_key(key) -> str:
