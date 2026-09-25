@@ -24,7 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from continuous_density import wrapped_mixture_model as wm  # noqa: E402
+from shared import wnm as wm  # noqa: E402
 from shared import surrogate  # noqa: E402
 from shared.mu1_axis import mu1_grid, mu1_cell_width  # noqa: E402
 from shared.prediction import (  # noqa: E402
