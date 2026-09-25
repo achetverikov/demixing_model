@@ -34,6 +34,10 @@ history rather than being repeated as future work here.
   saved physical circular period, and the standalone PDF-slice command evaluates
   WNM fits directly through the run-fingerprinted surrogate instead of requiring
   a surface optimizer.
+- Aligned PDF-slice diagnostics with the fitted WNM estimator: the feature
+  kernel stays in model degrees, the stored empirical KDE bandwidth is reused
+  when available, and the standalone command restores the run's recorded JAX
+  matmul precision.
 - Added checksum-keyed resumable recovery and simulation stages after the audit
   found that earlier shard reuse was not tied to the producing code.
 - The earlier promotion gate compared WNM against the surface NN. The decision
