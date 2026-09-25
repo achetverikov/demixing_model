@@ -77,13 +77,13 @@ Preferred ownership:
 
 Higher layers test delegation and contracts, not the same equations again.
 
-## 1.6 Historical/research tests stay opt-in
+## 1.6 Historical/development tests stay opt-in
 
 Markers remain:
 
 - default: maintained WNM/product;
 - `integration`: sibling-repository / compiled-product;
-- `research`: transition, optimizer-comparison, recovery research;
+- `development`: transition, optimizer-comparison, recovery development checks;
 - `legacy_surface`: historical surface-NN;
 - `slow`: intentionally expensive maintained checks;
 - `gpu`: GPU-specific.
@@ -99,8 +99,8 @@ It should instruct coding agents how new tests are added and reviewed. At
 minimum it must require:
 
 1. **Choose the layer first.** State whether the test is unit, contract,
-   maintained integration, cross-repo integration, research, or legacy surface.
-2. **Use the correct marker.** New research/surface/CDB tests must not silently
+   maintained integration, cross-repo integration, development, or legacy surface.
+2. **Use the correct marker.** New development/surface/CDB tests must not silently
    enter the maintained default suite.
 3. **Justify any real fit.** A new test may run an optimizer only when the claim
    cannot be tested below the fitting layer.
@@ -327,7 +327,7 @@ Simplify gradient coverage:
 
 ---
 
-# 7. Separate recovery research from default runtime coverage
+# 7. Separate recovery development checks from default runtime coverage
 
 `test_recovery.py` mixes cheap contracts with full recovery experiments.
 
@@ -343,7 +343,7 @@ Keep cheap tests for:
 - bound/railing bookkeeping;
 - one very small `run_replicate` integration check if needed.
 
-## 7.2 Mark as `research` or `slow`
+## 7.2 Mark as `development` or `slow`
 
 Move/mark:
 
@@ -564,7 +564,7 @@ Based on real durations:
 - lower Monte Carlo sample counts;
 - lower optimizer start counts;
 - replace real model execution with deterministic fixtures where semantics allow;
-- move genuinely expensive scientific validations to `slow` or `research`.
+- move genuinely expensive development validations to `slow` or `development`.
 
 Run the maintained suite after each logical batch.
 
@@ -593,11 +593,11 @@ Before starting the large architecture refactor:
 - no maintained test uses an impossible density-asymmetry value;
 - no maintained test duplicates wrapped-mixture numerical mathematics already
   covered by the primitive suite;
-- recovery research is not part of ordinary runtime unless explicitly marked;
+- recovery development checks is not part of ordinary runtime unless explicitly marked;
 - the slowest maintained tests are known from `--durations`;
 - `tests/AGENTS.md` exists and defines how future tests are classified,
   justified, minimized, and marked.
 
 A useful outcome would be a maintained suite that is small enough to run
-routinely during the upcoming refactor, while the slower integration/research/
+routinely during the upcoming refactor, while the slower integration/development/
 legacy suites remain available for targeted verification.
