@@ -2,7 +2,7 @@
 """Freeze and read the first actual-DM recovery panel.
 
 The expensive simulation is delegated to
-``continuous_density/generate_training_data.py``. This module owns only the
+``surface_computation/generate_wnm_training_data.py``. This module owns only the
 agreed single-condition design and the conversion from its raw simulator output
 to nested behavioural datasets.
 """
@@ -24,7 +24,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from shared import surrogate
-from continuous_density.design import SIM_SPAT_DIFF
+from surface_computation.wnm_design import SIM_SPAT_DIFF
 
 
 FEATURE_DIFFERENCES = np.arange(2.0, 181.0, 2.0, dtype=np.float32)
@@ -35,8 +35,8 @@ GLOBAL_ORIENTATION = 0.0
 RESPONSES_PER_DIFFERENCE = 10
 RESPONSE_COMPONENT = 0
 CODE_PATHS = (
-    ROOT / "continuous_density/generate_training_data.py",
-    ROOT / "continuous_density/sim_interface.py",
+    ROOT / "surface_computation/generate_wnm_training_data.py",
+    ROOT / "surface_computation/wnm_simulation.py",
     ROOT / "surface_computation/jax_fit_main.py",
     ROOT / "surface_computation/jax_fit_functions.py",
 )
@@ -309,7 +309,7 @@ def main(argv=None):
     commands = []
     for seed in RESPONSE_SEEDS:
         commands.append([
-            sys.executable, "-m", "continuous_density.generate_training_data",
+            sys.executable, "-m", "surface_computation.generate_wnm_training_data",
             "--design-file", str(design_path),
             "--n-simulations", str(RESPONSES_PER_DIFFERENCE),
             "--n-samples", str(N_SAMPLES), "--seed", str(seed),
