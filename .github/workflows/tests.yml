@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - dev/continuous-density-fixes
   pull_request:
     branches:
       - main
