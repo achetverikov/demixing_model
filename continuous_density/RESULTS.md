@@ -173,6 +173,8 @@ NN has lower native density and smoothed-expectation loss on average. This is a
 forward-representation qualification, not evidence against the selected batched
 optimizer. The comparison gate recorded here was later superseded by the
 repository-level decision to replace the surface NN with WNM. The packaged WNM
-artifacts now support exact bundle-native fitting and direct result/plot
-prediction; the surface NN is retained only for legacy replay and transition
-comparisons. See the root `HISTORY.md` and live `TODO.md` for current status.
+artifacts now support exact bundle-native fitting and direct stored-result/plot
+prediction. The shared bare surrogate default still resolves to the surface NN
+for the separate generic prediction interface, which has not been migrated in
+this result/plot pass; stored fit consumers do not use that default. See the root
+`HISTORY.md` and live `TODO.md` for current status.
