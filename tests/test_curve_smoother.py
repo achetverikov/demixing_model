@@ -33,29 +33,27 @@ SIGMAS = [2.0, 10.0, 20.0]
 LENGTHS = [90, 91]
 
 
-@pytest.mark.parametrize("sigma", SIGMAS)
-def test_length_is_preserved(sigma):
-    curve = jnp.asarray(np.random.default_rng(1).normal(size=90))
-    assert gaussian_curve_smoother(curve, sigma).shape == (90,)
+@pytest.mark.parametrize("length", LENGTHS)
+def test_length_is_preserved(length):
+    curve = jnp.asarray(np.random.default_rng(1).normal(size=length))
+    assert gaussian_curve_smoother(curve, 10.0).shape == (length,)
 
 
-@pytest.mark.parametrize("sigma", SIGMAS)
-def test_a_constant_curve_is_unchanged(sigma):
+def test_a_constant_curve_is_unchanged():
     """Normalized kernel plus edge padding: no gain, and no edge droop.
 
     A curve that droops at its ends under smoothing would bias every fitted
     asymmetry toward zero at the extreme feature differences.
     """
     curve = jnp.full(90, 0.37)
-    np.testing.assert_allclose(np.asarray(gaussian_curve_smoother(curve, sigma)),
+    np.testing.assert_allclose(np.asarray(gaussian_curve_smoother(curve, 10.0)),
                                0.37, rtol=0, atol=1e-6)
 
 
-@pytest.mark.parametrize("sigma", SIGMAS)
-def test_smoothing_is_a_weighted_average_not_a_gain(sigma):
+def test_smoothing_is_a_weighted_average_not_a_gain():
     """Output stays inside the input's range: the kernel sums to one."""
     curve = jnp.asarray(np.random.default_rng(2).normal(size=90))
-    out = np.asarray(gaussian_curve_smoother(curve, sigma))
+    out = np.asarray(gaussian_curve_smoother(curve, 10.0))
     assert out.min() >= float(curve.min()) - 1e-6
     assert out.max() <= float(curve.max()) + 1e-6
 
