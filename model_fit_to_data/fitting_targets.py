@@ -41,9 +41,12 @@ except ModuleNotFoundError:
         compute_bwcrps_condition_targets as _default_bwcrps_condition_targets,
         compute_target_bias_curve_core as _default_target_bias_curve_core,
     )
-from shared.utils import (_compute_empirical_density_asymmetry_core,
-                          compute_target_bias_rolling_curve_core,
-                          sheather_jones_bandwidth, silverman_bandwidth)
+from shared.empirical import (
+    _compute_empirical_density_asymmetry_core,
+    compute_target_bias_rolling_curve_core,
+    sheather_jones_bandwidth,
+    silverman_bandwidth,
+)
 
 
 @dataclass(frozen=True)
