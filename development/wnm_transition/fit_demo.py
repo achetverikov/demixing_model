@@ -21,7 +21,7 @@ Usage (from the repo root).  The prepared example datasets carry ``abs_td_dist``
 (the target-distractor feature distance) and ``bias_to_distr_corr`` (the bias),
 which are this script's defaults::
 
-    PYTHONPATH=. python continuous_density/fit_demo.py \
+    PYTHONPATH=. python -m development.wnm_transition.fit_demo \
         --model $DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k8.pkl \
         --data example_data/fischer_whitney_prepared.csv \
         --condition-col condition --condition combined
