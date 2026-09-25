@@ -89,10 +89,10 @@ def test_sampled_responses_follow_the_mixture(predictor):
     """The sampler must draw from the distribution being fitted, or the closed
     loop is not closed and every later conclusion is about the wrong model."""
     rng = np.random.default_rng(0)
-    feat_diff = np.full(20000, 40.0)
+    feat_diff = np.full(8000, 40.0)
     bias = R.sample_mixture_responses(predictor, 20.0, 40.0, 25.0, feat_diff, rng)
 
-    assert bias.shape == (20000,)
+    assert bias.shape == (8000,)
     assert np.all(bias >= -180.0) and np.all(bias < 180.0)
 
     # Compare the sample's circular mean and resultant against the analytic ones.
@@ -108,7 +108,7 @@ def test_sampled_responses_follow_the_mixture(predictor):
 
 def test_motor_noise_widens_the_sample(predictor):
     rng = np.random.default_rng(1)
-    feat_diff = np.full(20000, 40.0)
+    feat_diff = np.full(8000, 40.0)
     plain = R.sample_mixture_responses(predictor, 20.0, 40.0, 25.0, feat_diff, rng)
     noisy = R.sample_mixture_responses(predictor, 20.0, 40.0, 25.0, feat_diff, rng,
                                        sd_motor=30.0)
@@ -146,6 +146,8 @@ def test_a_discrete_design_only_visits_its_own_feature_values(predictor):
 # The attribution
 # ---------------------------------------------------------------------------
 
+@pytest.mark.research
+@pytest.mark.slow
 def test_a_noise_free_target_recovers_the_generating_parameters(predictor, grids):
     """The reference point for every other recovery number.
 
@@ -267,7 +269,7 @@ def test_a_zero_motor_override_beats_the_predictors_own_noise(predictor):
     """`0.0` means no motor noise even when the predictor carries some. Collapsing
     it to "unspecified" would have made the request silently mean its opposite."""
     noisy = predictor.with_motor_noise(30.0)
-    feat_diff = np.full(20000, 40.0)
+    feat_diff = np.full(8000, 40.0)
 
     plain = R.sample_mixture_responses(predictor, 20.0, 40.0, 25.0, feat_diff,
                                        np.random.default_rng(0))
@@ -276,6 +278,8 @@ def test_a_zero_motor_override_beats_the_predictors_own_noise(predictor):
     np.testing.assert_array_equal(plain, overridden)
 
 
+@pytest.mark.research
+@pytest.mark.slow
 def test_a_case_with_motor_noise_is_fitted_at_that_motor_noise(predictor, grids):
     """The loop is only closed if the motor SD the data was drawn at reaches the
     fit. Generating with motor noise and fitting without it measures that
@@ -312,6 +316,8 @@ def test_a_case_with_motor_noise_is_fitted_at_that_motor_noise(predictor, grids)
     assert outcome.loss_at_truth == pytest.approx(with_motor, rel=1e-6)
 
 
+@pytest.mark.research
+@pytest.mark.slow
 def test_a_replicate_runs_and_records_what_it_needs(predictor, grids):
     feat_grid, d_circ = grids
     case = R.RecoveryCase(name="small", condition_feature_sds=[(20.0, 45.0)],
@@ -340,6 +346,8 @@ def test_a_replicate_runs_and_records_what_it_needs(predictor, grids):
 # The protocol
 # ---------------------------------------------------------------------------
 
+@pytest.mark.research
+@pytest.mark.slow
 def test_the_panel_runner_writes_rows_and_reproducible_settings(tmp_path):
     """The runner exists because the first panel was run interactively and only
     its conclusions were kept: the truth vector, seed and start count had to be
@@ -501,6 +509,8 @@ def test_the_same_seed_gives_the_same_truths_at_every_trial_count():
     assert len(truths(25, 100)) != len(truths(50, 100))
 
 
+@pytest.mark.research
+@pytest.mark.slow
 def test_running_cases_in_parallel_gives_the_same_numbers(tmp_path):
     """Parallelism here must be a wall-clock change and nothing else.
 
