@@ -14,7 +14,7 @@ diagnostics and the NLL.
 
 Usage (from the repo root)::
 
-    PYTHONPATH=. python continuous_density/evaluate.py \
+    PYTHONPATH=. python -m development.wnm_transition.evaluate \
         --model $DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k8.pkl \
         --reference $DEMIXING_ARTIFACT_ROOT/continuous_density/validation.npz \
         --out $DEMIXING_ARTIFACT_ROOT/continuous_density/eval_k8.csv
