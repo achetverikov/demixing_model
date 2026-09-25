@@ -1735,7 +1735,7 @@ def _plot_log_surface(prediction_backend, params, feat_grid, mu1_grid):
 
 def create_pdf_slice_plots(
     extended_results: Dict,
-    global_optimizer,
+    prediction_backend,
     output_dir: str,
     circ_space: int = 360,
     optimizer_names=None,
@@ -1801,7 +1801,7 @@ def create_pdf_slice_plots(
             for subject_id, result in subject_list:
                 params = np.array(result[f'{optimizer_name}_fitted_params'])
                 log_surf = _plot_log_surface(
-                    global_optimizer, params, feat_grid, mu1_grid)
+                    prediction_backend, params, feat_grid, mu1_grid)
                 fd0 = feat_diffs_model[0]
                 _, E0, asym0 = _model_slice(log_surf, feat_grid, mu1_grid, fd0, weights_sd_model)
                 dissoc = int((E0 < 0 and asym0 > 0) or (E0 > 0 and asym0 < 0))
