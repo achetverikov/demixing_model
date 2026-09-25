@@ -93,16 +93,16 @@ install.packages(c("arrow", "stringr", "data.table"))
 
 ## Verification
 
-Start with the focused tests, which do not regenerate the full model:
+Start with the maintained standalone pytest baseline:
 
 ```bash
-PYTHONPATH=. python -m pytest \
-  tests/test_config_import.py \
-  tests/test_flag_dispatch.py \
-  tests/test_lock_backend.py \
-  tests/test_object_store.py \
-  tests/test_pooled_bwcrps_export.py
+PYTHONPATH=. python -m pytest
 ```
+
+The default pytest configuration collects `tests/` and excludes
+cross-repository `integration`, transition `research`, and historical
+`legacy_surface` suites. See `tests/README.md` for the explicit commands to
+run those opt-in contracts.
 
 The current end-to-end user-path smoke fits the packaged WNM, exports results,
 generates plots, and runs the prediction API:
