@@ -407,7 +407,7 @@ def _validate_continuous_feature_domain(frame, x_col, y_col, high):
 def plan_continuous_prediction_capacities(subject_groups, optimizer, x_col, y_col,
                                           angle_scale_to_model, max_span=64):
     """Plan exact-coordinate compile shapes from this run's observed workload."""
-    from contextual_biases_database.bucketing import plan_workload_buckets
+    from workload_bucketing import plan_workload_buckets
 
     high = optimizer.predictor.domain["feat_diff"][1] / angle_scale_to_model
     groups = []
@@ -799,10 +799,8 @@ def run_fitting(
     resolved_checkpoint = resolve_input_path(checkpoint_path, results_dir)
 
     # One place decides what a checkpoint is, and it reads the file rather than
-    # its name.  This command drives the surface backend only: no search here
-    # consumes a wrapped-normal mixture yet, so a WNM artifact passed by mistake
-    # would fail somewhere inside the optimizer with a message about a missing
-    # key instead of about the wrong model family.
+    # its name. Continuous search is the normal WNM path; the lattice backends
+    # remain available only for explicit historical surface checkpoints.
     checkpoint_family = surrogate.detect_family(resolved_checkpoint)
     if search == 'continuous' and checkpoint_family != surrogate.FAMILY_WNM:
         raise ValueError(
@@ -1188,8 +1186,13 @@ if __name__ == '__main__':
                              'Production WNM fitting requires --bundle.')
     inputs.add_argument('--bundle',
                         help='Compiled contextual_biases_database bundle (production WNM).')
-    parser.add_argument('--checkpoint-path', default='pretrained/model_epoch1425_10ktrain_20samples.pkl',
-                        help='Path to trained NN checkpoint.')
+    parser.add_argument('--checkpoint-path', default=None,
+                        help='Optional surrogate artifact. By default the packaged production '
+                             'model for --n-samples is used.')
+    parser.add_argument('--n-samples', type=int, choices=surrogate.SUPPORTED_SAMPLE_COUNTS,
+                        default=20,
+                        help='Observer evidence samples per item. Selects the packaged production '
+                             'surrogate when --checkpoint-path is omitted.')
     parser.add_argument('--output-dir', required=True,
                         help='Directory for results.')
 
@@ -1229,14 +1232,10 @@ if __name__ == '__main__':
     parser.add_argument('--results-dir', default='results',
                         help='Base directory for relative output paths.')
     parser.add_argument('--search', choices=['hierarchical', 'exhaustive', 'continuous'],
-                        default='hierarchical',
-                        help='Search backend. Applies per METHOD: exhaustive is used only for '
-                             "'density'; every other method stays hierarchical regardless. "
-                             "'continuous' is bounded multistart gradient descent and requires a "
-                             'wrapped-normal-mixture checkpoint, since the surface backend has no '
-                             'gradients. The default is unchanged so every existing invocation '
-                             'keeps its current behaviour and the switch is visible in the '
-                             'command line that produced a result.')
+                        default='continuous',
+                        help='Search backend. Continuous WNM fitting is the default. Hierarchical '
+                             'and exhaustive are historical surface-grid backends and require an '
+                             'explicit surface checkpoint; exhaustive applies only to density.')
     parser.add_argument('--continuous-starts', type=int, default=DEFAULT_N_STARTS,
                         help='Multistart count for --search continuous (production: 64, run as '
                              'two sequential batches of 32).')
@@ -1257,21 +1256,24 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    # Production WNM fitting consumes a compiled bundle, which carries the trial
-    # geometry, scoring population, bandwidths and empirical targets already validated.
-    # The CSV importer derives those itself -- its own outlier filter, its own bias and
-    # dissimilarity columns -- so it stays on the legacy surface backend. `run_fitting`
-    # itself is unchanged and still reachable from recovery tooling and tests.
+    # CSV input is the normal end-user route. Compiled bundles are preferred when
+    # the same empirical population and target definitions must be shared across
+    # repositories/model families, as in contextual-bias model comparisons.
     if args.data_path and args.search == 'continuous':
-        parser.error(
-            "--search continuous is the production WNM backend and needs --bundle: "
-            "--data-path builds empirical semantics from the CSV instead of reading a "
-            "validated bundle. Compile the dataset into a contextual_biases_database "
-            "bundle first, or use a surface --search mode for legacy CSV work.")
+        log(
+            "Note: fitting WNM directly from CSV. This is appropriate for ordinary "
+            "single-model analyses. For controlled cross-model/cross-dataset comparisons, "
+            "prefer a validated contextual_biases_database --bundle so empirical targets "
+            "and scoring populations are fixed upstream.",
+            "yellow",
+        )
 
     try:
+        checkpoint_path = (args.checkpoint_path
+                           if args.checkpoint_path is not None
+                           else str(surrogate.production_checkpoint(args.n_samples)))
         common = dict(
-            checkpoint_path=args.checkpoint_path,
+            checkpoint_path=checkpoint_path,
             output_dir=args.output_dir,
             methods=args.include_methods,
             resume=args.resume,
