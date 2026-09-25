@@ -30,6 +30,7 @@ sys.path.insert(0, str(REPO_ROOT / "model_fit_to_data"))
 import jax.numpy as jnp
 from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import GridBasedMultiConditionOptimizer
 from model_fit_to_data.create_unified_subject_plots import (
+    _resolve_plot_circ_space,
     create_pdf_slice_plots,
     load_extended_results,
 )
@@ -50,10 +51,9 @@ def main():
                         help="Optional surrogate artifact override. It must match the fit fingerprint.")
     parser.add_argument("--output-dir", required=True,
                         help="Directory for output plots.")
-    parser.add_argument("--circ-space", type=int, default=360, choices=[180, 360],
-                        help="Circular space of the fitted data. Use 180 for axial orientation "
-                             "data fitted after doubling into model space; use 360 when data "
-                             "already match model space.")
+    parser.add_argument("--circ-space", type=int, default=None, choices=[180, 360],
+                        help="Optional circular-space override. By default it is inferred from "
+                             "the fitted result metadata; a conflicting override raises.")
     parser.add_argument("--optimizer", default="density",
                         choices=["density", "density_legacy", "expectation", "smoothed_exp",
                                  "likelihood", "crps", "balanced_crps", "bias_weighted_crps"],
@@ -66,6 +66,7 @@ def main():
     args = parser.parse_args()
 
     results = load_extended_results(args.results_path)
+    circ_space = _resolve_plot_circ_space(results, args.circ_space)
 
     # The stored parameters were produced by a particular surrogate, so use that
     # one rather than today's production artifact; --checkpoint-path overrides and
@@ -83,7 +84,7 @@ def main():
 
     create_pdf_slice_plots(
         results, prediction_backend, args.output_dir,
-        circ_space=args.circ_space,
+        circ_space=circ_space,
         optimizer_names=[args.optimizer],
         n_subjects=args.n_subjects,
         feat_diffs_data=args.feat_diffs,
