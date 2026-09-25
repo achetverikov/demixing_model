@@ -756,9 +756,6 @@ class GridBasedMultiConditionOptimizer:
             emp_density_weights_sd=self.emp_density_weights_sd,
             density_bandwidth_rule=self.density_bandwidth_rule,
             density_bandwidth_mode=self.density_bandwidth_mode,
-            degenerate_targets=degenerate_targets,
-            bwcrps_condition_targets=compute_bwcrps_condition_targets,
-            target_bias_curve_core=compute_target_bias_curve_core,
         )
         self.fitting_targets = targets
 
