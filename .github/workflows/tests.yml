@@ -39,6 +39,23 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
+      - name: Check private optimizer token
+        env:
+          JAX_LBFGSB_TOKEN: ${{ secrets.JAX_LBFGSB_TOKEN }}
+        run: |
+          if [ -z "$JAX_LBFGSB_TOKEN" ]; then
+            echo "::error::Add a repository secret named JAX_LBFGSB_TOKEN with read access to achetverikov/JAX_L-BFGS-B_port."
+            exit 1
+          fi
+
+      - name: Check out pinned JAX L-BFGS-B dependency
+        uses: actions/checkout@v4
+        with:
+          repository: achetverikov/JAX_L-BFGS-B_port
+          ref: 0350da1
+          path: .ci/JAX_L-BFGS-B_port
+          token: ${{ secrets.JAX_LBFGSB_TOKEN }}
+
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
@@ -50,10 +67,17 @@ jobs:
           with open("pyproject.toml", "rb") as handle:
               project = tomllib.load(handle)["project"]
           dependencies = [
-              *project["dependencies"],
-              *project["optional-dependencies"]["dev"],
+              dependency
+              for dependency in [
+                  *project["dependencies"],
+                  *project["optional-dependencies"]["dev"],
+              ]
+              if not dependency.lower().startswith("jax-lbfgsb ")
           ]
           subprocess.check_call([sys.executable, "-m", "pip", "install", *dependencies])
+          subprocess.check_call([
+              sys.executable, "-m", "pip", "install", ".ci/JAX_L-BFGS-B_port"
+          ])
           PY
 
       - name: Run maintained tests
@@ -76,6 +100,23 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
+      - name: Check private optimizer token
+        env:
+          JAX_LBFGSB_TOKEN: ${{ secrets.JAX_LBFGSB_TOKEN }}
+        run: |
+          if [ -z "$JAX_LBFGSB_TOKEN" ]; then
+            echo "::error::Add a repository secret named JAX_LBFGSB_TOKEN with read access to achetverikov/JAX_L-BFGS-B_port."
+            exit 1
+          fi
+
+      - name: Check out pinned JAX L-BFGS-B dependency
+        uses: actions/checkout@v4
+        with:
+          repository: achetverikov/JAX_L-BFGS-B_port
+          ref: 0350da1
+          path: .ci/JAX_L-BFGS-B_port
+          token: ${{ secrets.JAX_LBFGSB_TOKEN }}
+
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
@@ -87,10 +128,17 @@ jobs:
           with open("pyproject.toml", "rb") as handle:
               project = tomllib.load(handle)["project"]
           dependencies = [
-              *project["dependencies"],
-              *project["optional-dependencies"]["dev"],
+              dependency
+              for dependency in [
+                  *project["dependencies"],
+                  *project["optional-dependencies"]["dev"],
+              ]
+              if not dependency.lower().startswith("jax-lbfgsb ")
           ]
           subprocess.check_call([sys.executable, "-m", "pip", "install", *dependencies])
+          subprocess.check_call([
+              sys.executable, "-m", "pip", "install", ".ci/JAX_L-BFGS-B_port"
+          ])
           PY
 
       - name: Run WNM end-to-end smoke test
