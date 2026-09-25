@@ -12,13 +12,10 @@ import pandas as pd
 import numpy as np
 import jax
 import jax.numpy as jnp
-import pyarrow as pa
-import pyarrow.parquet as pq
 import argparse
 import sys
 import re
 from pathlib import Path
-import pickle
 from typing import Optional, Tuple
 
 from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
@@ -31,10 +28,8 @@ from shared.config import DENSITY_CURVE_SPEC, config
 from shared.mu1_axis import guard_surface_mu1_axis, periodic_integral
 from shared import surrogate
 from shared.prediction import predictor_from_surrogate
-from shared.utils import (AveragedSurface, SurfaceUnpickler,
-                          ensure_averaged_surface_file, gaussian_curve_smoother)
-
-RESULTS_DIR = "results"
+from shared.utils import (SurfaceUnpickler, ensure_averaged_surface_file,
+                          gaussian_curve_smoother)
 
 def _generate_mu2_bias_curve_batch(mu2_surfaces_batch: jnp.ndarray, target_feat_indices: jnp.ndarray) -> jnp.ndarray:
     """Generate mu2 bias curves for batch of mu2 surfaces using linear integration (not circular)."""
