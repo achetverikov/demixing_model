@@ -10,6 +10,11 @@ history rather than being repeated as future work here.
 - Selected the trajectory-trained K=12 conditional wrapped-normal mixture as
   the replacement for the surface neural-network surrogate. Packaged 20- and
   100-observation artifacts are addressed by observer sample count.
+- Promoted WNM to the shared production default for fresh predictions and
+  ordinary CSV fitting. The public Python/R prediction interfaces, Fischer-
+  Whitney demo, WNM tabular exporter, and a dedicated end-to-end smoke now use
+  that default. Compiled CDB bundles remain the stricter path for cross-model
+  comparisons rather than the prerequisite for ordinary users.
 - Selected one production optimizer policy for the four retained objectives:
   64 deterministic starts in two sequential batches of 32 using the pinned JAX
   L-BFGS-B port, float32 arrays, and `highest` matmul precision. The precision
