@@ -224,8 +224,8 @@ inside a single number. They are `NaN` where a component is undefined.
 
 ## Post-Fit Plots
 
-Use `create_unified_subject_plots.py` to generate unified subject plots and CSV
-exports from saved results. Bundle-native result keys are opaque analysis-cell
+Use `create_unified_subject_plots.py` to generate unified subject and group-summary
+plots from saved results. CSV export from this plotter has been retired. Bundle-native result keys are opaque analysis-cell
 IDs; the plotter reads subject, experiment, condition, and report-order labels
 from the stored `analysis_cell_values` metadata. The run fingerprint identifies
 and verifies the fitted surrogate, and the saved results identify the physical
@@ -237,7 +237,7 @@ curves or fitted SDs.
 python model_fit_to_data/create_unified_subject_plots.py \
   --results-path <output-dir>/extended_fit_results.pkl \
   --output-dir <output-dir> \
-  --summary-plots --csv-exports --no-individual-plots
+  --summary-plots --no-individual-plots
 ```
 
 The standalone PDF-slice command follows the same fingerprint identity and now
@@ -282,7 +282,7 @@ python model_fit_to_data/fit_model_to_data.py \
 
 - `fit_model_to_data.py` — fitting entry point for compiled WNM and legacy CSV runs
 - `compiled_bundle.py` — strict reader for bundle-native WNM inputs
-- `create_unified_subject_plots.py` — family-aware post-fit plots and general CSV exports
+- `create_unified_subject_plots.py` — family-aware post-fit subject, summary, and PDF-slice plots
 - `plot_pdf_slices.py` — family-aware conditional-density slice plots
-- `export_wnm_fit_curves.py` — compact production WNM curves, parameters, and trial likelihoods
+- `export_wnm_fit_curves.py` — sole production WNM tabular exporter for curves, parameters, and trial likelihoods
 - `grid_based_multi_condition_optimizer_jax_loops.py` — legacy surface optimizer core
