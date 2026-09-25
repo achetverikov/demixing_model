@@ -2,7 +2,7 @@
 
 Pure density mathematics — no simulator, no GPU work.
 
-Lives in the production suite rather than under ``continuous_density/tests``
+Lives in the maintained production test suite
 because ``wrapped_mixture_model`` is the production surrogate's density
 implementation: these are the contracts every fit, export and plot depends on,
 so they must run in the suite the project actually runs.
@@ -17,7 +17,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from continuous_density import wrapped_mixture_model as wm
+from shared import wnm as wm
 
 DENSE = jnp.arange(-180.0, 180.0, 0.05)
 DX = 0.05
