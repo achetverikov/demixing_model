@@ -24,9 +24,9 @@ from model_fit_to_data.run_fingerprint import file_sha256, read_fingerprint_side
 from shared import surrogate
 from shared.config import DENSITY_CURVE_SPEC, config
 from shared.prediction import mixture_plot_curves, predictor_from_surrogate
-from model_fit_to_data.wnm_scoring import trial_log_density
+from model_fit_to_data.wnm_scoring import SUPPORTED_METHODS, trial_log_density
 
-SELECTED_METHODS = ("likelihood", "bias_weighted_crps", "density", "smoothed_exp")
+SELECTED_METHODS = tuple(SUPPORTED_METHODS)
 MAX_LIKELIHOOD_REPLAY_ABS_DIFF = 0.01
 
 
@@ -111,7 +111,7 @@ def compiled_trial_likelihoods(results, predictor, identity, methods):
             pd.DataFrame(checks))
 
 
-def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
+def export_curves(results_dir: Path, checkpoint: Path | None, output_dir: Path,
                   methods=SELECTED_METHODS):
     sidecar = read_fingerprint_sidecar(results_dir)
     if sidecar is None:
@@ -119,10 +119,14 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
     payload = sidecar["payload"]
     if payload.get("surrogate_family") != surrogate.FAMILY_WNM:
         raise ValueError("direct WNM export requires a WNM fit fingerprint")
+    results_path = results_dir / "extended_fit_results.pkl"
+    checkpoint = surrogate.checkpoint_for_run(
+        results_path, explicit=checkpoint,
+        n_samples=payload.get("surrogate_n_samples"))
     if payload["checkpoint_sha256"] != file_sha256(checkpoint):
         raise ValueError("checkpoint does not match the fit fingerprint")
 
-    with open(results_dir / "extended_fit_results.pkl", "rb") as handle:
+    with open(results_path, "rb") as handle:
         results = pickle.load(handle)
     predictor = predictor_from_surrogate(
         surrogate.load_surrogate(checkpoint_path=checkpoint))
@@ -135,7 +139,15 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
     parameter_rows = []
     for condition, result in results.items():
         empirical = result["empirical_curves"]
-        values = result.get("analysis_cell_values", {})
+        values = dict(result.get("analysis_cell_values") or {})
+        if not values:
+            parts = str(condition).split("#", 2)
+            if len(parts) == 3:
+                values = {
+                    "subject_id": parts[0],
+                    "experiment_id": parts[1],
+                    "condition_id": parts[2],
+                }
         experiment = str(values.get("experiment_id", condition))
         subject = str(values.get("subject_id", result.get("fit_group_id", "")))
         source_condition = str(values.get("condition_id", condition))
@@ -152,7 +164,8 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
             parameters = np.asarray(result[key], dtype=float)
             parameter_rows.append({
                 "analysis_cell_id": condition,
-                "fit_group_id": result.get("fit_group_id", condition),
+                "fit_group_id": result.get(
+                    "fit_group_id", f"{subject}#{experiment}" if subject else condition),
                 "experiment": experiment,
                 "subject": subject, "condition": source_condition,
                 "report_order": report_order, "analysis_cell_values": cell_values,
@@ -171,7 +184,8 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
                 "loss": result[f"{method}_loss"],
                 f"{method}_loss": result[f"{method}_loss"],
                 **{f"eval_{objective}_loss": result[f"{method}_eval_{objective}_loss"]
-                   for objective in SELECTED_METHODS},
+                   for objective in SUPPORTED_METHODS
+                   if f"{method}_eval_{objective}_loss" in result},
                 "eval_smoothed_exp_loss_model_deg2":
                     result[f"{method}_eval_smoothed_exp_loss"],
                 "eval_smoothed_exp_loss_deg2":
@@ -298,7 +312,9 @@ def export_curves(results_dir: Path, checkpoint: Path, output_dir: Path,
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results-dir", required=True, type=Path)
-    parser.add_argument("--checkpoint", required=True, type=Path)
+    parser.add_argument("--checkpoint", default=None, type=Path,
+                        help="Optional WNM artifact override. By default the fit fingerprint "
+                             "selects the exact artifact that produced the results.")
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--methods", nargs="+", choices=SELECTED_METHODS,
                         default=list(SELECTED_METHODS))
