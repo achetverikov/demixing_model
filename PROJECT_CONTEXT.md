@@ -39,9 +39,9 @@ The pytest marker for these non-production checks is `development`, not `researc
 
 ## Compatibility namespace
 
-`continuous_density/` is being retired. Substantive development workflows and development-only tests have been moved out. The remaining files are temporary compatibility shims and should be removed once the maintained suite and the moved development code no longer depend on them.
+`continuous_density/` has been removed. Production WNM code now lives entirely in the maintained functional packages, and development-only transition/representation work lives under `development/`.
 
-Generated `continuous_density/validation_outputs/` has been removed.
+Generated `continuous_density/validation_outputs/` was removed before the namespace deletion.
 
 ## CI checkpoint
 
