@@ -7,6 +7,7 @@ history rather than being repeated as future work here.
 
 ## 2026-09 — WNM production transition
 
+- Established the pre-refactor test baseline boundary: fixed the stale CCC test import, restricted default pytest collection to maintained tests, isolated CDB checks as integration coverage, marked transition/surface-only suites as opt-in research or legacy coverage, removed obvious dead imports, and corrected the most misleading post-cutover documentation. Execution of the baseline remains a separate verification step.
 - Selected the trajectory-trained K=12 conditional wrapped-normal mixture as
   the replacement for the surface neural-network surrogate. Packaged 20- and
   100-observation artifacts are addressed by observer sample count.
