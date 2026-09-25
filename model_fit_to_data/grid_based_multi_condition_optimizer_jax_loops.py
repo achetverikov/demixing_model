@@ -41,6 +41,10 @@ from shared import surrogate
 from shared.prediction import legal_warmup_params
 from shared.utils import load_checkpoint, compute_single_density_asymmetry
 
+# Compatibility alias for callers that historically imported the neutral curve
+# loss helper from this surface optimizer. New code imports objectives directly.
+_compute_curve_losses = compute_curve_losses
+
 
 # DEGENERATE_TARGET_EPS, check_targets_fittable and the CCC definition live in
 # density_objective, so the hierarchical and exhaustive backends cannot drift
