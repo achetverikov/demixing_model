@@ -53,7 +53,7 @@ See [surface_simulator_for_predictions/README.md](surface_simulator_for_predicti
 
 ## Fit behavioral data
 
-### Run the demo
+### Run the legacy CSV/surface demo
 
 From the repository root:
 
@@ -61,14 +61,14 @@ From the repository root:
 python demo_fischer_whitney.py
 ```
 
-The script downloads the <a href="https://doi.org/10.1038/nn.3689" title="Fischer, J., &amp; Whitney, D. (2014). Serial dependence in visual perception. Nature Neuroscience, 17(5), 738–743. https://doi.org/10.1038/nn.3689">Fischer and Whitney (2014)</a> orientation dataset, prepares it for the model, fits both versions of the trained model using five fitting criteria, and saves plots and spreadsheets under:
+The script downloads the <a href="https://doi.org/10.1038/nn.3689" title="Fischer, J., &amp; Whitney, D. (2014). Serial dependence in visual perception. Nature Neuroscience, 17(5), 738–743. https://doi.org/10.1038/nn.3689">Fischer and Whitney (2014)</a> orientation dataset, prepares it for the legacy surface-NN fitting path, fits the 20- and 100-sample observer models using five fitting criteria, and saves plots and spreadsheets under:
 
 ```text
 results/fischer_whitney_20samples_circular/
 results/fischer_whitney_100samples_circular/
 ```
 
-The first run requires an internet connection to download the data. It performs more work than a minimal fit and can be slow on a CPU.
+The first run requires an internet connection to download the data. It performs more work than a minimal fit and can be slow on a CPU. This demo deliberately remains on the CSV/surface replay path; production WNM analyses use compiled bundles as described below.
 
 ![Empirical bias with a representative Demixing Model fit](docs/images/data_fitting_example.png)
 
@@ -104,9 +104,9 @@ python model_fit_to_data/fit_model_to_data.py \
 
 For orientation experiments, add `--circ-space 180`: orientations repeat after 180°, stimulus differences span 0–90°, and response errors span ±90°. For color, direction, or another variable defined around a full circle, keep the 360° default. This choice is important because it changes how angles are represented inside the model.
 
-Useful options include `--min-trials`, `--include-outliers`, and `--no-resume`. The default `density` criterion matches how the asymmetry of the response distribution changes with stimulus dissimilarity. Use `expectation` when the scientific target is specifically the mean bias curve shown in the example figure. The [fitting documentation](model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md) explains all eight criteria and when they differ, along with the two search backends and the fingerprint that stops results computed different ways from being mixed.
+Useful options include `--min-trials`, `--include-outliers`, and `--no-resume`. The default `density` criterion matches how the asymmetry of the response distribution changes with stimulus dissimilarity. Use `expectation` when the scientific target is specifically the mean bias curve shown in the example figure. The [fitting documentation](model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md) explains all eight criteria and when they differ, along with the surface and continuous search paths and the fingerprint that stops results computed different ways from being mixed.
 
-The main result file contains the fitted parameters, losses, and predicted curves. A progress file allows an interrupted analysis to continue, and a run-fingerprint file records how the results were produced so a later run cannot append fits computed under different settings. After generating plots and exports, the folder will look like this:
+The main result file contains fitted parameters, losses, stored empirical targets, and the metadata needed to reproduce predictions. Predicted curves are recomputed from the fingerprinted surrogate rather than stored as an unversioned cache. A progress file allows an interrupted analysis to continue, and a run-fingerprint file records how the results were produced so a later run cannot append fits computed under different settings. After generating plots and exports, the folder will look like this:
 
 ```text
 results/my_study/
@@ -162,7 +162,12 @@ units (`*_deg`, `*_deg2`); the unsuffixed legacy SD columns remain model degrees
 - **20 vs. 100 samples per item:** the number of noisy internal evidence samples the model assumes are available for separating the two representations. This is a theoretical assumption, not the number of experimental trials. See [pretrained/README.md](pretrained/README.md) for technical training details.
 - **Likelihood surface:** the model's full predicted distribution of response errors across levels of stimulus dissimilarity for one parameter combination.
 
-The included models were trained on circular 360° model geometry over `sd_feat1`, `sd_feat2`, and `sd_ident` values from 5° to 200°. Axial 180° behavioral data are transformed into that model space by the fitting interface.
+The included model families use circular 360° model geometry. Their validated
+parameter domains are not identical: the legacy surface NN starts at 5° on all
+three SD axes, while the WNM extends the feature-SD axes to 2.5° and retains a
+5° lower bound for spatial/identifiability SD. The fitting interface reads bounds
+from the selected surrogate. Axial 180° behavioral data are transformed into
+model space before fitting.
 
 ## Advanced use: raw surfaces and the full pipeline
 
