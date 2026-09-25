@@ -1766,7 +1766,7 @@ def create_pdf_slice_plots(
         feat_diffs_data = [round(fd / 2) * 2
                            for fd in np.linspace(fd_max * 0.05, fd_max * 0.50, 4)]
 
-    # Convert to model space for NN lookup
+    # Convert to model space for surrogate evaluation
     feat_diffs_model = [fd / angle_display_scale for fd in feat_diffs_data]
     weights_sd_model = weights_sd / angle_display_scale  # scale sigma too
 
