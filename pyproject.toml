@@ -32,11 +32,11 @@ cuda = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not integration and not research and not legacy_surface'"
+addopts = "-m 'not integration and not development and not legacy_surface'"
 markers = [
   "integration: requires sibling repositories or external compiled artifacts",
   "legacy_surface: historical surface-NN reproduction contract",
-  "research: transition, optimizer-comparison, or representation research rather than maintained runtime coverage",
+  "development: development-only transition, optimizer-comparison, recovery, or representation checks",
   "slow: substantially slower than ordinary unit/contract tests",
   "gpu: intended for GPU-backed validation",
 ]
