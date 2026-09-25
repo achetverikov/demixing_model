@@ -1185,7 +1185,8 @@ if __name__ == '__main__':
                         help='Legacy CSV input: surface backend and recovery tooling only. '
                              'Production WNM fitting requires --bundle.')
     inputs.add_argument('--bundle',
-                        help='Compiled contextual_biases_database bundle (production WNM).')
+                        help='Compiled contextual_biases_database bundle for controlled '
+                             'cross-model/cross-dataset analyses.')
     parser.add_argument('--checkpoint-path', default=None,
                         help='Optional surrogate artifact. By default the packaged production '
                              'model for --n-samples is used.')
@@ -1286,7 +1287,7 @@ if __name__ == '__main__':
             continuous_seed=args.continuous_seed,
         )
         if args.bundle:
-            if args.search not in {'hierarchical', 'continuous'}:
+            if args.search != 'continuous':
                 raise ValueError("--bundle uses the continuous WNM backend")
             run_compiled_fitting(bundle_path=args.bundle, **common)
         else:
