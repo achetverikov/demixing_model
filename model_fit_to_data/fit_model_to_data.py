@@ -62,7 +62,6 @@ except ModuleNotFoundError:  # imported as `model_fit_to_data.fit_model_to_data`
     )
 from continuous_fit import ContinuousEngine
 from continuous_optimizer import DEFAULT_N_STARTS
-from shared import prediction as prediction_module
 from shared import surrogate
 from shared.config import DENSITY_CURVE_SPEC
 from shared.utils import filter_data_for_fitting, resolve_input_path, resolve_results_path
