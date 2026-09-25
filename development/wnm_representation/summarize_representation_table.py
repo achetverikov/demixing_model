@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from continuous_density.compare_local_representations import comparison_table
+from development.wnm_representation.compare_local_representations import comparison_table
 
 
 def parameter_count(family: str, size: int) -> int:
