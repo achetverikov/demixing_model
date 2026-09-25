@@ -216,10 +216,11 @@ python model_fit_to_data/plot_pdf_slices.py \
   --optimizer density
 ```
 
-For production WNM exports, `export_wnm_fit_curves.py` is the compact,
-bundle-aware output path. It preserves analysis-cell and fit-group identity,
-explicit model/physical angular units, direct WNM curves, and trial-likelihood
-replay checks.
+For WNM tabular exports, `export_wnm_fit_curves.py` is the single output
+path. It writes fitted parameters and direct analytic curves for both ordinary
+CSV and compiled-bundle fits. Compiled bundles additionally provide stable
+analysis-cell, fit-group, and row identities, so the exporter can write
+per-trial likelihood products and replay checks for those runs.
 
 ---
 
