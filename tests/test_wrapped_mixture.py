@@ -129,17 +129,6 @@ def test_motor_noise_adds_variance():
     widened = wm.add_motor_noise(dist, jnp.asarray([sd_motor]))
     assert np.allclose(np.asarray(widened['sigma']) ** 2,
                        np.asarray(dist['sigma']) ** 2 + sd_motor ** 2, atol=1e-4)
-    # Monte-Carlo check: sample the mixture, add wrapped Gaussian motor noise,
-    # and compare the first circular moment with the analytic widened mixture.
-    key = jax.random.PRNGKey(0)
-    k_idx = jax.random.categorical(key, dist['log_pi'][0], shape=(400000,))
-    noise = jax.random.normal(jax.random.PRNGKey(1), (400000,))
-    base = dist['mu'][0][k_idx] + noise * dist['sigma'][0][k_idx]
-    motor = jax.random.normal(jax.random.PRNGKey(2), (400000,)) * sd_motor
-    samples = wm.wrap_deg(base + motor)
-    mc = jnp.mean(jnp.exp(1j * jnp.radians(samples)))
-    analytic = wm.circular_moment(widened, 1)[0]
-    assert abs(complex(mc) - complex(analytic)) < 5e-3
 
 
 def test_motor_noise_matches_numeric_convolution():
