@@ -252,6 +252,10 @@ def test_the_two_feature_sds_share_one_interval():
 # Exactly two production artifacts, selected by observer model
 # ---------------------------------------------------------------------------
 
+def test_wnm_is_the_production_family():
+    assert surrogate.production_family() == surrogate.FAMILY_WNM
+
+
 def test_exactly_two_checkpoints_are_production_at_a_time():
     """One per observer model, and one switch that says which family they come
     from. A caller asks by n_samples; nothing downstream should name a file."""
