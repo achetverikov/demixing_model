@@ -39,7 +39,7 @@ import numpy as np
 
 from shared.mu1_axis import (mu1_cell_width, mu1_grid, mu1_grid_np,
                              periodic_integral, sign_masks)
-from shared.utils import gaussian_curve_smoother
+from shared.circular import gaussian_curve_smoother
 
 #: Component separation on the spatial axis, in model degrees.  Hardcoded at
 #: every production call site of the simulator, and the reason d-prime and
