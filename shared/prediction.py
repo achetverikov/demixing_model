@@ -386,7 +386,7 @@ class WrappedMixturePredictor(BiasPredictor):
         self.n_samples = int(n_samples)
         self.artifact = artifact
         self.meta = dict(meta or {})
-        self.sd_motor = validate_motor_sd(sd_motor)
+        self.sd_motor = float(validate_motor_sd(sd_motor))
         self.n_wraps = int(n_wraps)
         self.arc_wraps = int(arc_wraps)
         self.domain = domain_from_meta(self.meta)
@@ -403,7 +403,7 @@ class WrappedMixturePredictor(BiasPredictor):
                                  artifact=self.artifact, sd_motor=self.sd_motor)
 
     def with_motor_noise(self, sd_motor) -> "WrappedMixturePredictor":
-        sd_motor = validate_motor_sd(sd_motor)
+        sd_motor = float(validate_motor_sd(sd_motor))
         return WrappedMixturePredictor(
             self.model, self.variables, self.n_samples, self.artifact, self.meta,
             sd_motor=sd_motor, n_wraps=self.n_wraps, arc_wraps=self.arc_wraps)
