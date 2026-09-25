@@ -44,8 +44,8 @@ operational security task, independent of the legacy surface pipeline.
 ## Explicitly not planned
 
 - Further surface-NN retraining, circular-axis migration, search refinement,
-  browser integration, parity work, or promotion analysis. The surface NN is a
-  legacy backend being replaced by WNM.
+  browser integration, parity work, or promotion analysis. WNM is the default
+  backend; the surface NN remains only for explicit historical reproduction.
 - Revival of the retired hard-binned `expectation` objective.
 - Cleanup of the surface-NN motor-noise density floor unless needed solely to
   reproduce a historical artifact.
