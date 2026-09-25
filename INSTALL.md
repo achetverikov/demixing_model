@@ -104,7 +104,15 @@ PYTHONPATH=. python -m pytest \
   tests/test_pooled_bwcrps_export.py
 ```
 
-The smoke scripts additionally exercise simulation, averaging, network training, and fitting. They are compute-heavy and should normally run on a GPU:
+The current end-to-end user-path smoke fits the packaged WNM, exports results,
+generates plots, and runs the prediction API:
+
+```bash
+PYTHON_BIN=python bash tests/run_smoke_wnm.sh
+```
+
+The remaining smoke scripts exercise the historical simulation/surface-training
+pipeline and are substantially more compute-heavy:
 
 ```bash
 PYTHON_BIN=python bash tests/run_smoke_pipeline.sh
