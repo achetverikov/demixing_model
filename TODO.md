@@ -34,10 +34,12 @@ dissolved by moving its production pieces into the repository's functional
 layers: simulator/training-data generation, surrogate training/packaging,
 shared WNM runtime math, fitting/scoring, and explicitly historical research.
 
-The audit's pre-test source hygiene is implemented: the stale CCC test is fixed,
-pytest has a maintained default collection boundary, CDB checks are isolated as
-integration tests, and transition/surface-only suites are explicit opt-ins.
-Next establish the green baseline by running the maintained pytest suite and
+The audit's pre-test source hygiene is implemented. Before declaring the
+baseline green, simplify and speed the suite according to
+[`TEST_SUITE_IMPROVEMENT_PLAN.md`](TEST_SUITE_IMPROVEMENT_PLAN.md): remove
+confounded/duplicated tests, collapse repeated fits into shared fixtures, reduce
+oversized numerical fixtures, and add `tests/AGENTS.md` with rules for how new
+tests are classified and added. Then run the maintained pytest suite and
 `tests/run_smoke_wnm.sh`. Only after that should the architectural moves begin,
 with tests between stages.
 
