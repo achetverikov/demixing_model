@@ -72,6 +72,7 @@ def test_digest_is_stable_and_field_order_independent(run_files):
     assert rf.fingerprint_digest(payload) == rf.fingerprint_digest(shuffled)
 
 
+@pytest.mark.integration
 def test_compiled_fingerprint_pins_bundle_products(run_files, tmp_path):
     _, checkpoint, _ = run_files
     bundle = tmp_path / "bundle"
