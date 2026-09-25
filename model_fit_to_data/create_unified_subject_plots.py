@@ -1749,7 +1749,7 @@ def create_unified_plots_with_summaries(
         results_dir: str = RESULTS_DIR,
         circ_space: Optional[int] = None,
 ) -> None:
-    """Create unified subject plots and summary exports.
+    """Create unified subject, group-summary, and optional PDF-slice plots.
 
     Args:
         n_samples: Training sample count used for checkpoints.
@@ -1764,7 +1764,7 @@ def create_unified_plots_with_summaries(
             objective during fitting; `density` is 1 - CCC and has no such term.
         results_path: Optional path to extended_fit_results.pkl.
         checkpoint_path: Optional checkpoint path for loading the model.
-        output_dir: Optional output directory for plots/exports.
+        output_dir: Optional output directory for plots.
         results_dir: Base directory for resolving relative paths.
         circ_space: Optional display-period override. Normally inferred from
             stored fit metadata; a conflicting override raises.
