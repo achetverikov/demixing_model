@@ -24,9 +24,10 @@ history rather than being repeated as future work here.
   curve exports, and production-bundle coverage tests.
 - Completed the maintained result/plot consumer transition: unified plots now
   recover bundle-native subject/experiment/condition labels from stored
-  `analysis_cell_values`, preserve report-order pairing, and the standalone
-  PDF-slice command evaluates WNM fits directly through the run-fingerprinted
-  surrogate instead of requiring a surface optimizer.
+  `analysis_cell_values`, preserve report-order pairing, infer and validate the
+  saved physical circular period, and the standalone PDF-slice command evaluates
+  WNM fits directly through the run-fingerprinted surrogate instead of requiring
+  a surface optimizer.
 - Added checksum-keyed resumable recovery and simulation stages after the audit
   found that earlier shard reuse was not tied to the producing code.
 - The earlier promotion gate compared WNM against the surface NN. The decision
