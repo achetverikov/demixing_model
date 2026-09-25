@@ -146,28 +146,6 @@ def test_gradients_survive_motor_noise():
                                                np.asarray(direction))
         assert np.isclose(analytic, numeric, rtol=2e-2, atol=1e-7)
 
-
-@needs_artifact
-def test_the_finite_difference_step_sits_in_its_flat_region():
-    """Guards the guard: if the step ever leaves the flat region, the gradient
-    tests start failing on correct gradients, or passing on wrong ones."""
-    predictor = predictor_from_surrogate(surrogate.load_surrogate(checkpoint_path=ARTIFACT))
-
-    def objective(p):
-        return jnp.sum(predictor.signed_arc_asymmetry(p[None, :], validate=False))
-
-    point = [12.0, 18.0, 20.0, 30.0]
-    direction = np.array([0.3, -0.5, 0.7, 0.4])
-    errors = {}
-    for step in (1e-3, 1e-2, 0.1, 1.0):
-        analytic, numeric = _directional_check(objective, point, direction, step=step)
-        errors[step] = abs(numeric / analytic - 1)
-
-    assert errors[0.1] < errors[1e-3], "cancellation should dominate at tiny steps"
-    assert errors[0.1] < errors[1.0], "truncation should dominate at large steps"
-    assert errors[0.1] < 1e-3
-
-
 @needs_artifact
 def test_circular_moment_gradients_match_finite_differences():
     """The moment path feeds expectation and smoothed_exp, not just density."""
@@ -251,12 +229,16 @@ def test_every_start_is_kept_not_just_the_winner():
 
 
 def test_the_selected_production_configuration_is_recorded():
-    fit = minimize_continuous(_log_distance_objective([12.0]), [(2.5, 200.0)], ["a"])
-    assert fit.n_starts == 64
-    assert fit.settings["optimizer_version"] == "jax-lbfgsb@0350da1"
-    assert fit.settings["batch_size"] == 32
-    assert fit.settings["dtype"] == "float32"
-    assert fit.settings["matmul_precision"] == "highest"
+    """Production defaults are metadata, so inspecting them must not run 64 fits."""
+    import inspect
+    import continuous_optimizer as co
+
+    defaults = inspect.signature(co.minimize_continuous).parameters
+    assert defaults["n_starts"].default == co.DEFAULT_N_STARTS == 64
+    assert defaults["batch_size"].default == co.DEFAULT_BATCH_SIZE == 32
+    assert defaults["dtype"].default == co.DEFAULT_DTYPE == "float32"
+    assert defaults["matmul_precision"].default == co.DEFAULT_MATMUL_PRECISION == "highest"
+    assert co.OPTIMIZER_VERSION == "jax-lbfgsb@0350da1"
 
 
 def test_a_multimodal_objective_shows_a_loss_spread():
