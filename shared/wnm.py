@@ -313,14 +313,24 @@ def save_model(path, variables, model: ConditionalWrappedMixture, meta: dict):
                      'meta': meta}, f)
 
 
-def load_model(path):
-    """Inverse of :func:`save_model`; returns ``(model, variables, meta)``."""
-    import pickle
+def load_model(path=None, *, blob=None):
+    """Load a packaged WNM artifact as (model, variables, meta).
 
-    with open(path, 'rb') as f:
-        blob = pickle.load(f)
-    return (ConditionalWrappedMixture(**blob['model_config']),
-            blob['variables'], blob['meta'])
+    A preloaded blob may be supplied by the family resolver so artifact
+    detection and model reconstruction share one parse rather than maintaining
+    a second schema implementation or opening the same file twice.
+    """
+    if blob is None:
+        if path is None:
+            raise ValueError("load_model needs either path or blob")
+        import pickle
+        with open(path, "rb") as handle:
+            blob = pickle.load(handle)
+    return (
+        ConditionalWrappedMixture(**blob["model_config"]),
+        blob["variables"],
+        dict(blob.get("meta") or {}),
+    )
 
 
 def nll(model, variables, params, bias, n_wraps: int = 4):
