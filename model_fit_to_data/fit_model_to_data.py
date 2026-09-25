@@ -34,32 +34,18 @@ import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 
-try:
-    from density_objective import DEGENERATE_TARGET_EPS
-except ModuleNotFoundError:
-    from model_fit_to_data.density_objective import DEGENERATE_TARGET_EPS
-try:
-    import curve_cache
-    from exhaustive_density import fit_exhaustive_density
-    from run_fingerprint import (
-        StaleResultsError,
-        compute_compiled_run_fingerprint,
-        compute_run_fingerprint,
-        enforce_fingerprint,
-        write_fingerprint_sidecar,
-    )
-except ModuleNotFoundError:  # imported as `model_fit_to_data.fit_model_to_data`
-    from model_fit_to_data import curve_cache
-    from model_fit_to_data.exhaustive_density import fit_exhaustive_density
-    from model_fit_to_data.run_fingerprint import (
-        StaleResultsError,
-        compute_compiled_run_fingerprint,
-        compute_run_fingerprint,
-        enforce_fingerprint,
-        write_fingerprint_sidecar,
-    )
-from continuous_fit import ContinuousEngine
-from continuous_optimizer import DEFAULT_N_STARTS
+from model_fit_to_data import curve_cache
+from model_fit_to_data.continuous_fit import ContinuousEngine
+from model_fit_to_data.continuous_optimizer import DEFAULT_N_STARTS
+from model_fit_to_data.density_objective import DEGENERATE_TARGET_EPS
+from model_fit_to_data.exhaustive_density import fit_exhaustive_density
+from model_fit_to_data.run_fingerprint import (
+    StaleResultsError,
+    compute_compiled_run_fingerprint,
+    compute_run_fingerprint,
+    enforce_fingerprint,
+    write_fingerprint_sidecar,
+)
 from shared import surrogate
 from shared.config import DENSITY_CURVE_SPEC
 from shared.behavioral_data import filter_data_for_fitting
