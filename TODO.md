@@ -34,14 +34,21 @@ dissolved by moving its production pieces into the repository's functional
 layers: simulator/training-data generation, surrogate training/packaging,
 shared WNM runtime math, fitting/scoring, and explicitly historical research.
 
-The audit's pre-test source hygiene is implemented. Before declaring the
-baseline green, simplify and speed the suite according to
-[`TEST_SUITE_IMPROVEMENT_PLAN.md`](TEST_SUITE_IMPROVEMENT_PLAN.md): remove
-confounded/duplicated tests, collapse repeated fits into shared fixtures, reduce
-oversized numerical fixtures, and add `tests/AGENTS.md` with rules for how new
-tests are classified and added. Then run the maintained pytest suite and
-`tests/run_smoke_wnm.sh`. Only after that should the architectural moves begin,
-with tests between stages.
+The pre-refactor test cleanup and maintained WNM baseline have been completed.
+
+Phase B is now in progress. The first dependency cut is implemented: neutral
+curve losses, BWCRPS scoring, and empirical BWCRPS/binned-bias target builders
+live in `model_fit_to_data/objectives.py` and
+`model_fit_to_data/empirical_targets.py`. Both WNM and historical surface
+fitting consume those modules, and WNM engine construction no longer imports
+the historical surface optimizer. Compatibility aliases remain on the surface
+module for external reproduction/parity callers.
+
+Next Phase B items:
+
+- split lightweight maintained helpers out of `shared/utils.py`;
+- normalize `model_fit_to_data` package/import structure;
+- centralize result identity, hashing, and WNM likelihood export/rescoring.
 
 ## 3. Decide the zero-width pooled-SD convention
 
