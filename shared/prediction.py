@@ -50,6 +50,31 @@ SPATIAL_SEPARATION = 42.0
 PARAM_ORDER = ("sd_feat1", "sd_feat2", "sd_spat", "feat_diff")
 
 
+def validate_motor_sd(sd_motor, *, name="sd_motor"):
+    """Validate a concrete motor-noise SD while allowing optimizer tracers.
+
+    Public prediction calls may pass a concrete override directly to
+    :meth:`WrappedMixturePredictor.distribution`. Those values need the same
+    contract as :meth:`with_motor_noise`: finite, non-negative, with zero legal.
+    During continuous fitting the override is a JAX tracer whose admissible range
+    is enforced by the optimizer bounds, so it must stay on the differentiable
+    path rather than being converted to a host scalar here.
+    """
+    if isinstance(sd_motor, jax.core.Tracer):
+        return sd_motor
+    values = np.asarray(sd_motor)
+    if values.ndim != 0:
+        raise ValueError(f"{name} must be a scalar, got shape {values.shape}")
+    value = float(values)
+    if not np.isfinite(value):
+        raise ValueError(f"{name} must be finite, got {value!r}")
+    if value < 0:
+        raise ValueError(
+            f"{name} must be non-negative, got {value!r}: motor noise enters as a "
+            "variance, so a negative SD is silently identical to its positive twin.")
+    return value
+
+
 def dprime_from_sd_spat(sd_spat):
     """``d' = 42 / sd_spat``.
 
@@ -361,7 +386,7 @@ class WrappedMixturePredictor(BiasPredictor):
         self.n_samples = int(n_samples)
         self.artifact = artifact
         self.meta = dict(meta or {})
-        self.sd_motor = float(sd_motor)
+        self.sd_motor = validate_motor_sd(sd_motor)
         self.n_wraps = int(n_wraps)
         self.arc_wraps = int(arc_wraps)
         self.domain = domain_from_meta(self.meta)
@@ -378,17 +403,7 @@ class WrappedMixturePredictor(BiasPredictor):
                                  artifact=self.artifact, sd_motor=self.sd_motor)
 
     def with_motor_noise(self, sd_motor) -> "WrappedMixturePredictor":
-        # Variances add, so the sign is squared away: -20 and +20 would give
-        # identical densities while the identity recorded -20, and a NaN would
-        # propagate into every downstream number as a plausible-looking absence.
-        sd_motor = float(sd_motor)
-        if not np.isfinite(sd_motor):
-            raise ValueError(f"sd_motor must be finite, got {sd_motor!r}")
-        if sd_motor < 0:
-            raise ValueError(
-                f"sd_motor must be non-negative, got {sd_motor!r}: motor noise enters as a "
-                "variance, so a negative SD is silently identical to its positive twin while "
-                "being recorded as negative.")
+        sd_motor = validate_motor_sd(sd_motor)
         return WrappedMixturePredictor(
             self.model, self.variables, self.n_samples, self.artifact, self.meta,
             sd_motor=sd_motor, n_wraps=self.n_wraps, arc_wraps=self.arc_wraps)
@@ -415,6 +430,10 @@ class WrappedMixturePredictor(BiasPredictor):
             validate_params(params, domain=self.domain, name=f"{self.artifact} inputs")
         dist = self.model.apply(self.variables, params)
         effective = self.sd_motor if sd_motor is None else sd_motor
+        # Concrete public overrides obey the same contract as with_motor_noise().
+        # Traced optimizer values bypass host validation and are constrained by
+        # the L-BFGS-B bounds instead.
+        effective = validate_motor_sd(effective, name="sd_motor override")
         # A *concrete* zero means "no motor noise" and is skipped entirely, so the
         # no-motor case stays bit-identical to a predictor built without one
         # rather than being convolved with a zero-width kernel. This holds for an
