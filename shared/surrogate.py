@@ -208,14 +208,10 @@ def find_run_fingerprint(path):
 
 
 def file_digest(path) -> str:
-    """SHA-256 of a file, matching what the run fingerprint records."""
-    import hashlib
+    """Compatibility alias for the shared streaming SHA-256 helper."""
+    from shared.hashing import file_sha256
 
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return file_sha256(path)
 
 
 def installed_checkpoints() -> list:
