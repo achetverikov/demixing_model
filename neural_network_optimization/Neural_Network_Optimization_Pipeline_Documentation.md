@@ -149,13 +149,14 @@ config.mu1_surface_shape = (180, 90)   # (bias_points, feat_diff_points)
 ```
 
 `--feat-bandwidth` is expressed in feature-difference **grid steps**, not degrees.
-The production grid advances by 2°, so the default `--feat-bandwidth 3` gives a
-nominal 6° Gaussian SD across neighboring simulated dissimilarities. This smoothing
+The historical deployed surface grid advances by 2°, so the default
+`--feat-bandwidth 3` gives a nominal 6° Gaussian SD across neighboring
+simulated dissimilarities. This smoothing
 is part of each training target and is consequently baked into the trained NN output.
 
 The mu1 axis is a half-open periodic grid, `[-180, 180)` in 2° cells. The
-production model is trained through a 128-row native decoder but always returns
-the configured 180-row periodic density. Feature difference is bounded rather
+historical surface model is trained through a 128-row native decoder but always
+returns the configured 180-row periodic density. Feature difference is bounded rather
 than circular.
 
 ## Warm-starting a completed run
