@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "neural_network_optimization"))
 sys.path.insert(0, str(REPO_ROOT / "model_fit_to_data"))
 
+import jax
 import jax.numpy as jnp
 from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import GridBasedMultiConditionOptimizer
 from model_fit_to_data.create_unified_subject_plots import (
@@ -34,6 +35,7 @@ from model_fit_to_data.create_unified_subject_plots import (
     create_pdf_slice_plots,
     load_extended_results,
 )
+from model_fit_to_data.run_fingerprint import read_fingerprint_sidecar
 from shared.prediction import predictor_from_surrogate
 
 
@@ -82,13 +84,22 @@ def main():
             str(checkpoint), {"dummy": dummy}, skip_motor_noise=True,
         )
 
-    create_pdf_slice_plots(
-        results, prediction_backend, args.output_dir,
-        circ_space=circ_space,
-        optimizer_names=[args.optimizer],
-        n_subjects=args.n_subjects,
-        feat_diffs_data=args.feat_diffs,
-    )
+    sidecar = read_fingerprint_sidecar(Path(args.results_path).parent)
+    payload = (sidecar or {}).get("payload", {})
+    density_curve_spec = payload.get("density_curve_spec", {})
+    weights_sd_model = float(density_curve_spec.get("emp_density_weights_sd", 20.0))
+    matmul_precision = payload.get("continuous_spec", {}).get(
+        "matmul_precision", "default")
+
+    with jax.default_matmul_precision(matmul_precision):
+        create_pdf_slice_plots(
+            results, prediction_backend, args.output_dir,
+            circ_space=circ_space,
+            optimizer_names=[args.optimizer],
+            n_subjects=args.n_subjects,
+            feat_diffs_data=args.feat_diffs,
+            weights_sd_model=weights_sd_model,
+        )
 
 
 if __name__ == "__main__":
