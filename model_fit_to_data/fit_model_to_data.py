@@ -124,11 +124,14 @@ console = Console(color_system="auto") if USE_RICH else None
 def _create_continuous_engine(checkpoint_path, *, corr_weight, skip_motor_noise,
                               continuous_starts, continuous_seed):
     from density_objective import degenerate_targets as _degenerate
-    from grid_based_multi_condition_optimizer_jax_loops import (
-        _compute_curve_losses as _curve_losses,
-        bwcrps_energy_score as _energy,
+    from empirical_targets import (
         compute_bwcrps_condition_targets as _bwcrps_targets,
-        compute_target_bias_curve_core as _bias_core)
+        compute_target_bias_curve_core as _bias_core,
+    )
+    from objectives import (
+        bwcrps_energy_score as _energy,
+        compute_curve_losses as _curve_losses,
+    )
     from shared.prediction import predictor_from_surrogate
 
     loaded = surrogate.load_surrogate(checkpoint_path=checkpoint_path)
