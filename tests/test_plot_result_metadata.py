@@ -1,7 +1,10 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from model_fit_to_data.create_unified_subject_plots import (
+    _resolve_plot_circ_space,
     _result_plot_identity,
     organize_results_by_subject,
 )
@@ -62,8 +65,32 @@ def test_legacy_plot_identity_fallback_is_unchanged():
     )
 
 
+def test_plot_circular_period_is_inferred_and_conflicts_raise():
+    results = {
+        "opaque-a": {"circ_space": 180},
+        "opaque-b": {"circ_space": 180.0},
+    }
+    assert _resolve_plot_circ_space(results) == 180
+    assert _resolve_plot_circ_space(results, 180) == 180
+    with pytest.raises(ValueError, match="disagrees"):
+        _resolve_plot_circ_space(results, 360)
+
+
+def test_plot_circular_period_rejects_mixed_result_sets():
+    with pytest.raises(ValueError, match="one circular period"):
+        _resolve_plot_circ_space({
+            "a": {"circ_space": 180},
+            "b": {"circ_space": 360},
+        })
+
+
 def test_standalone_pdf_plot_uses_wnm_backend_from_run_identity(monkeypatch, tmp_path):
-    results = {"opaque": {"density_fitted_params": [10.0, 20.0, 30.0, 0.0]}}
+    results = {
+        "opaque": {
+            "circ_space": 180,
+            "density_fitted_params": [10.0, 20.0, 30.0, 0.0],
+        }
+    }
     checkpoint = Path("pretrained/wnm_k12_20samples.pkl")
     loaded = SimpleNamespace(family=plot_pdf_slices.surrogate.FAMILY_WNM)
     predictor = object()
@@ -103,3 +130,4 @@ def test_standalone_pdf_plot_uses_wnm_backend_from_run_identity(monkeypatch, tmp
     assert calls["backend"] is predictor
     assert calls["output_dir"] == str(tmp_path)
     assert calls["kwargs"]["optimizer_names"] == ["bias_weighted_crps"]
+    assert calls["kwargs"]["circ_space"] == 180
