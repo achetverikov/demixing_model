@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Check the exhaustive backend against the 51-group reference optima.
+"""Historical surface-NN exhaustive-reference validation.
+
+This utility is retained to reproduce lattice-search diagnostics. Current WNM
+fitting uses the continuous optimizer and its maintained recovery framework.
+
+Check the exhaustive backend against the 51-group reference optima.
 
 ``reference_optima_temp.csv`` records the 1-degree-lattice optimum for all 51
 csh2026 subject x experiment groups, produced during the investigation that
