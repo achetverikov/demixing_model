@@ -22,7 +22,7 @@ reproduction and must be requested explicitly.
 
 ## Conditional wrapped-normal mixture (WNM)
 
-The replacement surrogate. Where the surface network emits a 180 x 90 log-density
+The production surrogate. Where the historical surface network emits a 180 x 90 log-density
 surface, these artifacts emit the parameters of a K-component wrapped-normal
 mixture over the component-1 bias, continuous in both the bias and the feature
 difference. They are not load-compatible with `shared/utils.py:load_checkpoint`,
