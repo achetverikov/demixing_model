@@ -371,6 +371,7 @@ production work is listed only in the repository `TODO.md`.
 Generated NPZs, checkpoints, CSVs, and figures belong under
 `$DEMIXING_ARTIFACT_ROOT/continuous_density/`; they are not shipped with or
 expected in a normal checkout. The prototype training and large evaluation
-artifacts remain separate from runtime code. The packaged WNM backend is
-integrated behind explicit surrogate selection while the surface NN remains the
-deployed default.
+artifacts remain separate from runtime code. Bundle-native production fits and
+their maintained result/plot consumers use the packaged WNM backend directly.
+The surface NN remains installed only for legacy replay and transition
+comparisons; current transition status is tracked in the root `TODO.md`.
