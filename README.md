@@ -113,19 +113,19 @@ results/my_study/
 ├── extended_fit_results.pkl        # complete reusable fit object
 ├── extended_run_fingerprint.json   # how these results were produced
 ├── extended_progress.json          # resume state
-├── csv_exports/                    # created by post-fit plotting
+├── csv_exports/                    # created by export_wnm_fit_curves.py
 ├── pdf_slice_plots/
 ├── summary_plots/
 └── unified_subject_plots/
 ```
 
-Generate plots and tabular exports after fitting:
+Generate plots after fitting:
 
 ```bash
 python model_fit_to_data/create_unified_subject_plots.py \
   --results-path results/my_study/extended_fit_results.pkl \
   --output-dir results/my_study \
-  --summary-plots --csv-exports --no-individual-plots
+  --summary-plots --no-individual-plots
 
 python model_fit_to_data/plot_pdf_slices.py \
   --results-path results/my_study/extended_fit_results.pkl \
@@ -157,7 +157,7 @@ python model_fit_to_data/export_wnm_fit_curves.py \
   --output-dir results/<dataset>/csv_exports
 ```
 
-The direct exporter writes provenance-bound parameters and curves plus
+`create_unified_subject_plots.py` is plotting-only. Tabular fit products are written only by `export_wnm_fit_curves.py`, which writes provenance-bound parameters and curves plus
 per-trial likelihoods evaluated at the compiled coordinates. It verifies that
 their summed likelihood reproduces the fitted objective under the run's recorded
 matrix-precision setting. Angular parameters and scores are exported in both
