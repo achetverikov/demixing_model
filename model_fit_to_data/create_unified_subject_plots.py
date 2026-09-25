@@ -515,6 +515,8 @@ def organize_results_by_subject(extended_results: Dict) -> Dict:
         })
 
     return subjects
+
+
 def prepare_all_subjects_data(
     subjects_data: Dict,
     prediction_backend,
