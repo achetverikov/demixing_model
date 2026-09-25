@@ -28,7 +28,7 @@ def main() -> None:
     common = ["--sd-feat1", repr(args.sd_feat1), "--sd-feat2", repr(args.sd_feat2),
               "--sd-ident", repr(args.sd_ident), "--component", str(args.component),
               "--split-seed", str(args.split_seed)]
-    subprocess.run([sys.executable, "-m", "continuous_density.bootstrap_local_metrics",
+    subprocess.run([sys.executable, "-m", "development.wnm_representation.bootstrap_local_metrics",
         str(args.reference), *map(str, metrics), *common, "--independent-indices",
         "--bootstrap", str(args.bootstrap), "--quiet",
         "--out", str(args.case_dir / "core_equivalence.json")], check=True)
