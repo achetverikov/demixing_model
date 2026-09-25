@@ -10,7 +10,7 @@ Usage (from the repo root)::
     PYTHONPATH=. python -m surrogate_training.wnm.train \
         --source sim_samples_10k_100samples_circular_em_fullcov_free_weights \
         --corpus-files 800 --corpus-sims 400 --components 8 \
-        --out $DEMIXING_ARTIFACT_ROOT/continuous_density/wnmix_k8.pkl
+        --out $DEMIXING_ARTIFACT_ROOT/wnm/wnmix_k8.pkl
 
 ``--source`` accepts either a corpus directory name under
 ``$DEMIXING_ARTIFACT_ROOT`` (grid parameters, free of new simulation cost) or an
@@ -114,7 +114,7 @@ def evaluate_mixed(loss_fn, variables, primary, augmentation,
 def trajectory_validation_metrics(model, variables, store, labels, n_wraps=4,
                                   min_resultant=.2):
     """Raw-NLL and maximum moment errors on fixed labeled trajectories."""
-    from continuous_density import evaluate as evaluate_mod
+    from surrogate_training.wnm import evaluation as evaluate_mod
 
     labels = np.asarray(labels)
     if labels.shape != (store.n_rows,):
