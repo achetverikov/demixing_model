@@ -282,7 +282,7 @@ class LoadedSurrogate:
             ``{'state', 'checkpoint_info'}`` dict from
             :func:`shared.utils.load_checkpoint`; for ``wnm`` a
             ``{'model', 'variables'}`` dict from
-            :func:`continuous_density.wrapped_mixture_model.load_model`.
+            :func:`shared.wnm.load_model`.
         meta: the artifact's recorded provenance.  Empty for historical surface
             checkpoints, which have none.
     """
@@ -345,7 +345,7 @@ def detect_family(path, blob=None) -> str:
         raise ValueError(
             f"{path} is a research WNM fit (variables + selected_step), not a production "
             "artifact: it records no architecture, so nothing can reconstruct the network "
-            "from it alone. Package it first with continuous_density/package_wnm_artifact.py.")
+            "from it alone. Package it first with surrogate_training/wnm/package_artifact.py.")
     raise ValueError(f"{path}: unrecognised checkpoint layout, keys {sorted(blob)}")
 
 
