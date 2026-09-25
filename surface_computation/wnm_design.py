@@ -456,7 +456,10 @@ def label_cases(bias_samples, n_modes_grid: int = 360, kappa: float = 40.0,
     m1 = z.sum(axis=1) / np.maximum(count, 1)
     m1 = np.where(count > 0, m1, np.nan + 1j * np.nan)
 
-    grid = np.linspace(-180.0, 180.0, n_modes_grid, endpoint=False)
+    # Diagnostic mode grid, not the model's mu1 reporting axis. Construct it
+    # explicitly as a half-open circular grid so no duplicated +180 endpoint can
+    # appear, while allowing a resolution independent of the model grid.
+    grid = -180.0 + np.arange(n_modes_grid, dtype=np.float64) * (360.0 / n_modes_grid)
     dens = circular_kde(b, grid, kappa=kappa, chunk=chunk)
     modes = [circular_modes(d, grid, min_mode_mass) for d in dens]
     summary = secondary_mode_summary(modes)
