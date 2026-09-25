@@ -105,10 +105,7 @@ def test_engine_records_bounded_sub_support_extrapolation(setup):
     values[:4, 0] = 0.25
     engine = ContinuousEngine(
         setup["predictor"], curve_losses=_compute_curve_losses,
-        energy_score=bwcrps_energy_score, degenerate_targets=degenerate_targets,
-        bwcrps_condition_targets=compute_bwcrps_condition_targets,
-        target_bias_curve_core=compute_target_bias_curve_core,
-        emp_density_weights_sd=20.0)
+        energy_score=bwcrps_energy_score, emp_density_weights_sd=20.0)
     engine.update_dataset({name: jnp.asarray(values)})
     assert engine.sub_support_summary == {"trial_count": 4, "minimum": 0.25}
     assert np.any(np.asarray(engine.targets.prediction_coordinates) == np.float32(0.25))
