@@ -1,7 +1,10 @@
 # Demixing Model
 
 Current planned work is listed only in `TODO.md`; completed and superseded
-transition work is summarized in `HISTORY.md`.
+transition work is summarized in `HISTORY.md`. The post-cutover repository
+architecture audit, including the planned dissolution of the temporary
+`continuous_density/` workspace, is in
+[`ARCHITECTURE_AUDIT.md`](ARCHITECTURE_AUDIT.md).
 
 The Demixing Model explains why a remembered/perceived/evaluated item can be biased toward or away from another item. The central idea is that the brain must separate two noisy, overlapping memory representations. Depending on how similar the items are and where the noise occurs, this separation can produce either attraction or repulsion. This is a normative, ideal-observer model: attraction or repulsion is unavoidable when the observer attempts to estimate the stimulus parameters accurately.
 
