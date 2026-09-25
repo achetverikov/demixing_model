@@ -7,7 +7,9 @@
 This document records an architecture audit of the Demixing Model repository
 after the wrapped-normal-mixture (WNM) runtime cutover. It is an audit and design
 reference, not a second live work plan. Accepted execution items should be tracked
-in the root `TODO.md`.
+in the root `TODO.md`. The concrete pre-refactor test cleanup, deletion, and
+runtime-reduction work is specified separately in
+[`TEST_SUITE_IMPROVEMENT_PLAN.md`](TEST_SUITE_IMPROVEMENT_PLAN.md).
 
 ## Executive summary
 
