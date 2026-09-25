@@ -34,7 +34,7 @@ from grid_based_multi_condition_optimizer_jax_loops import (
     DEGENERATE_TARGET_EPS,
     _compute_curve_losses,
 )
-from create_unified_subject_plots import _ccc_components
+from density_objective import ccc_components as _ccc_components
 
 
 def ccc_loss(pred, target):
