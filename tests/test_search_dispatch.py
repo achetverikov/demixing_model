@@ -25,15 +25,19 @@ for path in (ROOT, ROOT / "model_fit_to_data"):
 
 CHECKPOINT = ROOT / "pretrained" / "model_epoch1425_10ktrain_20samples.pkl"
 DATA = ROOT.parent / "example_data" / "moors_prepared.csv"
-pytestmark = pytest.mark.skipif(
-    not (CHECKPOINT.exists() and DATA.exists()), reason="needs checkpoint and example data")
 
 import curve_cache as cc
 import fit_model_to_data as F
 from grid_based_multi_condition_optimizer_jax_loops import GridBasedMultiConditionOptimizer
 from shared.config import config
 
-pytestmark = pytest.mark.legacy_surface
+pytestmark = [
+    pytest.mark.legacy_surface,
+    pytest.mark.skipif(
+        not (CHECKPOINT.exists() and DATA.exists()),
+        reason="needs checkpoint and example data",
+    ),
+]
 
 CACHE_STEP = 10.0
 #: Routing, not search quality. One coarse stage keeps a CPU run to seconds.
