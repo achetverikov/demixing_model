@@ -54,8 +54,7 @@ training and packaging live in `surrogate_training/wnm/`; simulation,
 continuous design, training-data generation, and legacy raw-sample import live
 in `surface_computation/`. Development-only transition validation now lives in
 `development/wnm_transition/`, and local representation experiments live in
-`development/wnm_representation/`. Their former `continuous_density/`
-production modules are compatibility shims only.
+`development/wnm_representation/`. The former `continuous_density/` namespace has now been removed.
 
 Completed Phase C cleanup:
 
@@ -68,10 +67,8 @@ Completed Phase C cleanup:
 Next Phase C items:
 
 - run the maintained suite after the development-tree move;
-- remove the remaining `continuous_density/` compatibility shims once no maintained
-  or development entry point depends on them;
-- run the maintained suite and WNM public-path smoke again after deleting the
-  compatibility namespace.
+- run the maintained suite and WNM public-path smoke after the namespace deletion;
+- fix any stale import or command references revealed by that final CI pass.
 
 ## 3. Decide the zero-width pooled-SD convention
 
