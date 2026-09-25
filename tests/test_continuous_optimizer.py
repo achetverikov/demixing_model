@@ -27,7 +27,7 @@ for path in (ROOT, ROOT / "model_fit_to_data"):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from continuous_density import wrapped_mixture_model as wm  # noqa: E402
+from shared import wnm as wm  # noqa: E402
 from continuous_optimizer import (  # noqa: E402
     ContinuousFit, build_bounds, condition_parameter_layout, dispersed_starts,
     minimize_continuous)
