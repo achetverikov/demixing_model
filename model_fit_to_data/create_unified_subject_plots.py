@@ -448,45 +448,66 @@ def display_condition_label(value: object) -> str:
     return text
 
 
+def _result_plot_identity(condition_name: str, result: Dict) -> Tuple[str, str, str]:
+    """Return subject, experiment, and condition labels for plotting.
+
+    Bundle-native WNM results use opaque analysis-cell IDs, so their scientific
+    labels must come from ``analysis_cell_values``. Legacy CSV/surface results
+    predate that metadata and retain their historical key parsing as a fallback.
+    Report-order cells are mapped to the established ``*_first``/``*_second``
+    experiment labels so the existing pooled report-order comparison still pairs
+    the two fitted distributions.
+    """
+    values = result.get('analysis_cell_values') or {}
+    if 'subject_id' in values and 'experiment_id' in values:
+        subject_id = str(values['subject_id'])
+        experiment = str(values['experiment_id'])
+        report_order = values.get('report_order')
+        if report_order is not None and str(report_order).lower() not in {'', 'nan', 'none'}:
+            try:
+                order = int(report_order)
+            except (TypeError, ValueError):
+                order = None
+            if order == 1:
+                experiment = f"{experiment}_first"
+            elif order == 2:
+                experiment = f"{experiment}_second"
+            else:
+                experiment = f"{experiment}_report_{report_order}"
+        noise_condition = str(
+            values.get('condition_id', result.get('condition', condition_name))
+        )
+        return subject_id, experiment, noise_condition
+
+    # Legacy result keys: "S12#color_1#high - low".
+    if '#' in condition_name:
+        parts = condition_name.split('#')
+        if len(parts) >= 3:
+            return parts[0], parts[1], '#'.join(parts[2:])
+
+    # Older result keys: "S1.color.1_low - high".
+    parts = condition_name.split('.')
+    if len(parts) < 3:
+        return str(condition_name), 'unknown', 'unknown'
+    subject_id = parts[0]
+    exp_part = parts[1]
+    noise_part = parts[2]
+    if '_' in noise_part:
+        exp_num, noise_condition = noise_part.split('_', 1)
+    else:
+        exp_num, noise_condition = noise_part, 'unknown'
+    return subject_id, f"{exp_part}.{exp_num}", noise_condition
+
+
 def organize_results_by_subject(extended_results: Dict) -> Dict:
-    """Organize results by subject and experiment."""
+    """Organize results by subject and experiment using bundle metadata when available."""
     subjects = defaultdict(lambda: defaultdict(list))
 
     for condition_name, result in extended_results.items():
         if result is None:
             continue
-
-        # Handle both new naming pattern (S12#color_1#high) and old pattern (S12.color.1_high)
-        if '#' in condition_name:
-            # New naming pattern: "S12#color_1#high - low" -> subject="S12", exp="color_1", noise="high - low"
-            parts = condition_name.split('#')
-            if len(parts) < 3:
-                continue
-
-            subject_id = parts[0]  # "S12"
-            experiment = parts[1]  # "color_1" or "color_2" or "color_2_first" or "color_2_second"
-            noise_condition = parts[2]  # "high - low"
-
-        else:
-            # Old naming pattern: "S1.color.1_low - high" -> subject="S1", exp="color.1", noise="low - high"
-            parts = condition_name.split('.')
-            if len(parts) < 3:
-                continue
-
-            subject_id = parts[0]  # "S1"
-            exp_part = parts[1]    # "color"
-
-            # Extract experiment and noise condition
-            noise_part = parts[2]  # "1_low - high"
-            if '_' in noise_part:
-                exp_num = noise_part.split('_')[0]  # "1"
-                noise_condition = noise_part.split('_', 1)[1]  # "low - high"
-            else:
-                exp_num = noise_part
-                noise_condition = "unknown"
-
-            experiment = f"{exp_part}.{exp_num}"  # "color.1"
-
+        subject_id, experiment, noise_condition = _result_plot_identity(
+            condition_name, result)
         subjects[subject_id][experiment].append({
             'condition_name': condition_name,
             'noise_condition': noise_condition,
@@ -494,8 +515,6 @@ def organize_results_by_subject(extended_results: Dict) -> Dict:
         })
 
     return subjects
-
-
 def prepare_all_subjects_data(
     subjects_data: Dict,
     prediction_backend,
@@ -1766,10 +1785,7 @@ def create_pdf_slice_plots(
         for cond_key, result in extended_results.items():
             if f'{optimizer_name}_fitted_params' not in result or 'data_df' not in result:
                 continue
-            parts = cond_key.split('#')
-            if len(parts) < 3:
-                continue
-            subject_id, experiment, noise_cond = parts[0], parts[1], '#'.join(parts[2:])
+            subject_id, experiment, noise_cond = _result_plot_identity(cond_key, result)
             key = (experiment, noise_cond)
             by_exp_cond.setdefault(key, []).append((subject_id, result))
 
