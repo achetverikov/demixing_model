@@ -27,6 +27,20 @@ import numpy as np
 from scipy.special import ndtr
 
 from shared.config import config
+try:
+    from density_objective import degenerate_targets as _default_degenerate_targets
+    from empirical_targets import (
+        compute_bwcrps_condition_targets as _default_bwcrps_condition_targets,
+        compute_target_bias_curve_core as _default_target_bias_curve_core,
+    )
+except ModuleNotFoundError:
+    from model_fit_to_data.density_objective import (
+        degenerate_targets as _default_degenerate_targets,
+    )
+    from model_fit_to_data.empirical_targets import (
+        compute_bwcrps_condition_targets as _default_bwcrps_condition_targets,
+        compute_target_bias_curve_core as _default_target_bias_curve_core,
+    )
 from shared.utils import (_compute_empirical_density_asymmetry_core,
                           compute_target_bias_rolling_curve_core,
                           sheather_jones_bandwidth, silverman_bandwidth)
@@ -120,8 +134,8 @@ def resolve_density_bandwidths(bias_by_condition, rule: str, mode: str):
 def build_fitting_targets(condition_datasets, feat_diff_grid, d_circ_matrix,
                           n_mu1_bias: int, emp_density_weights_sd: float,
                           density_bandwidth_rule: str, density_bandwidth_mode: str,
-                          degenerate_targets, bwcrps_condition_targets,
-                          target_bias_curve_core, *,
+                          degenerate_targets=None, bwcrps_condition_targets=None,
+                          target_bias_curve_core=None, *,
                           feature_coordinate_mode: str = "snap2",
                           prediction_capacity: Optional[int] = None) -> FittingTargets:
     """Build every empirical target from one pass over the conditions' trials.
@@ -139,15 +153,19 @@ def build_fitting_targets(condition_datasets, feat_diff_grid, d_circ_matrix,
         bwcrps_condition_targets: the CRPS-variant target builder.
         target_bias_curve_core: the binned circular-mean core for ``expectation``.
 
-    Those three are injected rather than imported. Two of them live in the
-    optimizer module, which imports this one, so importing them back would be
-    circular; and moving them would break the cross-repository BWCRPS and
-    density-target parity tests that import them at their current paths. The
-    definitions stay with the objectives that own them.
+    The three helper arguments are compatibility overrides. Normal callers use
+    the neutral maintained implementations from `density_objective` and
+    `empirical_targets`; explicit injection remains accepted for older parity
+    tests and external reproduction code.
 
     Returns:
         :class:`FittingTargets`.
     """
+    degenerate_targets = degenerate_targets or _default_degenerate_targets
+    bwcrps_condition_targets = (
+        bwcrps_condition_targets or _default_bwcrps_condition_targets)
+    target_bias_curve_core = target_bias_curve_core or _default_target_bias_curve_core
+
     condition_names = tuple(condition_datasets)
     dataframes = [jnp.asarray(condition_datasets[name]) for name in condition_names]
     if not dataframes:
