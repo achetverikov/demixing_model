@@ -12,6 +12,8 @@ from model_fit_to_data.compare_wnm_surface_fits import (
 )
 from model_fit_to_data.run_fingerprint import objective_versions_for
 
+pytestmark = pytest.mark.research
+
 
 def _fit(data):
     return {
