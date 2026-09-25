@@ -1,2 +1,0 @@
-n_datasets,median_joint_log_rmse,within_factor_1p5_rate,median_per_dataset_seconds,lattice_lower_rate,within_0p001_of_union_rate,median_loss_minus_prior_best,p90_loss_minus_prior_best,max_loss_minus_prior_best
-120,0.9054931665123144,0.175,18.546420856502664,0.0,1.0,5.960464477539063e-08,2.384185791015625e-07,0.0009602904319763184

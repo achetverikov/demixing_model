@@ -1,9 +1,0 @@
-run narrow_1_seed0_n180__jax-lbfgsb-port__starts64.json
-run narrow_3_seed0_n900__jax-lbfgsb-port__starts64.json
-run ordinary_1_seed0_n180__jax-lbfgsb-port__starts64.json
-run ordinary_3_seed0_n900__jax-lbfgsb-port__starts64.json
-run reversed_1_seed0_n180__jax-lbfgsb-port__starts64.json
-run reversed_3_seed0_n900__jax-lbfgsb-port__starts64.json
-run broad_1_seed0_n180__jax-lbfgsb-port__starts64.json
-run broad_3_seed0_n900__jax-lbfgsb-port__starts64.json
-wrote 8 results to jax_lbfgsb_port_matched_smoothed_exp64_highest_development_gpu_v1/summary.csv
