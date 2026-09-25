@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
+import warnings
 from pathlib import Path
 import shutil
 import tempfile
@@ -22,6 +24,10 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 try:
     from grid_based_multi_condition_optimizer_jax_loops import (
@@ -36,12 +42,11 @@ except ModuleNotFoundError:
         create_motor_noise_kernel_fft,
     )
 from shared.config import config
-from shared.utils import filter_data_for_fitting
-
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_20 = REPO_ROOT / "pretrained/model_epoch1425_10ktrain_20samples.pkl"
-DEFAULT_100 = REPO_ROOT / "pretrained/model_epoch1500_10ktrain_100samples.pkl"
+from shared.behavioral_data import filter_data_for_fitting
+from model_fit_to_data.wnm_likelihood import (
+    evaluate_trial_likelihoods,
+    exact_cell_log_probability,
+)
 
 # Motor-noise density floor (B1 floor-aware reproduction gate).
 #
@@ -71,6 +76,8 @@ MOTOR_NOISE_FLOOR_BAND_NATS = 6.0
 MOTOR_NOISE_FLOOR_TRIAL_NATS = float(-np.log(MOTOR_NOISE_FLOOR_EPS))
 
 FIT_META_COLS = [
+    "analysis_cell_id",
+    "fit_group_id",
     "fit_subject",
     "fit_experiment",
     "fit_condition",
@@ -79,6 +86,14 @@ FIT_META_COLS = [
     "sd_feat2",
     "sd_spat",
     "sd_motor",
+    "bundle_id",
+    "canonical_trial_sha256",
+    "analysis_spec_sha256",
+    "population",
+    "ordered_row_id_sha256",
+    "empirical_targets_sha256",
+    "dm_version",
+    "surrogate_family",
     "prepared_data_source",
 ]
 
@@ -97,6 +112,15 @@ LIKELIHOOD_COLS = [
     "loglik_density_deg",
     "nll_density_deg",
     "bin_width_deg",
+    # Which observation-scoring convention produced the row. The surface backend
+    # reads a trial's density at its grid cell's centre; the mixture evaluates at
+    # the observation. An information criterion across the two needs one
+    # convention on both sides, so the row has to say which it carries.
+    "loglik_convention",
+    # Exact log mass of the reporting cell, mixture only. loglik_mass stays the
+    # historical density-times-cell-width rectangle rule on both families so the
+    # legacy column keeps comparing like with like.
+    "loglik_cell_probability",
 ]
 
 
@@ -235,16 +259,22 @@ def normalize_condition_label(value: object) -> str:
 
 
 def infer_checkpoint_path(fits_csv: Path, checkpoint_path: str | None) -> Path:
-    if checkpoint_path:
-        return Path(checkpoint_path)
-    text = str(fits_csv)
-    if "20samples" in text:
-        return Path(DEFAULT_20)
-    if "100samples" in text:
-        return Path(DEFAULT_100)
-    raise ValueError(
-        "Could not infer checkpoint path from fits CSV path; pass --checkpoint-path explicitly."
-    )
+    """Resolve the checkpoint that produced these fits, by content not by path.
+
+    This used to substring-match the fits CSV path for ``20samples`` or
+    ``100samples``. Those are two different observer models, not two settings of
+    one, so any results directory whose name carried the other token -- a
+    relocated run, a subset directory named after a comparison -- rescored a fit
+    under the wrong model. The reproduction gate would usually catch it, but the
+    tool reached for when that gate "fails" is ``repair_stale_reproduction.py``,
+    which deletes results.
+
+    The rule itself lives in :func:`shared.surrogate.checkpoint_for_run`, shared
+    with the plotting consumers so the two cannot resolve differently.
+    """
+    from shared import surrogate
+
+    return surrogate.checkpoint_for_run(fits_csv, checkpoint_path)
 
 
 def load_fit_rows(path: Path, optimizers: Iterable[str] | None) -> pd.DataFrame:
@@ -329,8 +359,8 @@ def prepare_condition_rows(
             f"condition={fit_row['condition']}"
         )
 
-    # Match the fitter's model-space dissimilarity clamp (see fit_model_to_data /
-    # codex_audit.md report-level #3): raw bounds = feat_diff_range / scale.
+    # Match the fitter's model-space dissimilarity clamp (see fit_model_to_data;
+    # the history log records the original audit): raw bounds = feat_diff_range / scale.
     scale = angle_scale_to_model(circ_space)
     cleaned = filter_data_for_fitting(
         subset, feat_diff_col=x_col, bias_col=y_col, verbose=False,
@@ -426,6 +456,72 @@ def predict_log_surface(
     return np.asarray(log_surface[0]), floor_log_density
 
 
+def wnm_trial_log_density(predictor, fit_row: pd.Series, feat_diff_deg, bias_deg):
+    """Compatibility wrapper for the canonical WNM likelihood evaluator."""
+    parameters = [
+        float(fit_row["sd_feat1"]), float(fit_row["sd_feat2"]),
+        float(fit_row["sd_spat"]), float(fit_row.get("sd_motor", 0.0) or 0.0),
+    ]
+    return evaluate_trial_likelihoods(
+        predictor, parameters, feat_diff_deg, bias_deg
+    )["loglik_density_model_deg"]
+
+def wnm_cell_log_probability(predictor, fit_row: pd.Series, feat_diff_deg, bias_deg):
+    """Compatibility wrapper for exact float64 WNM reporting-cell mass."""
+    parameters = [
+        float(fit_row["sd_feat1"]), float(fit_row["sd_feat2"]),
+        float(fit_row["sd_spat"]), float(fit_row.get("sd_motor", 0.0) or 0.0),
+    ]
+    return exact_cell_log_probability(
+        predictor, parameters, feat_diff_deg, bias_deg)
+
+def _score_fit_row_wnm(predictor, scored, data_source, fit_row, circ_space):
+    """Rescore one fit against the wrapped-normal mixture."""
+    feat_diff = scored["feat_diff_model_deg"].to_numpy(float)
+    bias = scored["bias_model_deg"].to_numpy(float)
+    parameters = [
+        float(fit_row["sd_feat1"]), float(fit_row["sd_feat2"]),
+        float(fit_row["sd_spat"]), float(fit_row.get("sd_motor", 0.0) or 0.0),
+    ]
+    model_bin_width_deg = float(config.mu1_bias_step)
+    bin_width_deg = physical_bin_width_deg(circ_space)
+    likelihood = evaluate_trial_likelihoods(
+        predictor, parameters, feat_diff, bias,
+        physical_bin_width_deg=bin_width_deg,
+        include_cell_probability=True,
+    )
+    loglik_density_model_deg = likelihood["loglik_density_model_deg"]
+    for column, values in likelihood.items():
+        scored[column] = values
+    for column in ("subject", "experiment", "condition", "optimizer"):
+        scored[f"fit_{column}" if column != "optimizer" else "optimizer"] = fit_row[column]
+    for column in ("sd_feat1", "sd_feat2", "sd_spat", "sd_motor"):
+        scored[column] = float(fit_row[column])
+    scored["prepared_data_source"] = data_source
+
+    rescored_nll_density_model_deg = -float(jax.ops.segment_sum(
+        jnp.asarray(loglik_density_model_deg, dtype=jnp.float32),
+        jnp.zeros(len(loglik_density_model_deg), dtype=jnp.int32),
+        num_segments=1)[0])
+    stored_nll = float(fit_row["eval_likelihood_loss"])
+    per_trial_nll = float(scored["nll_density_model_deg"].sum())
+    check = {
+        "subject": fit_row["subject"], "experiment": fit_row["experiment"],
+        "condition": fit_row["condition"], "optimizer": fit_row["optimizer"],
+        "stored_eval_likelihood_loss": stored_nll,
+        "rescored_nll_density_model_deg": rescored_nll_density_model_deg,
+        "per_trial_sum_nll_density_model_deg": per_trial_nll,
+        "rescored_nll_mass": float(scored["nll_mass"].sum()),
+        "abs_diff": abs(rescored_nll_density_model_deg - stored_nll),
+        "per_trial_sum_abs_diff": abs(per_trial_nll - stored_nll),
+        "n_obs_scored": int(len(scored)),
+        "n_floor_trials": 0,
+        "model_bin_width_deg": model_bin_width_deg,
+        "bin_width_deg": bin_width_deg,
+    }
+    return scored, check
+
+
 def score_fit_row(
     optimizer: GridBasedMultiConditionOptimizer,
     data_sources: list[tuple[str, pd.DataFrame]],
@@ -447,14 +543,16 @@ def score_fit_row(
         y_col=y_col,
         circ_space=circ_space,
     )
+    if not isinstance(optimizer, GridBasedMultiConditionOptimizer):
+        return _score_fit_row_wnm(optimizer, scored, data_source, fit_row, circ_space)
+
     log_surface, floor_log_density = predict_log_surface(optimizer, fit_row)
     # The NN surface is a continuous density per model-degree (see
     # shared.surface_functions.normalize_to_density), not a discrete cell mass.
     # Approximate the cell probability as density × cell width — a midpoint/rectangle
     # rule at the cell centre, NOT the exact integral of the density over the cell.
     # The log(cell width) term is a constant offset that cancels in AIC/BIC
-    # differences; "mass" here denotes this approximation. See codex_audit.md
-    # report-level #4.
+    # differences; "mass" here denotes this approximation. See HISTORY.md.
     loglik_density_model_deg = log_surface[
         scored["bias_idx"].to_numpy(int),
         scored["feat_idx"].to_numpy(int),
@@ -469,6 +567,12 @@ def score_fit_row(
     scored["loglik_density_deg"] = scored["loglik_mass"] - np.log(bin_width_deg)
     scored["nll_density_deg"] = scored["nll_mass"] + np.log(bin_width_deg)
     scored["bin_width_deg"] = bin_width_deg
+    # The surface backend has no exact cell integral to offer -- its output is a
+    # sampled grid, and the rectangle rule *is* its mass convention. Recording
+    # NaN rather than omitting the column keeps the two families' exports the
+    # same shape, so a comparison that needs the exact integral finds it missing
+    # on this side instead of silently comparing it against the approximation.
+    scored["loglik_cell_probability"] = np.nan
     scored["fit_subject"] = fit_row["subject"]
     scored["fit_experiment"] = fit_row["experiment"]
     scored["fit_condition"] = fit_row["condition"]
@@ -478,6 +582,7 @@ def score_fit_row(
     scored["sd_spat"] = float(fit_row["sd_spat"])
     scored["sd_motor"] = float(fit_row["sd_motor"])
     scored["prepared_data_source"] = data_source
+    scored["loglik_convention"] = "grid_cell_centre"
 
     # The fitter's stored eval_likelihood_loss indexes the NN log-density directly
     # and reduces with JAX segment_sum. Validate against that reduction, not a
@@ -538,29 +643,46 @@ def postprocess(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFrame]:
     trial_data = load_trial_data(Path(args.data_path), args.outlier_col, args.include_outliers)
     data_sources = [(str(Path(args.data_path)), trial_data)]
 
-    dummy = jnp.asarray(np.zeros((1, 2), dtype=np.float32))
-    optimizer = GridBasedMultiConditionOptimizer(
-        str(checkpoint_path),
-        {"dummy": dummy},
-        skip_motor_noise=args.skip_motor_noise,
-    )
+    # The engine follows the checkpoint's family. score_fit_row has had a mixture
+    # branch since this path was written, but nothing could reach it: postprocess
+    # always built the surface optimizer, so rescoring a mixture fit raised on a
+    # missing 'apply_fn' key. Testing the helper while the driver called it
+    # differently proved nothing.
+    from shared import surrogate as _surrogate
+    from shared.prediction import predictor_from_surrogate
+
+    family = _surrogate.detect_family(checkpoint_path)
+    _, fingerprint = _surrogate.find_run_fingerprint(fits_csv)
+    matmul_precision = (fingerprint or {}).get(
+        "continuous_spec", {}).get("matmul_precision", "default")
+    if family == _surrogate.FAMILY_WNM:
+        optimizer = predictor_from_surrogate(
+            _surrogate.load_surrogate(checkpoint_path=checkpoint_path))
+    else:
+        dummy = jnp.asarray(np.zeros((1, 2), dtype=np.float32))
+        optimizer = GridBasedMultiConditionOptimizer(
+            str(checkpoint_path),
+            {"dummy": dummy},
+            skip_motor_noise=args.skip_motor_noise,
+        )
 
     score_rows = []
     checks = []
-    for _, fit_row in fit_rows.iterrows():
-        scored, check = score_fit_row(
-            optimizer=optimizer,
-            data_sources=data_sources,
-            fit_row=fit_row,
-            exp_col=args.exp_col,
-            subject_col=args.subject_col,
-            condition_col=args.condition_col,
-            x_col=args.x_col,
-            y_col=args.y_col,
-            circ_space=args.circ_space,
-        )
-        score_rows.append(scored)
-        checks.append(check)
+    with jax.default_matmul_precision(matmul_precision):
+        for _, fit_row in fit_rows.iterrows():
+            scored, check = score_fit_row(
+                optimizer=optimizer,
+                data_sources=data_sources,
+                fit_row=fit_row,
+                exp_col=args.exp_col,
+                subject_col=args.subject_col,
+                condition_col=args.condition_col,
+                x_col=args.x_col,
+                y_col=args.y_col,
+                circ_space=args.circ_space,
+            )
+            score_rows.append(scored)
+            checks.append(check)
 
     out = pd.concat(score_rows, ignore_index=True) if score_rows else pd.DataFrame()
     checks_dt = pd.DataFrame(checks)
@@ -574,7 +696,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--data-path", required=True, help="Prepared trial CSV used for fitting.")
     parser.add_argument("--fits-csv", required=True, help="Path to fitted_parameters.csv.")
-    parser.add_argument("--checkpoint-path", default=None, help="NN checkpoint path; inferred from fits path when omitted.")
+    parser.add_argument("--checkpoint-path", default=None,
+                        help="Checkpoint that produced these fits. When omitted it is resolved from the run fingerprint by recorded SHA-256; when given it is verified against that digest. It is no longer inferred from the fits path, which could not tell two observer models apart.")
     parser.add_argument("--output", default=None, help="Output split-Parquet directory for per-trial likelihoods.")
     parser.add_argument("--check-output", default=None, help="Output CSV path for stored-vs-rescored checks.")
     parser.add_argument("--exp-col", default="expName")

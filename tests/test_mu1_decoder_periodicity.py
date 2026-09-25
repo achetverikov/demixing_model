@@ -14,9 +14,8 @@ on these fixtures: three of the four decoder geometries agree bitwise, while
 therefore made the test depend on tiling that happens to line up, and it failed
 on that one geometry for no scientific reason.
 
-`SEAM_TOLERANCE` is the tolerance the plan left open as a coding-time decision
-(CIRCULARITY_FIX_PLAN_temp.md Phase B: "the comparison tolerance still ha[s] to
-be written down"). It is set at 1e-6, three orders of magnitude below the defect
+`SEAM_TOLERANCE` closes the migration's former coding-time decision about the
+comparison tolerance. It is set at 1e-6, three orders of magnitude below the defect
 a genuine seam error produces: the faulty controls in this file assert their
 edge-padded counterparts break equivariance by more than 1e-3, because a padding
 error changes seam rows by O(1), not by an ULP. So the loosening cannot hide the
@@ -44,6 +43,8 @@ sys.path.insert(0, str(ROOT / "neural_network_optimization"))
 from mirror_aware_model import (CircularMu1ConvTranspose, MirrorAwareMu1Predictor,
                                 periodic_linear_resize_mu1)
 from shared.mu1_axis import legacy_mu1_axis
+
+pytestmark = pytest.mark.legacy_surface
 
 
 @pytest.mark.parametrize(

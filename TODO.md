@@ -1,64 +1,94 @@
 # Demixing Model — TODO
 
-Consolidated 2026-07-17 (single source file, `TODO.md`, rewritten in place — nothing
-else to merge in for this repo). Fully-implemented mitigations are summarized tersely;
-only genuinely open follow-ups are kept in detail.
+This is the sole live work plan for this repository. Completed and superseded
+work is recorded in `HISTORY.md`; result-specific transition evidence is archived under
+`docs/history/wnm_transition/`.
 
-## 1. Motor-noise likelihood floor (mitigated; cleaner fixes still open)
+## 1. Finish retained WNM validation follow-ups
 
-`apply_motor_noise_with_precomputed_kernel()` convolves the NN log-density surface in
-probability space, clips negative FFT artifacts to zero, and returns
-`log(prob + 1e-10) + log_max`. Deep-tail cells pin to a hard density floor, so near that
-floor tiny backend/reduction differences can flip a trial across the floor and shift
-reproduced `eval_likelihood_loss` by whole nats even with identical fitted parameters.
+The runtime cutover is complete: WNM is the default surrogate for fresh
+prediction and ordinary CSV fitting, compiled bundles remain available for
+controlled model-comparison work, fitted-result plots/exports are WNM-aware, and
+the public demo plus an end-to-end WNM smoke use the new path. `andriushchenko`
+is tracked with the compiled comparison in `bias_model_comparison/TODO.md`, not
+here.
 
-**Done:** `model_fit_to_data/postprocess_fitted_likelihoods.py` counts near-floor trials
-and writes `n_floor_trials`/`floor_tolerance`/`within_tolerance` to
-`trial_loglik_checks.csv`; the strict `0.01` reproduction gate still applies when there
-are no floor-region trials; `bias_model_comparison/pipeline/regenerate_all_fits.sh`
-gates demixing-likelihood resumability checks on `within_tolerance` so floor-explained
-diffs don't repeatedly fail the gate. (Verified current in code, 2026-07-17.)
+- Close the retained WNM BWCRPS validation gaps while the production bundles
+  are built: confirm the common 64-start policy on held-out cases, inspect its
+  multi-condition, motor-noise, and real-data behavior, and use a large-sample
+  or expected-target check to separate finite-sample objective displacement
+  from model error. Assess curves by dissimilarity rather than pooled mean bias.
+- Unify the development and transition banded-metric frame schemas if banded
+  metrics become a maintained production product.
 
-**Open — potential cleaner fixes** (none started):
+Pipeline and report consolidation is owned by
+`bias_model_comparison/TODO.md`; canonical data and bundle work is owned by
+`contextual_biases_database/TODO.md`.
 
-- Export or recompute exact fitted per-trial likelihoods during fitting itself, before
-  backend-sensitive floor ambiguity enters a separate postprocessing pass.
-- Replace the hard `log(prob + eps)` floor with a smoother, better-documented density
-  floor, and refit affected motor-noise models.
-- Store enough per-fit diagnostics to distinguish real likelihood mismatches from
-  floor-region trials without relying on a bounded slack rule.
+## 2. Consolidate repository architecture after the WNM cutover
 
-## 2. `expectation` objective chases ill-defined circular means at high `sd_feat`
+The detailed audit and proposed target structure are in
+[`ARCHITECTURE_AUDIT.md`](ARCHITECTURE_AUDIT.md). In particular,
+`continuous_density/` was a temporary transition workspace and should be
+dissolved by moving its production pieces into the repository's functional
+layers: simulator/training-data generation, surrogate training/packaging,
+shared WNM runtime math and fitting/scoring. Development-only validation workflows are intentionally kept off the production branch.
 
-Diagnostic finding only — no code change yet.
+The pre-refactor test cleanup and maintained WNM baseline have been completed.
 
-The `expectation` objective fits subject-level binned mean-bias curves by extracting the
-circular mean angle from the predicted response surface. This breaks down for two
-compounding reasons: subject-level bins can be trial-sparse (noisy empirical circular
-means even when pooled bins are well sampled), and for high fitted `sd_feat` the model's
-surface slices go broad/near-uniform, so resultant length `R = sqrt(C^2+S^2) -> 0` and
-`atan2(S,C)` becomes numerically undefined — the fitted mean-angle curve can jump sharply
-from tiny surface asymmetries rather than tracking a stable bias.
+Phase B is implemented:
 
-Concrete case (CSH2026 `color_hv_1 / high - low`, 20-sample checkpoint, `expectation`
-optimizer): S11 (`sd_feat1=200`, `sd_feat2=139`, `sd_spat=5`) has model `R` around
-0.002-0.004 near `feat_diff=28/30` with derived mean angles ~24° apart, and pooled first
-moments near `(C,S)=(0,0)` while empirical bins have much larger resultant length — i.e.
-the model predicts an almost-uniform response, not a stable curve. Contrast: S13
-(low `sd_feat1=10`, `sd_feat2=25.5`, `sd_spat=66.25`) has model `R` around 0.83-0.94 and
-an interpretable curve. The pathology tracks broad/high-`sd_feat` predictions, not
-plotting or subject-averaging artifacts.
+- neutral curve losses, BWCRPS scoring, and empirical BWCRPS/binned-bias target
+  builders live in `model_fit_to_data/objectives.py` and
+  `model_fit_to_data/empirical_targets.py`;
+- WNM engine construction no longer imports the historical surface optimizer;
+- maintained path, behavioral-data, circular-smoothing, and empirical KDE/
+  bandwidth helpers have been split out of `shared/utils.py`;
+- `model_fit_to_data` is now a package and the maintained continuous-fitting
+  path uses absolute package imports;
+- result-key identity, streaming file hashing, and WNM likelihood
+  export/rescoring each have one maintained implementation.
 
-**Open — potential fixes/follow-ups** (none started; no `C`/`E[cos]`/`E[sin]`/`R` export
-exists yet anywhere in `model_fit_to_data/`, confirmed 2026-07-17):
+Phase C is complete. The production WNM runtime lives in `shared/wnm.py`;
+training and packaging live in `surrogate_training/wnm/`; simulation,
+continuous design, training-data generation, and legacy raw-sample import live
+in `surface_computation/`. Development-only transition validation and representation experiments are retained on the development branch and excluded from this production tree. The former `continuous_density/` namespace has been removed.
 
-- Export model first moments (`C = E[cos(theta)]`, `S = E[sin(theta)]`, `R`) for fitted
-  curves, not just `mu_bias`.
-- For curve objectives, score empirical vs. model first moments directly (e.g.
-  `(C_model-C_emp)^2 + (S_model-S_emp)^2`, model moments pooled across the same
-  feature-difference bins as the empirical target) — this naturally shrinks near-uniform
-  predictions toward `(0,0)` instead of chasing an arbitrary angle.
-- At minimum, flag/downweight low-`R` model predictions when plotting or scoring
-  mean-bias curves.
-- Until resolved, treat `expectation`/mean-bias RMSE results as less reliable than
-  likelihood- or CRPS-style distributional objectives.
+Completed Phase C cleanup:
+
+- production WNM runtime moved to `shared/wnm.py`;
+- WNM training and packaging moved to `surrogate_training/wnm/`;
+- simulation, continuous design, training-data generation, and legacy raw-sample import moved to `surface_computation/`;
+- transition/validation and representation experiments were separated from maintained production code and excluded from the production branch;
+- tracked generated `continuous_density/validation_outputs/` were removed;
+- stale maintained imports and command paths were updated to the functional package layout;
+- the remaining compatibility shims were deleted and `continuous_density/` was removed;
+- the maintained pytest suite and WNM public-path smoke both passed after namespace deletion.
+
+
+## 3. Decide the zero-width pooled-SD convention
+
+The float32 upper clamp in pooled-SD reporting is currently inert, so a
+distribution concentrated in one reporting cell yields exactly zero degrees.
+Decide whether exact zero is the intended statistic or whether reported SD
+should have a resolution floor. This is low priority because current real fits
+do not reach the degenerate case, but changing it changes exported values and
+therefore requires a contract/version bump and regression fixture.
+
+## 4. Remove the repository-local secret exposure
+
+The ignored `.env` file's local permissions were restricted from `0777` to
+`0600` without reading or copying its values. Move runtime secrets out of the
+repository and rotate credentials that may have been exposed. This is an
+operational security task, independent of the legacy surface pipeline.
+
+## Explicitly not planned
+
+- Further surface-NN retraining, circular-axis migration, search refinement,
+  browser integration, parity work, or promotion analysis. WNM is the default
+  backend; the surface NN remains only for explicit historical reproduction.
+- Revival of the retired hard-binned `expectation` objective.
+- Cleanup of the surface-NN motor-noise density floor unless needed solely to
+  reproduce a historical artifact.
+- Joint `(mu1, mu2)` modelling. This remains unscheduled research, not migration
+  work.

@@ -27,7 +27,6 @@ for path in (ROOT, ROOT / "model_fit_to_data"):
         sys.path.insert(0, str(path))
 
 CHECKPOINT = ROOT / "pretrained" / "model_epoch1425_10ktrain_20samples.pkl"
-pytestmark = pytest.mark.skipif(not CHECKPOINT.exists(), reason="no pretrained checkpoint")
 
 import jax.numpy as jnp
 
@@ -39,6 +38,11 @@ from grid_based_multi_condition_optimizer_jax_loops import (
     generate_nn_density_asymmetry_batch,
     predict_nn,
 )
+
+pytestmark = [
+    pytest.mark.legacy_surface,
+    pytest.mark.skipif(not CHECKPOINT.exists(), reason="no pretrained checkpoint"),
+]
 
 LOW, HIGH, STEP = 20.0, 40.0, 10.0
 

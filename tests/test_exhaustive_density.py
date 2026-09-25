@@ -29,6 +29,8 @@ from exhaustive_density import (
     fit_exhaustive_density,
 )
 
+pytestmark = pytest.mark.legacy_surface
+
 N_POINTS = 30
 
 

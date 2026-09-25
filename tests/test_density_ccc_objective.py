@@ -34,7 +34,7 @@ from grid_based_multi_condition_optimizer_jax_loops import (
     DEGENERATE_TARGET_EPS,
     _compute_curve_losses,
 )
-from create_unified_subject_plots import _ccc_components
+from density_objective import ccc_components as _ccc_components
 
 
 def ccc_loss(pred, target):
@@ -126,9 +126,9 @@ def test_the_refusal_threshold_matches_the_scorer_guard():
     """If these two ever diverge, targets in the gap between them pass the refusal
     and then silently get their denominator altered by the guard -- the exact
     silent distortion the policy removes."""
-    import grid_based_multi_condition_optimizer_jax_loops as opt
-    source = Path(opt.__file__).read_text()
-    assert "jnp.where(D < DEGENERATE_TARGET_EPS, 1.0, D)" in source, (
+    import model_fit_to_data.objectives as objectives
+    source = Path(objectives.__file__).read_text()
+    assert "denominator < DEGENERATE_TARGET_EPS" in source, (
         "the ccc branch must guard on the same eps the refusal uses")
 
 

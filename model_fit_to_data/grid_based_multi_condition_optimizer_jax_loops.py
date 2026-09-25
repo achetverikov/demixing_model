@@ -15,23 +15,35 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pandas as pd
 from typing import Dict, List, Tuple, Optional
 import time
 from pathlib import Path
-import pickle
 
 try:
     from density_objective import DEGENERATE_TARGET_EPS, check_targets_fittable, degenerate_targets
+    from fitting_targets import build_fitting_targets
+    from empirical_targets import compute_bwcrps_condition_targets, compute_target_bias_curve_core
+    from objectives import bwcrps_energy_score, compute_curve_losses
     from run_fingerprint import effective_feat_step_schedule
 except ModuleNotFoundError:  # imported as `model_fit_to_data.<module>` from the repo root
     from model_fit_to_data.density_objective import (
         DEGENERATE_TARGET_EPS, check_targets_fittable, degenerate_targets,
     )
+    from model_fit_to_data.fitting_targets import build_fitting_targets
+    from model_fit_to_data.empirical_targets import (
+        compute_bwcrps_condition_targets, compute_target_bias_curve_core,
+    )
+    from model_fit_to_data.objectives import bwcrps_energy_score, compute_curve_losses
     from model_fit_to_data.run_fingerprint import effective_feat_step_schedule
 from shared.config import config
-from shared.mu1_axis import bin_indices, periodic_integral
+from shared.mu1_axis import bin_indices, periodic_integral, sign_masks
+from shared import surrogate
+from shared.prediction import legal_warmup_params
 from shared.utils import load_checkpoint, compute_single_density_asymmetry
+
+# Compatibility alias for callers that historically imported the neutral curve
+# loss helper from this surface optimizer. New code imports objectives directly.
+_compute_curve_losses = compute_curve_losses
 
 
 # DEGENERATE_TARGET_EPS, check_targets_fittable and the CCC definition live in
@@ -85,93 +97,8 @@ def _generate_nn_bias_curve_batch(log_surfaces_batch: jnp.ndarray, target_feat_i
     return vectorized_compute(log_surfaces_batch)
 
 
-@jax.jit
-def compute_target_bias_curve_core(feat_diff_values: jnp.ndarray, bias_values: jnp.ndarray, n_trials: jnp.ndarray) -> \
-Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-    """Compute a binned target bias curve for a single condition (vmap-compatible).
-
-    Bins trials by feature-difference into 4-degree bins, computes the circular
-    mean bias per bin, and maps each bin centre to the nearest NN grid index.
-    Padding beyond ``n_trials`` is masked out before any computation.
-
-    Bin-edge detail: with the standard grid the centres are arange(2, 184, 4) =
-    [2, 6, ..., 178, 182] — 46 bins whose final centre (182°) lies off-grid and
-    is mapped by nearest-index onto the terminal 180° column (see
-    MODEL_PIPELINE_FOR_AGENTS.md D.12).
-
-    Args:
-        feat_diff_values: Feature-difference values for each trial, zero-padded
-            to the fixed maximum trial count.
-        bias_values: Bias values in degrees for each trial, zero-padded to match.
-        n_trials: Scalar giving the actual number of valid (unpadded) trials.
-
-    Returns:
-        Tuple of ``(feat_indices, target_bias, weights)`` where ``feat_indices``
-        maps each bin to the NN feat_diff grid index, ``target_bias`` is the
-        circular mean bias per bin in degrees, and ``weights`` are trial counts
-        per bin (float32).
-    """
-    # Create mask for valid trials instead of dynamic slicing
-    max_trials = len(feat_diff_values)
-    valid_mask = jnp.arange(max_trials) < n_trials
-
-    # Apply mask to get valid values
-    valid_feat_diff = jnp.where(valid_mask, feat_diff_values, 0.0)
-    valid_bias = jnp.where(valid_mask, bias_values, 0.0)
-
-    # Use binning with twice the configured 2-degree step: 4-degree bins.
-    bin_step = config.feat_diff_step * 2
-
-    # Create bin centers from the configured lower bound in bin_step increments.
-    min_feat = config.feat_diff_range[0]  # Standard grid starts at 2 degrees
-    max_feat = config.feat_diff_range[1]  # Usually 180
-    bin_centers = jnp.arange(min_feat, max_feat + bin_step, bin_step)
-    n_bins = len(bin_centers)
-
-    # Snap each trial to nearest bin center using vectorized operations
-    # Only consider valid trials by masking invalid distances
-    distances = jnp.abs(valid_feat_diff[:, None] - bin_centers[None, :])
-    distances = jnp.where(valid_mask[:, None], distances, jnp.inf)  # Invalid trials get infinite distance
-    nearest_bin_indices = jnp.argmin(distances, axis=1)
-
-    # Count trials per bin and compute mean bias per bin
-    # Use segment_sum for vectorized binning
-    bin_counts = jax.ops.segment_sum(
-        jnp.where(valid_mask, 1.0, 0.0),
-        nearest_bin_indices,
-        num_segments=n_bins
-    )
-    bias_rad = jnp.radians(valid_bias)
-    bin_cos_sums = jax.ops.segment_sum(
-        jnp.where(valid_mask, jnp.cos(bias_rad), 0.0),
-        nearest_bin_indices,
-        num_segments=n_bins
-    )
-    bin_sin_sums = jax.ops.segment_sum(
-        jnp.where(valid_mask, jnp.sin(bias_rad), 0.0),
-        nearest_bin_indices,
-        num_segments=n_bins
-    )
-
-    # Circular mean per bin (handle empty bins)
-    target_bias = jnp.where(
-        bin_counts > 0,
-        jnp.degrees(jnp.arctan2(bin_sin_sums / jnp.maximum(bin_counts, 1),
-                                 bin_cos_sums / jnp.maximum(bin_counts, 1))),
-        0.0
-    )
-    weights = bin_counts.astype(jnp.float32)
-
-    # Map bin centers to NN grid indices
-    feat_diff_grid = config.create_grid('feat_diff')
-    grid_distances = jnp.abs(bin_centers[:, None] - feat_diff_grid[None, :])
-    feat_indices = jnp.argmin(grid_distances, axis=1)
-
-    return feat_indices, target_bias, weights
-
-
 def create_shared_parameter_grid(grid_size: int = 20,
-                                 sd_spat_range: Tuple[float, float] = (config.param_grid_low, config.param_range_high),
+                                 sd_spat_range: Tuple[float, float] = surrogate.SURFACE_DOMAIN['sd_spat'],
                                  sd_motor_range: Tuple[float, float] = (0.1, 50.0),
                                  skip_motor_noise: bool = False,
                                  motor_grid_size: Optional[int] = None) -> jnp.ndarray:
@@ -246,6 +173,44 @@ def generate_nn_density_asymmetry_batch(log_surfaces_batch: jnp.ndarray,
         log_surf, target_feat_indices, mu1_bias_grid, apply_smoothing=True, smoothing_sigma=smoothing_sigma
     ))
     return vectorized_compute(log_surfaces_batch)
+
+
+@jax.jit
+def generate_nn_matched_bias_curve_batch(log_surfaces_batch: jnp.ndarray,
+                                         feature_operators: jnp.ndarray) -> jnp.ndarray:
+    """Pool surface first moments through each condition's observed design."""
+    probabilities = jnp.exp(log_surfaces_batch)
+    angles = jnp.radians(config.create_grid('mu1_bias'))[None, :, None]
+    real = periodic_integral(probabilities * jnp.cos(angles), axis=1)
+    imaginary = periodic_integral(probabilities * jnp.sin(angles), axis=1)
+    pooled_real = jnp.einsum('bij,bj->bi', feature_operators, real)
+    pooled_imaginary = jnp.einsum('bij,bj->bi', feature_operators, imaginary)
+    return jnp.degrees(jnp.arctan2(pooled_imaginary, pooled_real))
+
+
+@jax.jit
+def generate_nn_matched_density_asymmetry_batch(
+        log_surfaces_batch: jnp.ndarray, feature_operators: jnp.ndarray,
+        density_bandwidths: jnp.ndarray) -> jnp.ndarray:
+    """Apply the fitted target's bias KDE and observed-design operators."""
+    n_bias = log_surfaces_batch.shape[1]
+    indices = jnp.arange(n_bias) - n_bias // 2
+    angles = indices * config.mu1_bias_step
+
+    def kernel_fft(sd):
+        weights = jnp.exp(-0.5 * (angles / jnp.maximum(sd, 0.01)) ** 2)
+        weights /= jnp.sum(weights)
+        kernel = jnp.zeros(n_bias).at[indices % n_bias].set(weights)
+        return jnp.fft.fft(kernel)
+
+    probabilities = jnp.exp(log_surfaces_batch)
+    convolved = jnp.real(jnp.fft.ifft(
+        jnp.fft.fft(probabilities, axis=1)
+        * jax.vmap(kernel_fft)(density_bandwidths)[:, :, None], axis=1))
+    positive, negative = sign_masks()
+    signed = positive.astype(convolved.dtype) - negative.astype(convolved.dtype)
+    raw = jnp.sum(convolved * signed[None, :, None], axis=1) * config.mu1_bias_step
+    return jnp.einsum('bij,bj->bi', feature_operators, raw)
 
 
 def create_motor_noise_kernel_fft(sd_motor: float, n_mu1_bias: int) -> jnp.ndarray:
@@ -358,195 +323,6 @@ def apply_motor_noise(log_surfaces_batch: jnp.ndarray, sd_motor: float) -> jnp.n
     return log_surfaces_noisy
 
 
-def _compute_curve_losses(predicted_curves: jnp.ndarray, target_curves: jnp.ndarray,
-                          loss_type: str = "mse", is_angular: bool = False,
-                          weights: jnp.ndarray = None, corr_weight = 0.5) -> jnp.ndarray:
-    """Unified function to compute losses between predicted and target curves.
-
-    Args:
-        predicted_curves: Shape (n_combos, n_points) - predicted curve values
-        target_curves: Shape (n_combos, n_points) - target curve values
-        loss_type: One of "mse", "mad", "combined"
-        is_angular: If True, handle angular differences properly (for bias curves)
-        weights: Shape (n_combos, n_points) or (n_points,) - weights for each point
-
-    Returns:
-        losses: Shape (n_combos,) - loss for each combination
-    """
-    # Compute differences
-    if is_angular:
-        # Handle angular differences for bias curves (wrap to [-180, 180])
-        diff = predicted_curves - target_curves
-        diff = ((diff + 180) % 360) - 180
-    else:
-        # Regular differences for density curves
-        diff = predicted_curves - target_curves
-
-    loss_type = loss_type.lower()
-    # Handle weights (broadcast if needed)
-    if loss_type == 'mse' or loss_type == 'mad':
-        if weights is not None:
-            if weights.ndim == 1:
-                # Broadcast weights to match predicted_curves shape
-                weights = jnp.broadcast_to(weights[None, :], predicted_curves.shape)
-
-            # Only compute loss for non-zero weights (ignore empty bins)
-            valid_mask = weights > 0
-
-            if loss_type == "mse":
-                weighted_sq_errors = jnp.where(valid_mask, (diff ** 2) * weights, 0.0)
-                total_weights = jnp.sum(jnp.where(valid_mask, weights, 0.0), axis=1)
-                losses = jnp.sum(weighted_sq_errors, axis=1) / jnp.maximum(total_weights, 1.0)
-            elif loss_type == "mad":
-                weighted_abs_errors = jnp.where(valid_mask, jnp.abs(diff) * weights, 0.0)
-                total_weights = jnp.sum(jnp.where(valid_mask, weights, 0.0), axis=1)
-                losses = jnp.sum(weighted_abs_errors, axis=1) / jnp.maximum(total_weights, 1.0)
-        else:
-            # No weights - use regular mean
-            if loss_type == "mse":
-                losses = jnp.mean(diff ** 2, axis=1)
-            elif loss_type == "mad":
-                losses = jnp.mean(jnp.abs(diff), axis=1)
-
-    elif loss_type == "combined":
-        # Combined MSE + correlation loss (like in two_stage_sgd_class)
-        mse_losses = jnp.mean(diff ** 2, axis=1)
-
-        # Compute correlation component (1 - correlation) for each combo
-        def compute_correlation_loss(pred, target):
-            """Compute correlation-based loss for a single pair of curves."""
-            # Compute correlation and convert to loss
-            corr_matrix = jnp.corrcoef(pred, target)
-            corr = corr_matrix[0, 1]
-            corr_loss = 1 - jnp.where(jnp.isnan(corr), 0.0, corr)  # Handle NaN correlation
-            return corr_loss
-
-        corr_losses = jax.vmap(compute_correlation_loss)(predicted_curves, target_curves)
-
-        # Scale MSE by target range and combine
-        target_range = jnp.abs(jnp.max(target_curves, axis=1) - jnp.min(target_curves, axis=1))
-        mse_scaled = mse_losses / jnp.maximum(target_range, 1e-6)
-
-        # Combined loss with weights
-        losses = (1 - corr_weight) * mse_scaled + corr_weight * corr_losses
-    elif loss_type == "ccc":
-        # Lin's concordance correlation: 1 - CCC = MSE / D with
-        # D = var_p + var_t + (mean_p - mean_t)^2, and CCC = r * C_b, so the loss
-        # scores precision (r) and accuracy (C_b) together. That is the whole
-        # point of using it here: the "combined" objective above scales its MSE
-        # term by `range` rather than `range**2`, which is dimensionally wrong and
-        # leaves the term too weak to constrain amplitude, so fits come out
-        # correlated-but-far-too-small. CCC is scale-invariant and cannot.
-        pred_mean = jnp.mean(predicted_curves, axis=1)
-        target_mean = jnp.mean(target_curves, axis=1)
-        pred_centered = predicted_curves - pred_mean[:, None]
-        target_centered = target_curves - target_mean[:, None]
-
-        covariance = jnp.mean(pred_centered * target_centered, axis=1)
-        pred_var = jnp.mean(pred_centered ** 2, axis=1)
-        target_var = jnp.mean(target_centered ** 2, axis=1)
-        mean_diff_sq = (pred_mean - target_mean) ** 2
-
-        # D is zero only when prediction and target are the SAME constant, which a
-        # constant target cannot reach: a target with var < DEGENERATE_TARGET_EPS
-        # makes the density objective raise before any scoring happens (see
-        # `density_degenerate_conditions`), so every scored curve has
-        # D >= var_t >= eps. This guard is defensive, not load-bearing -- but it
-        # is kept, and its
-        # threshold is deliberately the same eps, because a mismatched pair would
-        # leave a live band of curves that reach the scorer and silently get their
-        # denominator altered. `where` (not `maximum`) so both branches are finite
-        # and a gradient taken through the dead one is not poisoned.
-        D = pred_var + target_var + mean_diff_sq
-        safe_D = jnp.where(D < DEGENERATE_TARGET_EPS, 1.0, D)
-        ccc = (2 * covariance) / safe_D
-        losses = 1 - ccc
-    elif loss_type == "nrmse":
-        rmse = jnp.sqrt(jnp.mean(diff ** 2, axis=1))
-        target_range = jnp.abs(jnp.max(target_curves, axis=1) - jnp.min(target_curves, axis=1))
-        losses = rmse / jnp.maximum(target_range, 1e-6)
-    else:
-        raise ValueError("Unknown loss type {}. Should be one of mse, mad, combined, ccc, or nrmse.".format(loss_type))
-
-    return losses
-
-
-def compute_bwcrps_condition_targets(fd_vals, bias_vals, fd_grid, D_circ, weights_sd,
-                                     bias_low, bias_step, n_bias):
-    """Empirical BWCRPS/balanced-CRPS targets for ONE condition.
-
-    Extracted verbatim from update_dataset so it can be imported. It previously
-    existed only inline, which forced the cross-tree parity test in
-    bayesian_biases_zoo to hand-copy it -- and a hand copy tracks whichever tree it
-    was written against, which is how the density half of that test went stale
-    through three separate changes without failing.
-
-    Returns:
-        target_d      (n_feat, n_bias) expected circular distance from each bias bin
-                      to the Gaussian-weighted empirical distribution at each fd point
-        support_mask  (n_feat,) binary data-support mask, used by balanced_crps
-        bias_weights  (n_feat,) squared smoothed mean bias x mask, used by bias_weighted_crps
-    """
-    fd_vals = np.asarray(fd_vals)
-    bias_vals = np.asarray(bias_vals)
-
-    # Gaussian weights over feat_diff distance: shape (n_feat, n_trials)
-    gw = np.exp(-0.5 * ((fd_vals[None, :] - fd_grid[:, None]) / weights_sd) ** 2)
-    w_c = gw.sum(axis=1)  # (n_feat,) — effective support weight per fd point
-
-    # Weighted histogram: Q_c[j, k] = sum_i gw[j,i] * I(bias_bin[i]==k) / w_c[j]
-    # Circular binning: wrap rather than clip (see _prepare_all_condition_data).
-    bias_bin = np.mod(
-        np.round((bias_vals - bias_low) / bias_step).astype(int), n_bias
-    )
-    one_hot = np.zeros((len(bias_vals), n_bias))
-    one_hot[np.arange(len(bias_vals)), bias_bin] = 1.0
-    Q_c = (gw @ one_hot) / np.maximum(w_c[:, None], 1e-10)  # (n_feat, n_bias)
-
-    # target_d[j, k] = (Q_c @ D_circ)[j, k]  (D_circ is symmetric)
-    target_d = Q_c @ D_circ   # (n_feat, n_bias)
-
-    # Loss weights: binary mask — 1 where there is data support, 0 elsewhere.
-    # Threshold at 1% of the median weight so edge fd bins with marginal
-    # support are excluded, but weighting is otherwise uniform (not trial-count-proportional).
-    support_threshold = np.median(w_c) * 0.01
-    support_mask = (w_c > support_threshold).astype(np.float32)
-
-    # Bias-weighted CRPS: weight each fd point by the squared smoothed
-    # signed mean bias. Squaring discards the sign, so feat_diff ranges
-    # with large-magnitude observed mean bias contribute more to the loss.
-    mean_bias = (gw @ bias_vals) / np.maximum(w_c, 1e-10)   # (n_feat,)
-    return target_d, support_mask, mean_bias ** 2 * support_mask
-
-
-def bwcrps_energy_score(prob_surfaces, target_d, fd_weights, D_circ, norm_floor=None):
-    """Weighted energy score shared by balanced_crps and bias_weighted_crps.
-
-    loss[u, c] = sum_j w[c,j] * (2 * cross[u,c,j] - E2[u,j]) / sum_j w[c,j]
-
-    Extracted from the two objective branches, which differed only in which weights
-    they pass and whether the normaliser is floored (bias weights can be all-zero
-    for a condition; the binary support mask cannot, so balanced_crps divides raw).
-    Exposed for the same reason as compute_bwcrps_condition_targets.
-
-    Args:
-        prob_surfaces: (n_unique, n_bias, n_feat), normalized over the bias axis.
-    """
-    n_unique, n_bias, n_feat = prob_surfaces.shape
-    prob_fk = prob_surfaces.transpose(0, 2, 1).reshape(-1, n_bias)
-    Dp = prob_fk @ D_circ
-    E2 = (prob_fk * Dp).sum(axis=1).reshape(n_unique, n_feat)
-
-    T_w = target_d * fd_weights[:, :, None]
-    cross_uc = jnp.einsum('ukj,cjk->uc', prob_surfaces, T_w)
-    E2_uc = E2 @ fd_weights.T
-
-    norm_c = fd_weights.sum(axis=1)
-    if norm_floor is not None:
-        norm_c = jnp.maximum(norm_c, norm_floor)
-    return (2.0 * cross_uc - E2_uc) / norm_c[None, :]
-
-
 class GridBasedMultiConditionOptimizer:
     """Simplified grid-based multi-condition optimizer with direct NN loading."""
 
@@ -653,9 +429,27 @@ class GridBasedMultiConditionOptimizer:
         self.predict_batch_256 = predict_batch_256
 
         # Precompile both batch sizes to avoid recompilation overhead
+        # Fitting bounds belong to the surrogate, not to a module constant: this
+        # backend was trained on [5, 200] on every axis, while the mixture that
+        # replaces it reaches 2.5 on the feature SDs. A search must not propose
+        # parameters its own surrogate never saw.
+        bounds = surrogate.search_bounds(surrogate.SURFACE_DOMAIN)
+        self.sd_feat_bounds = bounds["sd_feat"]
+        self.sd_spat_bounds = bounds["sd_spat"]
+        self.surrogate_domain = dict(surrogate.SURFACE_DOMAIN)
+
         print("Precompiling batch prediction functions...")
-        dummy_params_64 = jnp.ones((64, 3))  # [sd_feat1, sd_feat2, sd_spat]
-        dummy_params_256 = jnp.ones((256, 3))
+        # Warm-up rows must be legal, not just the right shape.  These used to be
+        # jnp.ones((n, 3)) -- an sd triple of 1 degree, far below the surrogate's
+        # supported range.  Compilation only needs shapes, so that cost nothing
+        # here, but the same rows double as batch padding, where an out-of-domain
+        # value is either a validation failure or a prediction nobody asked for.
+        warmup_sd = (max(self.sd_feat_bounds[0], self.sd_spat_bounds[0]),
+                     min(self.sd_feat_bounds[1], self.sd_spat_bounds[1]))
+        dummy_params_64 = legal_warmup_params(
+            64, warmup_sd, config.feat_diff_range)[:, :3]  # [sd_feat1, sd_feat2, sd_spat]
+        dummy_params_256 = legal_warmup_params(
+            256, warmup_sd, config.feat_diff_range)[:, :3]
 
         # Trigger compilation
         _ = self.predict_batch_64(dummy_params_64)
@@ -756,8 +550,8 @@ class GridBasedMultiConditionOptimizer:
         this does NOT skip recompilation despite what an earlier version of this
         docstring claimed. Left unmanaged, a long-running batch loop accumulates
         one compiled executable per distinct shape for the life of the process,
-        which grows host memory until it OOMs partway through a large batch (see
-        codex_audit.md investigation, 2026-07-17: crashed 38/51 subjects into a
+        which grows host memory until it OOMs partway through a large batch (the
+        2026-07-17 audit recorded a crash 38/51 subjects into a
         csh2026 run). jax.clear_caches() releases the previous subject's compiled
         executables before this subject's replacements get built.
 
@@ -943,171 +737,51 @@ class GridBasedMultiConditionOptimizer:
         print("Shared parameter evaluation setup complete")
 
     def _precompute_target_curves(self):
-        """Precompute all target curves for all conditions using vmap (no loops)."""
+        """Build every empirical target for every condition, once.
+
+        The construction itself lives in ``fitting_targets`` so that a second
+        search engine can reach it without constructing this optimizer -- which
+        would mean loading a surface checkpoint to build targets that depend on
+        no surrogate at all. This method is the surface engine's call site: it
+        supplies the grids and settings and stores the result on ``self`` under
+        the attribute names the JIT objectives already read.
+        """
         print("Precomputing target curves for all conditions...")
 
-        # Prepare data for vectorized computation
-        condition_dataframes = [self.condition_datasets[cond_name] for cond_name in self.condition_names]
+        targets = build_fitting_targets(
+            {name: self.condition_datasets[name] for name in self.condition_names},
+            feat_diff_grid=self.feat_diff_grid,
+            d_circ_matrix=self.D_circ_matrix,
+            n_mu1_bias=self.n_mu1_bias,
+            emp_density_weights_sd=self.emp_density_weights_sd,
+            density_bandwidth_rule=self.density_bandwidth_rule,
+            density_bandwidth_mode=self.density_bandwidth_mode,
+        )
+        self.fitting_targets = targets
 
-        # Extract feat_diff and bias arrays
-        all_feat_diff = [df[:, 0] for df in condition_dataframes]
-        all_bias_values = [df[:, 1] for df in condition_dataframes]
+        self.unified_feat_indices = targets.feat_indices
+        self.unified_target_bias = targets.target_bias
+        self.unified_bias_weights = targets.bias_weights
+        self.unified_target_density = targets.target_density
+        self.unified_target_bias_curve = targets.target_bias_curve
+        self.unified_matched_density_target = targets.matched_density_target
+        self.unified_feature_operator = targets.feature_operator
+        self.unified_density_bandwidth = jnp.asarray(targets.density_bandwidth)
+        self.density_target_var = targets.density_target_var
+        self.density_degenerate_conditions = targets.density_degenerate
+        self.matched_density_degenerate_conditions = targets.matched_density_degenerate
+        self.unified_target_d = targets.target_d
+        self.unified_fd_weights = targets.fd_weights
+        self.unified_bias_fd_weights = targets.bias_fd_weights
 
-        # Pad arrays to same length for vmap
-        max_trials = max(len(vals) for vals in all_feat_diff)
-
-        padded_feat_diff = jnp.stack([
-            jnp.pad(vals, (0, max_trials - len(vals)), constant_values=vals[-1] if len(vals) > 0 else 0)
-            for vals in all_feat_diff
-        ])
-        padded_bias_values = jnp.stack([
-            jnp.pad(vals, (0, max_trials - len(vals)), constant_values=vals[-1] if len(vals) > 0 else 0)
-            for vals in all_bias_values
-        ])
-
-        # Create trial counts for bias computation
-        trial_counts = jnp.array([len(vals) for vals in all_feat_diff])
-
-        # Vectorized bias curve computation using vmap
-        vectorized_bias_compute = jax.vmap(compute_target_bias_curve_core, in_axes=(0, 0, 0))
-        feat_indices, target_bias, weights = vectorized_bias_compute(padded_feat_diff, padded_bias_values, trial_counts)
-
-        # Density curve computation over the REAL (unpadded) per-condition data.
-        # Unlike the bias core, _compute_empirical_density_asymmetry_core has no
-        # trial-count mask, so vmapping it over the rectangular padded arrays would
-        # feed the repeated last-observation pad rows into the empirical density —
-        # both as a mass clump at the last trial's coordinates and via the
-        # std/quantile/n bandwidth terms. This is a one-time precompute (not in the
-        # JIT objective), so we loop over the real condition arrays instead, exactly
-        # as the balanced-CRPS block below does. See codex_audit.md #3.
-        from shared.utils import (_compute_empirical_density_asymmetry_core,
-                                  compute_target_bias_rolling_curve_core,
-                                  sheather_jones_bandwidth, silverman_bandwidth)
-        feat_diff_grid = self.feat_diff_grid
-
-        # Bias-KDE bandwidth. Default (None) lets each condition estimate its own from
-        # its own trials -- but conditions differ in error spread by construction, so
-        # the target's smoothing then varies along the very axis the experiment
-        # manipulates (measured up to 3.29x within one csh2026 subject). 'pooled' and
-        # 'average' share one bandwidth across the subject's conditions, matching what
-        # circhelp does within a single density_asymmetry call.
-        if self.density_bandwidth_rule == 'silverman':
-            estimate_bw = silverman_bandwidth
-        elif self.density_bandwidth_rule == 'sj':
-            estimate_bw = sheather_jones_bandwidth
-        else:
-            raise ValueError(
-                f"unknown density_bandwidth_rule {self.density_bandwidth_rule!r}; "
-                "expected 'silverman' or 'sj'")
-
-        # The bandwidth is ALWAYS resolved here and passed explicitly, never left to
-        # the core's default. Relying on the default meant 'silverman' silently
-        # tracked whatever that default happened to be, so flipping it (as the SJ
-        # adoption did) would have changed the one mode whose entire purpose is to
-        # reproduce pre-2026-08 fits.
-        bias_by_condition = [condition_dataframes[i][:, 1]
-                             for i in range(len(self.condition_names))]
-        shared_bw, per_condition_bw = None, None
-        if self.density_bandwidth_mode == 'pooled':
-            shared_bw = estimate_bw(jnp.concatenate(bias_by_condition))
-        elif self.density_bandwidth_mode == 'average':
-            shared_bw = jnp.mean(jnp.stack(
-                [jnp.asarray(estimate_bw(b)) for b in bias_by_condition]))
-        elif self.density_bandwidth_mode == 'per_condition':
-            per_condition_bw = [estimate_bw(b) for b in bias_by_condition]
-        else:
-            raise ValueError(
-                f"unknown density_bandwidth_mode {self.density_bandwidth_mode!r}; "
-                "expected 'per_condition', 'pooled' or 'average'")
-
-        def density_curve_wrapper(feat_diff_vals, bias_vals, grid, kernel_bw):
-            """Wrapper to extract only asymmetry values from density computation."""
-            distances, asymmetry_values = _compute_empirical_density_asymmetry_core(
-                feat_diff_vals, bias_vals, grid,
-                weights_sd=self.emp_density_weights_sd, kernel_bw=kernel_bw)
-            return asymmetry_values
-
-        density_curves = jnp.stack([
-            density_curve_wrapper(condition_dataframes[i][:, 0],
-                                  condition_dataframes[i][:, 1],
-                                  feat_diff_grid,
-                                  shared_bw if shared_bw is not None
-                                  else per_condition_bw[i])
-            for i in range(len(self.condition_names))
-        ])
-
-        # Smoothed (rolling-mean) circular bias curve, for the smoothed_exp method:
-        # same curve-vs-curve idea as the density asymmetry curve above, but for the
-        # circular-mean bias itself instead of hard 8-degree bins.
-        smoothed_bias_curves = jnp.stack([
-            compute_target_bias_rolling_curve_core(condition_dataframes[i][:, 0],
-                                                    condition_dataframes[i][:, 1],
-                                                    feat_diff_grid,
-                                                    weights_sd=self.emp_density_weights_sd)
-            for i in range(len(self.condition_names))
-        ])
-
-        # Store unified results
-        self.unified_feat_indices = feat_indices[0]  # Same for all conditions
-        self.unified_target_bias = target_bias  # Shape: (n_conditions, n_bins)
-        self.unified_bias_weights = weights  # Shape: (n_conditions, n_bins)
-        self.unified_target_density = density_curves  # Shape: (n_conditions, n_feat_points)
-        self.unified_target_bias_curve = smoothed_bias_curves  # Shape: (n_conditions, n_feat_points)
-
-        # Degenerate density targets: decided once, from the target alone. Recorded
-        # here rather than acted on, because the check is scoped to the density
-        # objective -- a flat density target says nothing about whether the same
-        # condition can be fit by likelihood or CRPS, so it must not break those.
-        # See DEGENERATE_TARGET_EPS and _check_density_targets_fittable.
-        density_target_var = np.var(np.asarray(density_curves), axis=1)
-        self.density_target_var = density_target_var
-        self.density_degenerate_conditions = degenerate_targets(density_curves)
-        for i, name in enumerate(self.condition_names):
-            # Near-constant targets are defined but numerically unstable under CCC.
-            # Warn; the refusal is at eps and nowhere else. Scale-relative, so this
-            # does not fire on a genuinely small but well-resolved curve.
-            scale = float(np.max(np.abs(np.asarray(density_curves)[i])))
-            if (not self.density_degenerate_conditions[i] and scale > 0
-                    and np.sqrt(density_target_var[i]) < 1e-3 * scale):
-                print(f"  WARNING: {name} density target is near-constant "
-                      f"(sd={np.sqrt(density_target_var[i]):.2e} vs max|curve|={scale:.2e}); "
-                      "CCC is unstable here — treat its density fit with suspicion.")
+        for warning in targets.near_constant_warnings:
+            print(warning)
 
         print(f"Target curves precomputed for {len(self.condition_names)} conditions (vmap)")
         print(f"Bias curves shape: {self.unified_target_bias.shape}")
         print(f"Bias weights shape: {self.unified_bias_weights.shape}")
         print(f"Density curves shape: {self.unified_target_density.shape}")
         print(f"Smoothed bias curves shape: {self.unified_target_bias_curve.shape}")
-
-        # Precompute empirical bias distributions shared by the balanced_crps and
-        # bias_weighted_crps methods (unified_target_d for both; unified_fd_weights
-        # for balanced_crps, unified_bias_fd_weights for bias_weighted_crps).
-        # Q[c, j, k] = Gaussian-weighted empirical probability of bias bin k at feat_diff grid point j.
-        # target_d[c, j, k] = sum_l D_circ[k,l] * Q[c,j,l]  — expected circular distance from bin k
-        #                       to the empirical distribution.  Precomputed so the JIT branch is cheap.
-        print("Precomputing empirical bias distributions for balanced_crps/bias_weighted_crps...")
-        D_np = np.array(self.D_circ_matrix)        # (n_bias, n_bias)
-        fd_grid_np = np.array(self.feat_diff_grid)  # (n_feat,)
-        bias_low = config.mu1_bias_range[0]
-        bias_step_val = config.mu1_bias_step
-        n_feat_pts = len(fd_grid_np)
-        n_bias_pts = self.n_mu1_bias
-
-        target_d_list = []
-        fd_weights_list = []
-        fd_bias_weights_list = []
-        for cond_name in self.condition_names:
-            dataset_np = np.array(self.condition_datasets[cond_name])
-            target_d, support_mask, bias_weights = compute_bwcrps_condition_targets(
-                dataset_np[:, 0], dataset_np[:, 1], fd_grid_np, D_np,
-                self.emp_density_weights_sd, bias_low, bias_step_val, n_bias_pts)
-            target_d_list.append(target_d)
-            fd_weights_list.append(support_mask)
-            fd_bias_weights_list.append(bias_weights)
-
-        self.unified_target_d = jnp.array(np.stack(target_d_list))         # (n_cond, n_feat, n_bias)
-        self.unified_fd_weights = jnp.array(np.stack(fd_weights_list))      # (n_cond, n_feat) — binary mask
-        self.unified_bias_fd_weights = jnp.array(np.stack(fd_bias_weights_list))  # (n_cond, n_feat)
         print(f"  target_d shape: {self.unified_target_d.shape}, "
               f"fd_weights shape: {self.unified_fd_weights.shape}, "
               f"mean support: {self.unified_fd_weights.mean():.2f}")
@@ -1124,7 +798,9 @@ class GridBasedMultiConditionOptimizer:
         The rule itself lives in `density_objective.check_targets_fittable`, so
         the exhaustive backend enforces it identically.
         """
-        check_targets_fittable(self.unified_target_density, self.condition_names, fitting_method)
+        targets = (self.unified_matched_density_target if fitting_method == "density"
+                   else self.unified_target_density)
+        check_targets_fittable(targets, self.condition_names, fitting_method)
 
     def _optimize_all_conditions_hierarchical_jit(self, surfaces: jnp.ndarray,
                                                   cond_params_with_idx: jnp.ndarray,
@@ -1176,44 +852,37 @@ class GridBasedMultiConditionOptimizer:
             weights_per_combo = self.unified_bias_weights[condition_indices]  # Shape: (n_combos, n_bins)
 
             # Compute losses using unified function with weights (MSE for expectation, angular=True)
-            losses = _compute_curve_losses(predicted_bias_per_combo, target_bias_per_combo,
+            losses = compute_curve_losses(predicted_bias_per_combo, target_bias_per_combo,
                                            loss_type="mse", is_angular=True, weights=weights_per_combo)
 
         elif fitting_method == "smoothed_exp":
-            # Curve-vs-curve version of "expectation": same MSE-only, angular loss, but
-            # the target is a smoothed (Gaussian rolling-mean) circular bias curve over
-            # the full feat_diff grid instead of hard 8-degree bins, and the model curve
-            # is evaluated at every grid point instead of only the bin-center indices.
-            # No correlation term and no support weighting, matching how "density" fits.
-            all_predicted_bias_curve = _generate_nn_bias_curve_batch(surfaces, jnp.arange(n_feat))
-
-            predicted_bias_curve_per_combo = all_predicted_bias_curve[surface_indices]  # Shape: (n_combos, n_feat_points)
+            predicted_bias_curve_per_combo = generate_nn_matched_bias_curve_batch(
+                surfaces[surface_indices], self.unified_feature_operator[condition_indices])
             target_bias_curve_per_combo = self.unified_target_bias_curve[condition_indices]  # Shape: (n_combos, n_feat_points)
 
-            losses = _compute_curve_losses(predicted_bias_curve_per_combo, target_bias_curve_per_combo,
+            losses = compute_curve_losses(predicted_bias_curve_per_combo, target_bias_curve_per_combo,
                                            loss_type="mse", is_angular=True)
 
         elif fitting_method in ("density", "density_legacy"):
             self._check_density_targets_fittable(fitting_method)
-            # Use precomputed target density curves (no function calls inside JIT)
-            # Generate density asymmetry for ALL surfaces at once: shape (n_surfaces, n_feat_points)
-            all_predicted_asymmetry = generate_nn_density_asymmetry_batch(surfaces, weights_sd=self.emp_density_weights_sd, smoothing_sigma=self.density_smoothing_sigma)
-
-            # Get predicted and target asymmetry for each parameter combination
-            predicted_asymmetry_per_combo = all_predicted_asymmetry[surface_indices]  # Shape: (n_combos, n_feat_points)
-            target_asymmetry_per_combo = self.unified_target_density[
-                condition_indices]  # Shape: (n_combos, n_feat_points)
-
             if fitting_method == "density":
-                losses = _compute_curve_losses(predicted_asymmetry_per_combo, target_asymmetry_per_combo,
+                predicted_asymmetry_per_combo = generate_nn_matched_density_asymmetry_batch(
+                    surfaces[surface_indices], self.unified_feature_operator[condition_indices],
+                    self.unified_density_bandwidth[condition_indices])
+                target_asymmetry_per_combo = self.unified_matched_density_target[condition_indices]
+                losses = compute_curve_losses(predicted_asymmetry_per_combo, target_asymmetry_per_combo,
                                                loss_type="ccc", is_angular=False)
             else:
                 # `density_legacy` is the pre-2026-08 objective, kept solely so
                 # published numbers stay reproducible and explicable. It is not a
                 # tuning knob: `corr_weight` only reaches this branch.
-                losses = _compute_curve_losses(predicted_asymmetry_per_combo, target_asymmetry_per_combo,
-                                               loss_type="combined", is_angular=False,
-                                               corr_weight=self.corr_weight)
+                all_predicted_asymmetry = generate_nn_density_asymmetry_batch(
+                    surfaces, weights_sd=self.emp_density_weights_sd,
+                    smoothing_sigma=self.density_smoothing_sigma)
+                losses = compute_curve_losses(
+                    all_predicted_asymmetry[surface_indices],
+                    self.unified_target_density[condition_indices],
+                    loss_type="combined", is_angular=False, corr_weight=self.corr_weight)
 
         elif fitting_method == "crps":
             # Energy score CRPS with circular distance.
@@ -1262,8 +931,8 @@ class GridBasedMultiConditionOptimizer:
 
         elif fitting_method == "bias_weighted_crps":
             # Same energy-score formula as balanced_crps but fd points are weighted
-            # by squared smoothed mean bias instead of a binary support mask, so
-            # feat_diff ranges with larger-magnitude observed bias contribute more.
+            # by squared circular smoothed mean bias instead of a binary support
+            # mask, so ranges with larger observed bias contribute more.
 
             log_prob_norm = surfaces - jax.scipy.special.logsumexp(surfaces, axis=1, keepdims=True)
             prob_surfaces = jnp.exp(log_prob_norm)  # (n_unique, n_bias, n_feat)
@@ -1329,7 +998,7 @@ class GridBasedMultiConditionOptimizer:
         total_nn_evaluations = 0
 
         # Initialize bounds for shared parameters
-        sd_spat_range = (config.param_grid_low, config.param_range_high)
+        sd_spat_range = self.sd_spat_bounds
         # sd_motor is one component of the total response error, so it can never
         # exceed the empirical error SD; sd_motor_max carries that data-informed
         # cap (min-over-conditions error SD). Capping the range and sizing the
@@ -1364,10 +1033,10 @@ class GridBasedMultiConditionOptimizer:
         # The schedule lives in run_fingerprint so the run identity records the
         # steps actually walked rather than a literal that may have been
         # extended; see effective_feat_step_schedule.
-        center = (config.param_grid_low + config.param_range_high) / 2
+        center = (self.sd_feat_bounds[0] + self.sd_feat_bounds[1]) / 2
         feat_step_schedule = jnp.array(
             effective_feat_step_schedule(
-                feat_grid_size, config.param_grid_low, config.param_range_high
+                feat_grid_size, self.sd_feat_bounds[0], self.sd_feat_bounds[1]
             ),
             dtype=jnp.float32,
         )
@@ -1427,7 +1096,9 @@ class GridBasedMultiConditionOptimizer:
                         current_best_params[:, 1]  # sd_feat2
                     ])
 
-                    all_grids = jax.vmap(create_condition_grid, in_axes=(0, None, None))(cond_data, feat_grid_size, current_step)
+                    all_grids = jax.vmap(create_condition_grid, in_axes=(0, None, None, None, None))(
+                        cond_data, feat_grid_size, current_step,
+                        self.sd_feat_bounds[0], self.sd_feat_bounds[1])
                     param_grid = all_grids.reshape(-1, 3)
 
                     nn_params = jnp.column_stack([
@@ -1540,23 +1211,23 @@ class GridBasedMultiConditionOptimizer:
             spat_step = (sd_spat_range[1] - sd_spat_range[0]) / (shared_grid_size - 1)
             if float(sd_spat) <= sd_spat_range[0] + spat_step:
                 print(f"  BOUNDARY: sd_spat={float(sd_spat):.1f} near lower bound {sd_spat_range[0]}")
-            if float(sd_spat) >= config.param_range_high - spat_step:
-                print(f"  BOUNDARY: sd_spat={float(sd_spat):.1f} near upper bound {config.param_range_high}")
+            if float(sd_spat) >= sd_spat_range[1] - spat_step:
+                print(f"  BOUNDARY: sd_spat={float(sd_spat):.1f} near upper bound {sd_spat_range[1]}")
             feat1_best = best_shared_result[:, 3]
             feat2_best = best_shared_result[:, 4]
             current_feat_step = float(feat_step_schedule[-1])  # finest step reached this stage
             for i in range(self.n_conditions):
                 cname = self.condition_names[i]
                 f1, f2 = float(feat1_best[i]), float(feat2_best[i])
-                feat_low = config.param_grid_low
+                feat_low = self.sd_feat_bounds[0]
                 if f1 <= feat_low + current_feat_step:
                     print(f"  BOUNDARY: {cname} sd_feat1={f1:.1f} near lower bound {feat_low}")
-                if f1 >= config.param_range_high - current_feat_step:
-                    print(f"  BOUNDARY: {cname} sd_feat1={f1:.1f} near upper bound {config.param_range_high}")
+                if f1 >= self.sd_feat_bounds[1] - current_feat_step:
+                    print(f"  BOUNDARY: {cname} sd_feat1={f1:.1f} near upper bound {self.sd_feat_bounds[1]}")
                 if f2 <= feat_low + current_feat_step:
                     print(f"  BOUNDARY: {cname} sd_feat2={f2:.1f} near lower bound {feat_low}")
-                if f2 >= config.param_range_high - current_feat_step:
-                    print(f"  BOUNDARY: {cname} sd_feat2={f2:.1f} near upper bound {config.param_range_high}")
+                if f2 >= self.sd_feat_bounds[1] - current_feat_step:
+                    print(f"  BOUNDARY: {cname} sd_feat2={f2:.1f} near upper bound {self.sd_feat_bounds[1]}")
 
             # Update overall best
             if stage_best_loss < best_overall_loss:
@@ -1609,8 +1280,8 @@ class GridBasedMultiConditionOptimizer:
 
             # Update ranges, ensuring they stay within bounds
             sd_spat_range = (
-                max(config.param_grid_low, best_sd_spat - new_spat_half_range),
-                min(config.param_range_high, best_sd_spat + new_spat_half_range)
+                max(self.sd_spat_bounds[0], best_sd_spat - new_spat_half_range),
+                min(self.sd_spat_bounds[1], best_sd_spat + new_spat_half_range)
             )
             sd_motor_range = (
                 max(sd_motor_low, best_sd_motor - new_motor_half_range),
@@ -1698,26 +1369,31 @@ def centered_grid(center, num_points, step_size, lower, upper):
                      jnp.linspace(lower, upper, num_points), shifted)
 
 
-def create_condition_grid(cond_idx_and_params, feat_grid_size, current_step):
+def create_condition_grid(cond_idx_and_params, feat_grid_size, current_step,
+                          feat_low, feat_high):
     """Create a condition-specific parameter grid for feature stds.
 
     Args:
         cond_idx_and_params: Tuple of (condition index, sd_feat1, sd_feat2).
         feat_grid_size: Number of points per feature dimension.
         current_step: Step size for the grid.
+        feat_low, feat_high: the surrogate's feature-SD bounds.
 
     Returns:
         Array of shape (feat_grid_size^2, 3) with condition index and params.
     """
     cond_idx, best_feat1, best_feat2 = cond_idx_and_params
 
-    # Clamp to the grid the surfaces actually cover, matching the coarse stage's
-    # feat_low. Using param_range_low here floored refined sd_feat at 10 while the
-    # coarse sweep could already reach 5, so low-noise fits railed at 10.
+    # Clamp to the surrogate's own feature bounds, the same ones the coarse stage
+    # sweeps. These are passed in rather than read from a module constant because
+    # they differ by family, and this exact site has already produced one railing
+    # bug: it used param_range_low (10) while the coarse sweep reached 5, so
+    # low-noise fits piled up at 10. A constant that is right for one surrogate
+    # reintroduces that bug for the other.
     feat1_vals = centered_grid(best_feat1, feat_grid_size, current_step,
-                               config.param_grid_low, config.param_range_high)
+                               feat_low, feat_high)
     feat2_vals = centered_grid(best_feat2, feat_grid_size, current_step,
-                               config.param_grid_low, config.param_range_high)
+                               feat_low, feat_high)
 
     feat1_grid, feat2_grid = jnp.meshgrid(feat1_vals, feat2_vals, indexing='ij')
     n_points = feat_grid_size * feat_grid_size

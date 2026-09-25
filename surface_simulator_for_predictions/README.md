@@ -21,7 +21,7 @@ PYTHONPATH=. python surface_simulator_for_predictions/surface_simulator.py \
   --skip-motor-noise
 ```
 
-The `--n-samples 20` selects one of the two theoretical internal-sampling assumptions. It does not refer to the number of experimental trials. The matching trained model (`pretrained/model_epoch1425_10ktrain_20samples.pkl`) is loaded automatically; pass `--checkpoint-path` only to point at a different one.
+The `--n-samples 20` selects one of the two theoretical internal-sampling assumptions. It does not refer to the number of experimental trials. The matching packaged WNM (`pretrained/wnm_k12_20samples.pkl`) is loaded automatically; pass `--checkpoint-path` only to reproduce a different artifact.
 
 The three required inputs can also be given positionally — `surface_simulator.py INPUT N_SAMPLES OUTPUT` — which is what the smoke scripts use.
 
@@ -36,7 +36,7 @@ Each value is a curve across stimulus dissimilarity rather than a single average
 
 ## Advanced: predictions from raw simulation surfaces
 
-The included trained model predicts the primary (`mu1`) component. Researchers who need predictions for the secondary (`mu2`) mixture component must provide raw averaged simulation surfaces:
+The packaged WNM predicts the reported `mu1` bias distribution. Researchers who need the separate `mu2` spatial-bias outputs must provide raw averaged simulation surfaces:
 
 ```bash
 PYTHONPATH=. python surface_simulator_for_predictions/surface_simulator.py \
@@ -58,12 +58,12 @@ Averaged surfaces are not included in the repository and are not currently publi
 surface_simulator.py INPUT N_SAMPLES OUTPUT      # or the named forms below
   [--input-path INPUT] [--n-samples N] [--output-path OUTPUT]
   [--skip-motor-noise]
-  [--surface-source {nn,raw}]
+  [--surface-source {model,nn,raw}]
   [--checkpoint-path CHECKPOINT.pkl]
   [--averaged-surfaces-dir DIRECTORY]
 ```
 
-`--averaged-surfaces-dir` is required with `--surface-source raw`.
+`model` is the default and uses the current packaged surrogate (WNM). `nn` explicitly selects the historical surface network. `--averaged-surfaces-dir` is required with `--surface-source raw`.
 
 ## R interface
 
@@ -81,12 +81,8 @@ params <- data.frame(
 predictions <- simulate_surfaces(
   parameters = params,
   n_samples = 20,
-  skip_motor_noise = TRUE,
-  use_nn_surfaces = TRUE,
-  checkpoint_path = normalizePath(
-    "pretrained/model_epoch1425_10ktrain_20samples.pkl"
-  )
+  skip_motor_noise = TRUE
 )
 ```
 
-For raw mode, set `use_nn_surfaces = FALSE` and provide an absolute `averaged_surfaces_dir`. Helper functions `simulate_unequal_noise2()` and `simulate_equal_noise()` construct common parameter sweeps.
+For raw mode, set `surface_source = "raw"` and provide an absolute `averaged_surfaces_dir`. Set `surface_source = "nn"` only for historical surface-NN reproduction. The old `use_nn_surfaces` boolean remains a compatibility alias but is deprecated. Helper functions `simulate_unequal_noise2()` and `simulate_equal_noise()` construct common parameter sweeps.

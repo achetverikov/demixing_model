@@ -1,8 +1,12 @@
-# Neural Network Optimization Pipeline
+# Historical Surface-NN Optimization Pipeline
 
 ## Overview
 
-Two-step pipeline for training the mirror-aware neural network:
+This document describes the historical surface-NN surrogate pipeline retained
+for reproduction. WNM is now the production surrogate for fitting and
+prediction; see the root README and `pretrained/README.md` for current usage.
+
+The historical pipeline has two steps:
 
 1. Create averaged surfaces from simulated samples.
 2. Train the mirror-aware network on those surfaces.
@@ -57,14 +61,15 @@ with appropriate component flipping, and builds the KDE surfaces in one step.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-The flags above reproduce the architecture and objective of the production
-20-observation run. The CLI defaults remain `circular`, 64 native mu1 rows, and
-90 training feature columns so older experiments stay reproducible; omitting
-the three production flags therefore starts a different model.
+The flags above reproduce the architecture and objective of the former
+20-observation surface-NN run. The CLI defaults remain `circular`, 64 native
+mu1 rows, and 90 training feature columns so older experiments stay
+reproducible; omitting the three historical run flags therefore starts a
+different model.
 
-## Production 20-observation surrogate
+## Former 20-observation surface surrogate
 
-The production checkpoint is
+The historical checkpoint is
 `pretrained/model_epoch1425_10ktrain_20samples.pkl`. It was selected from a
 1500-epoch run trained on the 10k-simulation surfaces using:
 
@@ -144,13 +149,14 @@ config.mu1_surface_shape = (180, 90)   # (bias_points, feat_diff_points)
 ```
 
 `--feat-bandwidth` is expressed in feature-difference **grid steps**, not degrees.
-The production grid advances by 2°, so the default `--feat-bandwidth 3` gives a
-nominal 6° Gaussian SD across neighboring simulated dissimilarities. This smoothing
+The historical deployed surface grid advances by 2°, so the default
+`--feat-bandwidth 3` gives a nominal 6° Gaussian SD across neighboring
+simulated dissimilarities. This smoothing
 is part of each training target and is consequently baked into the trained NN output.
 
 The mu1 axis is a half-open periodic grid, `[-180, 180)` in 2° cells. The
-production model is trained through a 128-row native decoder but always returns
-the configured 180-row periodic density. Feature difference is bounded rather
+historical surface model is trained through a 128-row native decoder but always
+returns the configured 180-row periodic density. Feature difference is bounded rather
 than circular.
 
 ## Warm-starting a completed run

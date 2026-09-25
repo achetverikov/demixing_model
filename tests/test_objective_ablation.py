@@ -12,6 +12,8 @@ sys.path.insert(0, str(ROOT / 'neural_network_optimization'))
 from objective_ablation import _column_metrics, _surface_scores
 from shared.mu1_axis import mu1_size
 
+pytestmark = pytest.mark.legacy_surface
+
 
 class _Surface:
     pass

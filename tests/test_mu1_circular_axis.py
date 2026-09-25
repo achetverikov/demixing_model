@@ -1,4 +1,4 @@
-"""Executable guards for the circular mu1_bias axis (CIRCULARITY_FIX_PLAN).
+"""Executable guards for the historical circular mu1_bias-axis migration.
 
 The failure mode this migration has is *not* a crash: it is code that keeps
 running and returns a plausible wrong number.  So most tests here are written
@@ -280,17 +280,6 @@ def test_motor_kernel_fft_period_matches_the_angular_period():
 # 9. The independent generator
 # ---------------------------------------------------------------------------
 
-def test_surface_computation_generator_emits_the_periodic_axis():
-    """surface_computation builds its own arange, bypassing config entirely."""
-    src = (Path(__file__).resolve().parents[1]
-           / "surface_computation" / "jax_fit_main.py").read_text()
-    assert "jnp.arange(mu1_bias_range[0], mu1_bias_range[1], mu1_bias_step)" in src
-    assert "mu1_bias_range[1] + mu1_bias_step" not in src
-
-    mu1_vals = np.arange(-180, 180, 2)  # the expression above, evaluated
-    assert np.array_equal(mu1_vals, np.asarray(mu1_grid()))
-
-
 # ---------------------------------------------------------------------------
 # 10. The empirical TARGET side
 # ---------------------------------------------------------------------------
@@ -342,15 +331,6 @@ def _faulty_empirical_asymmetry(real_feat_diff, real_bias, feat_diff_grid,
     neg = jnp.where((bias_range < 0)[None, :], density, 0.0).sum(axis=1) * dx
     return pos - neg
 
-
-def test_empirical_target_grid_is_half_open():
-    """The target axis carried the identical dual-endpoint defect."""
-    from shared.utils import _compute_empirical_density_asymmetry_core
-    import inspect
-    src = inspect.getsource(_compute_empirical_density_asymmetry_core)
-    assert "linspace(-max_diss, max_diss, 181)" not in src
-
-
 def test_empirical_target_symmetric_fixture_is_zero():
     from shared.utils import _compute_empirical_density_asymmetry_core
 
@@ -370,28 +350,9 @@ def test_empirical_target_symmetric_fixture_is_zero():
         jnp.asarray(feat), jnp.asarray(bias), grid)
     assert np.max(np.abs(np.asarray(faulty))) > 1e-3
 
-
-def test_empirical_and_model_sign_splits_agree_on_the_endpoint_rule():
-    """Exports disagree with the fit if only one side excludes the antipode."""
-    import inspect
-    from shared.utils import (_compute_empirical_density_asymmetry_core,
-                              compute_single_density_asymmetry)
-    emp = inspect.getsource(_compute_empirical_density_asymmetry_core)
-    assert "bias_range > -max_diss" in emp
-    assert "sign_masks" in inspect.getsource(compute_single_density_asymmetry)
-
-
 # ---------------------------------------------------------------------------
 # 12 / 14. expectation_loss coordinates and periodic quadrature values
 # ---------------------------------------------------------------------------
-
-def test_expectation_loss_reads_the_config_grid():
-    import inspect
-    from neural_network_optimization import loss_functions
-    src = inspect.getsource(loss_functions.expectation_loss)
-    assert "mu1_grid()" in src
-    assert "jnp.linspace(" not in src  # never reconstruct the coordinates
-
 
 def test_periodic_quadrature_integrates_the_uniform_density_to_one():
     uniform = np.full((mu1_size(), 1), 1.0 / 360.0)
