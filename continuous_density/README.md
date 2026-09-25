@@ -372,6 +372,9 @@ Generated NPZs, checkpoints, CSVs, and figures belong under
 `$DEMIXING_ARTIFACT_ROOT/continuous_density/`; they are not shipped with or
 expected in a normal checkout. The prototype training and large evaluation
 artifacts remain separate from runtime code. Bundle-native production fits and
-their maintained result/plot consumers use the packaged WNM backend directly.
-The surface NN remains installed only for legacy replay and transition
-comparisons; current transition status is tracked in the root `TODO.md`.
+their maintained stored-result/plot consumers use the packaged WNM backend
+directly. The shared bare surrogate default still resolves to the surface NN for
+the separate generic prediction interface, which has not been migrated in this
+result/plot pass. Stored fit consumers recover their artifact from the run
+fingerprint instead of using that default. Current transition status is tracked
+in the root `TODO.md`.
