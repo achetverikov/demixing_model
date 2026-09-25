@@ -20,7 +20,7 @@ Three panels, each a separate `--panel` run:
 Usage::
 
     JAX_PLATFORMS=cpu python model_fit_to_data/run_recovery_panel.py \
-        --panel empirical --out results/continuous_density_4.1q/recovery
+        --panel empirical --out results/wnm_4.1q/recovery
 
 Writes ``<out>/<panel>_rows.csv`` (one row per replicate, every field
 ``RecoveryResult.row()`` carries) and ``<out>/<panel>_summary.json`` (the summary
@@ -529,7 +529,7 @@ def main(argv=None):
     if not checkpoint.exists():
         raise FileNotFoundError(
             f"no WNM artifact at {checkpoint}. Pass --checkpoint, or package one with "
-            "continuous_density/package_wnm_artifact.py.")
+            "surrogate_training/wnm/package_artifact.py.")
     predictor = predictor_from_surrogate(surrogate.load_surrogate(checkpoint_path=checkpoint))
     feat_grid, d_circ = _grids()
 
