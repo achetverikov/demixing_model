@@ -173,7 +173,7 @@ choose and document a new learning-rate schedule.
 
 The full experiment inventory, figures, CSV files, 100k references, and
 intermediate checkpoints are generated artifacts, not repository contents. In
-the current development workspace they are indexed at
+the external artifact workspace they are indexed at
 `$DEMIXING_ARTIFACT_ROOT/mu1_experiments/README.md`, with the historical
 protocol in `OBJECTIVE_ABLATION.md` beside it. A normal checkout is not expected
 to contain these paths.
