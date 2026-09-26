@@ -72,8 +72,8 @@ DECLARED_DOMAIN = {
 
 #: A fixed panel spanning the supported domain: narrow and broad feature noise in
 #: both orders, low and high d-prime, feature differences at both ends, and every
-#: corner of the SD box.  It proves the packaged artifact reproduces the research
-#: weights, and -- because it is pushed through the production predictor -- that
+#: corner of the SD box.  It proves the packaged artifact reproduces the selected
+#: training weights, and -- because it is pushed through the production predictor -- that
 #: the domain the artifact advertises actually accepts its own boundary.
 VERIFICATION_PANEL = np.array([
     [10.0, 10.0, 10.0, 2.0],
