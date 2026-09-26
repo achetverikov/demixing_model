@@ -1,8 +1,5 @@
 # Demixing Model
 
-Current planned work is listed only in `TODO.md`; completed and superseded
-transition and architecture work is summarized in `HISTORY.md`.
-
 The Demixing Model explains why a remembered/perceived/evaluated item can be biased toward or away from another item. The central idea is that the brain must separate two noisy, overlapping memory representations. Depending on how similar the items are and where the noise occurs, this separation can produce either attraction or repulsion. This is a normative, ideal-observer model: attraction or repulsion is unavoidable when the observer attempts to estimate the stimulus parameters accurately.
 
 The computationally expensive simulations have already been summarized in two trained model files included in `pretrained/`. **You can fit experimental data or generate theoretical predictions without downloading additional model data.**
@@ -297,6 +294,10 @@ bash tests/run_smoke_compare_seeds.sh
 ```
 
 See [INSTALL.md](INSTALL.md#verification) for GPU/CPU controls and [tests/README.md](tests/README.md) for their scope.
+
+## Development logs
+
+Current planned work is listed only in `TODO.md`; completed and superseded transition and architecture work is summarized in `HISTORY.md`.
 
 ## License, citation, and disclaimer
 
