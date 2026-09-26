@@ -1,4 +1,11 @@
-"""Shared utility helpers for checkpoints, surfaces, and data handling."""
+"""Historical surface/checkpoint utilities and compatibility helpers.
+
+Maintained WNM code should use the focused modules in :mod:`shared.paths`,
+:mod:`shared.behavioral_data`, :mod:`shared.circular`, :mod:`shared.empirical`,
+:mod:`shared.hashing`, :mod:`shared.prediction`, and :mod:`shared.surrogate`.
+This module remains because the retained surface-NN/raw-surface workflows still
+need their legacy checkpoint, surface, plotting, and training helpers.
+"""
 
 import json
 import random
