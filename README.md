@@ -1,10 +1,7 @@
 # Demixing Model
 
 Current planned work is listed only in `TODO.md`; completed and superseded
-transition work is summarized in `HISTORY.md`. The post-cutover repository
-architecture audit, including the planned dissolution of the temporary
-the former transition workspace, is in
-[`ARCHITECTURE_AUDIT.md`](ARCHITECTURE_AUDIT.md).
+transition and architecture work is summarized in `HISTORY.md`.
 
 The Demixing Model explains why a remembered/perceived/evaluated item can be biased toward or away from another item. The central idea is that the brain must separate two noisy, overlapping memory representations. Depending on how similar the items are and where the noise occurs, this separation can produce either attraction or repulsion. This is a normative, ideal-observer model: attraction or repulsion is unavoidable when the observer attempts to estimate the stimulus parameters accurately.
 
@@ -221,37 +218,7 @@ be writable because the browser extracts individual surfaces as needed. The WNM
 view evaluates the packaged model directly; it never reads a corpus-derived or
 interpolated surface.
 
-### Standardized WNM recovery
-
-`model_fit_to_data/standardized_recovery.py` runs the maintained closed-loop
-parameter-recovery protocol. It generates each simulated dataset once, fits all
-requested objectives from the same deterministic starts, canonically rescores
-each fit under every supported objective, and writes parameter and
-dissimilarity-stratified curve tables. Copy
-`model_fit_to_data/recovery_protocol.example.json`, adjust the cases and trial
-counts, then run:
-
-```bash
-JAX_PLATFORMS=cpu python model_fit_to_data/standardized_recovery.py \
-  --protocol model_fit_to_data/recovery_protocol.example.json \
-  --out /path/to/artifacts/recovery/run_name
-```
-
-The output manifest records the normalized protocol, WNM artifact identity,
-checkpoint digest, optimizer identity, and a digest of every relevant source
-file. Whole-fit checkpoints are resumed only when those identities still match.
-The artifact includes run, long-form parameter, parameter-summary, and curve
-tables plus standardized parameter-recovery and curve-comparison plots.
-The default `wnm_closed_loop` source draws from WNM itself. For recovery against
-the actual simulator, set `dataset_source.kind` to `npz` and provide a directory
-of simulator outputs named by the protocol pattern; each file contains `c0`,
-`c1`, ... arrays of `[feature_difference, bias]` trials. Both sources then pass
-through the identical targets, starts, fits, rescoring, tables, and plots.
-Full recovery artifacts belong outside the repository under
-`$DEMIXING_ARTIFACT_ROOT`; the JSON file in the repository is a protocol example,
-not a completed panel.
-
-The current WNM research pipeline is:
+The current WNM training and analysis pipeline is:
 
 1. Simulate two-item mixture-inference samples and accumulate the WNM training corpus with the tools under `surface_computation/`.
 2. Train/package the conditional wrapped-normal mixture with the tools under `surrogate_training/wnm/`.
@@ -289,9 +256,8 @@ The pipeline accepts environment overrides such as `DEMIXING_MODEL`, `RESULTS`, 
 - `pretrained/` — the included 20- and 100-sample trained models.
 - `model_fit_to_data/` — fitting, postprocessing, and plotting.
 - `surface_simulator_for_predictions/` — Python and R prediction interfaces.
-- `surface_computation/` — simulation and likelihood-surface generation.
+- `surface_computation/` — simulation, WNM design, training-data generation, and historical likelihood-surface generation.
 - `surrogate_training/wnm/` — WNM training and artifact packaging.
-- `surface_computation/` — simulation, WNM design, and training-data generation.
 - `neural_network_optimization/` — historical surface-NN averaging/training code retained for reproduction.
 - `surface_browser/` — Streamlit browser for locally available surfaces.
 - `shared/` — internal functions used by several parts of the model.
