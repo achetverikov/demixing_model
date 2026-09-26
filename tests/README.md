@@ -2,11 +2,6 @@
 
 Run commands from the repository root. Override the interpreter with `PYTHON_BIN` where needed.
 
-The pre-refactor cleanup and runtime-reduction work is tracked in
-[`TEST_SUITE_IMPROVEMENT_PLAN.md`](../TEST_SUITE_IMPROVEMENT_PLAN.md). That plan
-also requires a version-controlled `tests/AGENTS.md` describing how future tests
-should be layered, marked, minimized, and justified.
-
 ## Maintained pytest baseline
 
 ```bash
@@ -14,8 +9,8 @@ PYTHONPATH=. python -m pytest
 ```
 
 Pytest is configured to collect `tests/` only and, by default, excludes
-`integration`, `research`, and `legacy_surface` suites. This is the
-standalone WNM/product baseline for a normal checkout.
+`integration` and `legacy_surface` suites. This is the standalone WNM/product
+baseline for a normal checkout.
 
 Opt-in suites remain available:
 
@@ -23,8 +18,6 @@ Opt-in suites remain available:
 # Cross-repository checks; requires sibling contextual_biases_database where relevant.
 PYTHONPATH=. python -m pytest -m integration
 
-# Frozen transition/optimizer-comparison research.
-PYTHONPATH=. python -m pytest -m research
 
 # Historical surface-NN reproduction contracts.
 PYTHONPATH=. python -m pytest -m legacy_surface
@@ -59,7 +52,7 @@ PYTHON_BIN=python bash tests/run_smoke_compare_seeds.sh
 ```
 
 - `run_smoke_wnm.sh` exercises the current end-user chain: ordinary CSV fit with the packaged WNM, tabular export, individual/group/PDF plots, and the public prediction API.
-- `run_smoke_pipeline.sh` and `run_smoke_standard.sh` are historical surface-generation/training checks retained for reproduction of that research pipeline.
+- `run_smoke_pipeline.sh` and `run_smoke_standard.sh` are historical surface-generation/training checks retained for reproduction of that pipeline.
 - `run_smoke_compare_seeds.sh` checks that the direct and stored-sample simulation routes agree under the same seed within the documented float16 tolerance.
 
 The fit-producing scripts use the tracked input `example_data/data_color_comb_color2_two_subjects.csv`; the seed comparison builds its own small parameter list. These workflows are compute-heavy and should normally run on an NVIDIA GPU. `run_smoke_pipeline.sh` explicitly requires one unless `ALLOW_CPU=1` is set; CPU execution can be very slow.
