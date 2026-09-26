@@ -1,3 +1,5 @@
+> **Archived transition record.** This file preserves the evidence and terminology used during the 2026 WNM cutover. Commands, paths, and module names may reflect the transition-era repository layout and are not current run instructions. See the root README and current package READMEs for executable workflows.
+
 # WNM bias-weighted-CRPS optimizer findings
 
 Date: 2026-09-08; 64-start common policy added 2026-09-10
