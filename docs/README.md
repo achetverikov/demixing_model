@@ -20,7 +20,7 @@ python surface_simulator_for_predictions/surface_simulator.py \
   --skip-motor-noise
 ```
 
-The fitting figure reads the prepared <a href="https://doi.org/10.1038/nn.3689" title="Fischer, J., &amp; Whitney, D. (2014). Serial dependence in visual perception. Nature Neuroscience, 17(5), 738–743. https://doi.org/10.1038/nn.3689">Fischer and Whitney (2014)</a> trials and fitted curves written by `export_wnm_fit_curves.py` under `csv_exports/fitted_curves.csv`. The current generator default still selects the historical `expectation` fit for continuity of the committed figure; change `--fit-objective` to `smoothed_exp` for the maintained mean-bias objective. After running `demo_fischer_whitney.py`, regenerate both assets with:
+The fitting figure reads the prepared <a href="https://doi.org/10.1038/nn.3689" title="Fischer, J., &amp; Whitney, D. (2014). Serial dependence in visual perception. Nature Neuroscience, 17(5), 738–743. https://doi.org/10.1038/nn.3689">Fischer and Whitney (2014)</a> trials and fitted curves written by `export_wnm_fit_curves.py` under `csv_exports/fitted_curves.csv`. The generator defaults to the maintained `smoothed_exp` mean-bias objective. Pass `--fit-objective expectation` only when intentionally reproducing an older hard-binned expectation fit. After running `demo_fischer_whitney.py`, regenerate both assets with:
 
 ```bash
 python docs/generate_readme_figures.py
