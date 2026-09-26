@@ -40,7 +40,7 @@ for path in (ROOT, ROOT / "model_fit_to_data"):
         sys.path.insert(0, str(path))
 
 GOLDEN = Path(__file__).resolve().parent / "data" / "fitting_targets_golden.npz"
-CHECKPOINT = ROOT / "pretrained" / "model_epoch1425_10ktrain_20samples.pkl"
+CHECKPOINT = ROOT / "pretrained" / "surface_legacy_epoch1425_10ktrain_20samples.pkl"
 
 #: Every recorded array, and the objective each one serves. A target that is not
 #: listed here is not covered by the extraction check.

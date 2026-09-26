@@ -21,7 +21,7 @@ PYTHONPATH=. python surface_simulator_for_predictions/surface_simulator.py \
   --skip-motor-noise
 ```
 
-The `--n-samples 20` selects one of the two theoretical internal-sampling assumptions. It does not refer to the number of experimental trials. The matching packaged WNM (`pretrained/wnm_k12_20samples.pkl`) is loaded automatically; pass `--checkpoint-path` only to reproduce a different artifact.
+The `--n-samples 20` selects one of the two theoretical internal-sampling assumptions. It does not refer to the number of experimental trials. The matching packaged WNM (`pretrained/current_wnm_k12_20samples.pkl`) is loaded automatically; pass `--checkpoint-path` only to reproduce a different artifact.
 
 The three required inputs can also be given positionally — `surface_simulator.py INPUT N_SAMPLES OUTPUT` — which is what the smoke scripts use.
 

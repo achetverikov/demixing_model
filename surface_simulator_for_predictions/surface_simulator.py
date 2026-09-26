@@ -341,7 +341,8 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
         if explicit_checkpoint_path:
             resolved_checkpoint_path = Path(explicit_checkpoint_path)
         elif surface_source == "nn":
-            resolved_checkpoint_path = surrogate.SURFACE_DEFAULTS[n_samples]
+            resolved_checkpoint_path = surrogate.resolve_checkpoint(
+                family=surrogate.FAMILY_SURFACE_NN, n_samples=n_samples)
         else:
             resolved_checkpoint_path = surrogate.production_checkpoint(n_samples)
 

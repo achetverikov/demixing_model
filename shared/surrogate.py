@@ -52,24 +52,19 @@ DEFAULT_FAMILY = FAMILY_WNM
 #: a surface checkpoint that is not listed here has no known sample count and
 #: must be given one explicitly.
 SURFACE_CHECKPOINT_REGISTRY = {
-    "model_epoch1425_10ktrain_20samples.pkl": 20,
-    "model_epoch1500_10ktrain_20samples.pkl": 20,
-    "model_epoch1500_10ktrain_100samples.pkl": 100,
-    "model_epoch1500_8ktrain_20samples_old.pkl": 20,
-    "model_epoch1500_8ktrain_100samples_old.pkl": 100,
+    "surface_legacy_epoch1425_10ktrain_20samples.pkl": 20,
 }
 
 #: Which surface checkpoint a bare ``(family, n_samples)`` request resolves to.
 SURFACE_DEFAULTS = {
-    20: PRETRAINED_DIR / "model_epoch1425_10ktrain_20samples.pkl",
-    100: PRETRAINED_DIR / "model_epoch1500_10ktrain_100samples.pkl",
+    20: PRETRAINED_DIR / "surface_legacy_epoch1425_10ktrain_20samples.pkl",
 }
 
 #: Same, for the WNM artifacts.  Populated by the packaging step; a missing file
 #: is reported as "not installed yet" rather than as a bad request.
 WNM_DEFAULTS = {
-    20: PRETRAINED_DIR / "wnm_k12_20samples.pkl",
-    100: PRETRAINED_DIR / "wnm_k12_100samples.pkl",
+    20: PRETRAINED_DIR / "current_wnm_k12_20samples.pkl",
+    100: PRETRAINED_DIR / "current_wnm_k12_100samples.pkl",
 }
 
 SUPPORTED_SAMPLE_COUNTS = (20, 100)
@@ -121,6 +116,10 @@ def production_checkpoint(n_samples: int) -> Path:
 def dm_version(family: str, artifact: str) -> str:
     """Stable comparison label for one demixing-model implementation."""
     stem = Path(artifact).stem
+    if family == FAMILY_WNM and stem.startswith("current_"):
+        stem = stem.removeprefix("current_")
+    if family == FAMILY_SURFACE_NN and stem.startswith("surface_legacy_"):
+        stem = stem.removeprefix("surface_legacy_")
     if stem == family or stem.startswith(f"{family}_"):
         return stem
     if family == FAMILY_SURFACE_NN and stem.startswith("model_"):
@@ -185,8 +184,8 @@ def checkpoint_for_run(results_path, explicit=None, n_samples: Optional[int] = N
         "\n"
         "There is deliberately no fallback to the production artifact for n_samples. That "
         "would substitute today's model for the one a stored fit was produced with: before "
-        "a default change it can pick epoch 1425 for parameters fitted at epoch 1500 -- different "
-        "architectures -- and after a family/default change it would recompute a surface fit's curves from "
+        "a default change it can pick another checkpoint for the same observer model, "
+        "and after a family/default change it would recompute a surface fit's curves from "
         "the mixture. Both cases plot one model's curves beside another model's parameters, "
         "and neither announces itself.")
 
@@ -374,6 +373,10 @@ def resolve_checkpoint(family: Optional[str] = None,
         raise ValueError(f"n_samples={n_samples} is not one of {SUPPORTED_SAMPLE_COUNTS}")
 
     table = SURFACE_DEFAULTS if family == FAMILY_SURFACE_NN else WNM_DEFAULTS
+    if n_samples not in table:
+        raise ValueError(
+            f"no default {family} artifact for n_samples={n_samples}; "
+            "pass an explicit checkpoint")
     path = table[n_samples]
     if not path.exists():
         raise FileNotFoundError(

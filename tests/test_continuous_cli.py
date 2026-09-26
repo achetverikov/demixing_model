@@ -27,7 +27,7 @@ for path in (ROOT, ROOT / "model_fit_to_data"):
 from shared import surrogate  # noqa: E402
 
 WNM = surrogate.WNM_DEFAULTS[20]
-SURFACE = ROOT / "pretrained" / "model_epoch1425_10ktrain_20samples.pkl"
+SURFACE = ROOT / "pretrained" / "surface_legacy_epoch1425_10ktrain_20samples.pkl"
 pytestmark = pytest.mark.skipif(not WNM.exists(), reason="no packaged WNM artifact")
 
 

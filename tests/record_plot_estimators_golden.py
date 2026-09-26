@@ -46,7 +46,7 @@ for path in (ROOT, ROOT / "model_fit_to_data"):
         sys.path.insert(0, str(path))
 
 GOLDEN = Path(__file__).resolve().parent / "data" / "plot_estimators_golden.npz"
-CHECKPOINT = ROOT / "pretrained" / "model_epoch1425_10ktrain_20samples.pkl"
+CHECKPOINT = ROOT / "pretrained" / "surface_legacy_epoch1425_10ktrain_20samples.pkl"
 
 #: Every recorded array and what it pins.
 RECORDED = {

@@ -31,11 +31,11 @@ from run_fingerprint import file_sha256  # noqa: E402
 from shared import surrogate  # noqa: E402
 
 WNM = surrogate.WNM_DEFAULTS[20]
-SURFACE_20 = ROOT / "pretrained" / "model_epoch1425_10ktrain_20samples.pkl"
-SURFACE_100 = ROOT / "pretrained" / "model_epoch1500_10ktrain_100samples.pkl"
+SURFACE_20 = surrogate.SURFACE_DEFAULTS[20]
+WNM_100 = surrogate.WNM_DEFAULTS[100]
 
 pytestmark = pytest.mark.skipif(
-    not (WNM.exists() and SURFACE_20.exists()),
+    not (WNM.exists() and WNM_100.exists() and SURFACE_20.exists()),
     reason="needs installed artifacts to resolve digests against")
 
 
@@ -57,8 +57,8 @@ def test_the_path_name_does_not_decide_the_checkpoint(tmp_path):
     fits = _run_dir(tmp_path, WNM, name="rerun_20samples_subset")
     assert P.infer_checkpoint_path(fits, None) == WNM
 
-    misleading = _run_dir(tmp_path, SURFACE_100, name="analysis_20samples_vs_100samples")
-    assert P.infer_checkpoint_path(misleading, None) == SURFACE_100
+    misleading = _run_dir(tmp_path, WNM_100, name="analysis_20samples_vs_100samples")
+    assert P.infer_checkpoint_path(misleading, None) == WNM_100
 
 
 def test_an_explicit_checkpoint_is_verified_not_merely_accepted(tmp_path):

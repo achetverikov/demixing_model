@@ -23,7 +23,7 @@ Usage (from the repo root)::
         --fit /path/to/wnm_k12_full_n20_alldata-<digest>-best.pkl \\
         --corpus-stage /path/to/results/wnm_4.1p \\
         --n-samples 20 \\
-        --out pretrained/wnm_k12_20samples.pkl
+        --out pretrained/current_wnm_k12_20samples.pkl
 
 The packaged file is verified before it reaches its destination: it is written to
 a temporary path, loaded back through the production loader, and evaluated on a

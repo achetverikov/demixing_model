@@ -47,11 +47,11 @@ def _write(tmp_path, name, blob):
 
 def test_family_comes_from_content_not_filename(tmp_path):
     """A WNM artifact named like a surface checkpoint is still a WNM artifact."""
-    misleading = _write(tmp_path, "model_epoch1500_10ktrain_20samples.pkl",
+    misleading = _write(tmp_path, "surface_legacy_epoch1425_10ktrain_20samples.pkl",
                         {"variables": {}, "model_config": {"n_components": 8}, "meta": {}})
     assert surrogate.detect_family(misleading) == surrogate.FAMILY_WNM
 
-    other = _write(tmp_path, "wnm_k12_20samples.pkl", {"apply_fn": object(), "params": {}})
+    other = _write(tmp_path, "current_wnm_k12_20samples.pkl", {"apply_fn": object(), "params": {}})
     assert surrogate.detect_family(other) == surrogate.FAMILY_SURFACE_NN
 
 
@@ -82,6 +82,8 @@ def test_unknown_family_and_sample_count_are_rejected():
         surrogate.resolve_checkpoint("mixture_of_hopes", 20)
     with pytest.raises(ValueError, match="not one of"):
         surrogate.resolve_checkpoint(surrogate.FAMILY_SURFACE_NN, 50)
+    with pytest.raises(ValueError, match="no default surface_nn artifact"):
+        surrogate.resolve_checkpoint(surrogate.FAMILY_SURFACE_NN, 100)
 
 
 def test_explicit_path_wins_over_the_defaults(tmp_path):
@@ -100,11 +102,11 @@ def test_unregistered_surface_checkpoint_has_no_inferable_identity(tmp_path):
 
 @pytest.mark.legacy_surface
 def test_registered_surface_checkpoint_rejects_a_contradicting_request():
-    known = Path("model_epoch1500_10ktrain_100samples.pkl")
-    assert surrogate._surface_sample_count(known, None) == 100
-    assert surrogate._surface_sample_count(known, 100) == 100
+    known = Path("surface_legacy_epoch1425_10ktrain_20samples.pkl")
+    assert surrogate._surface_sample_count(known, None) == 20
+    assert surrogate._surface_sample_count(known, 20) == 20
     with pytest.raises(ValueError, match="different observer models"):
-        surrogate._surface_sample_count(known, 20)
+        surrogate._surface_sample_count(known, 100)
 
 
 # ---------------------------------------------------------------------------
@@ -138,10 +140,10 @@ def test_installed_artifact_declares_its_own_identity(n_samples, path):
 @pytest.mark.parametrize(
     ("family", "artifact", "expected"),
     [
-        ("wnm", "wnm_k12_20samples.pkl", "wnm_k12_20samples"),
+        ("wnm", "current_wnm_k12_20samples.pkl", "wnm_k12_20samples"),
         (
             "surface_nn",
-            "model_epoch1425_10ktrain_20samples.pkl",
+            "surface_legacy_epoch1425_10ktrain_20samples.pkl",
             "surface_nn_epoch1425_10ktrain_20samples",
         ),
     ],
@@ -282,7 +284,7 @@ def test_an_unsupported_sample_count_is_refused():
 def test_other_checkpoints_stay_reachable_by_name():
     """Production is the default, not a restriction: a script that takes a
     checkpoint parameter can still load any installed artifact."""
-    historical = surrogate.PRETRAINED_DIR / "model_epoch1500_10ktrain_20samples.pkl"
+    historical = surrogate.SURFACE_DEFAULTS[20]
     if not historical.exists():
         pytest.skip("historical checkpoint not installed")
     assert historical != surrogate.production_checkpoint(20)

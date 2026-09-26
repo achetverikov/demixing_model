@@ -224,7 +224,7 @@ def test_matched_operator_preserves_surface_clamp_for_dummy_feature_rows():
 # The call site, not just the helper
 # ---------------------------------------------------------------------------
 
-CHECKPOINT = ROOT / "pretrained" / "model_epoch1425_10ktrain_20samples.pkl"
+CHECKPOINT = ROOT / "pretrained" / "surface_legacy_epoch1425_10ktrain_20samples.pkl"
 
 
 @pytest.mark.skipif(not CHECKPOINT.exists(), reason="no pretrained surface checkpoint")

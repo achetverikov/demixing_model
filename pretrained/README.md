@@ -5,14 +5,16 @@ mixtures:
 
 | File | K | Hidden | min_scale | Sim samples / item | Selected step | Corpus | NLL |
 |---|---:|---|---:|---:|---:|---|---:|
-| `wnm_k12_20samples.pkl` | 12 | (128, 256, 256) | 0.25 | 20 | 90000 | continuous_density_4.1p | 3.9785 |
-| `wnm_k12_100samples.pkl` | 12 | (128, 256, 256) | 0.25 | 100 | 89000 | continuous_density_4.1o | 3.1657 |
+| `current_wnm_k12_20samples.pkl` | 12 | (128, 256, 256) | 0.25 | 20 | 90000 | continuous_density_4.1p | 3.9785 |
+| `current_wnm_k12_100samples.pkl` | 12 | (128, 256, 256) | 0.25 | 100 | 89000 | continuous_density_4.1o | 3.1657 |
 
 The `continuous_density_4.1*` values are immutable historical corpus-stage labels, not current source-code paths.
 
-Fresh fitting and prediction calls select these by `n_samples`. The older
-`model_epoch*.pkl` surface-network checkpoints are retained only for historical
-reproduction and must be requested explicitly.
+Fresh fitting and prediction calls select these by `n_samples`. The only retained
+surface-network checkpoint is `surface_legacy_epoch1425_10ktrain_20samples.pkl`
+for explicit 20-sample historical reproduction. Earlier 20- and 100-sample
+surface checkpoints have been removed; no packaged 100-sample surface checkpoint
+is installed.
 
 **Sim samples / item**: in the demixing model, the brain runs its mixture-fitting inference over a set of noisy internal samples it has of each presented item.  This number parameterizes how rich that internal representation is — 20 samples means a noisy / lower-evidence regime, 100 samples means a sharper, more-evidence regime.  Different values produce qualitatively similar bias curves but reallocate where the noise lives (more assumed internal samples → more inferred internal spatial noise when fit to the same data).
 

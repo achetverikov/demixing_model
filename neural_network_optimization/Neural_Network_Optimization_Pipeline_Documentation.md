@@ -70,7 +70,7 @@ different model.
 ## Former 20-observation surface surrogate
 
 The historical checkpoint is
-`pretrained/model_epoch1425_10ktrain_20samples.pkl`. It was selected from a
+`pretrained/surface_legacy_epoch1425_10ktrain_20samples.pkl`. It was selected from a
 1500-epoch run trained on the 10k-simulation surfaces using:
 
 - a native 128-row periodic decoder;

@@ -76,7 +76,7 @@ The bare CLI now selects the packaged WNM:
 
 - `--include-methods density`
 - `--n-samples 20`
-- packaged `wnm_k12_20samples.pkl` unless `--checkpoint-path` overrides it
+- packaged `current_wnm_k12_20samples.pkl` unless `--checkpoint-path` overrides it
 - `--min-trials 30`
 - `--search continuous`
 - 64 deterministic starts in two sequential batches of 32
@@ -253,7 +253,7 @@ python model_fit_to_data/fit_model_to_data.py \
 ```bash
 python model_fit_to_data/fit_model_to_data.py \
   --data-path example_data/fritsche_prepared.csv \
-  --checkpoint-path pretrained/model_epoch1425_10ktrain_20samples.pkl \
+  --checkpoint-path pretrained/surface_legacy_epoch1425_10ktrain_20samples.pkl \
   --search hierarchical \
   --output-dir results/fritsche_surface_replay
 ```

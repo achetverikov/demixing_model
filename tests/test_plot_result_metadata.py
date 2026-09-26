@@ -103,7 +103,7 @@ def test_standalone_pdf_plot_uses_wnm_backend_from_run_identity(monkeypatch, tmp
             "density_fitted_params": [10.0, 20.0, 30.0, 0.0],
         }
     }
-    checkpoint = Path("pretrained/wnm_k12_20samples.pkl")
+    checkpoint = Path("pretrained/current_wnm_k12_20samples.pkl")
     loaded = SimpleNamespace(family=plot_pdf_slices.surrogate.FAMILY_WNM)
     predictor = object()
     calls = {}
