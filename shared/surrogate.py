@@ -3,7 +3,7 @@
 Two model families answer the same scientific question -- given
 ``(sd_feat1, sd_feat2, sd_spat, feat_diff)``, what is the distribution of the
 component-1 bias?  The historical family is the **surface NN**, which emits a
-180x90 log-density surface; the replacement is the **conditional wrapped-normal
+180x90 log-density surface; the production family is the **conditional wrapped-normal
 mixture** (WNM), which emits mixture parameters and is continuous in both the
 bias and the feature difference.
 
@@ -235,7 +235,7 @@ def load_production(n_samples: int) -> "LoadedSurrogate":
 #: was swept over [5, 200] on all three SDs (see ``pretrained/README.md``), and
 #: unlike the WNM artifacts it carries no metadata, so the fact is recorded here.
 #: It is narrower than the WNM domain on the feature axis: the surface corpus
-#: never went below 5, which is precisely the coverage the replacement adds.
+#: never went below 5, which is precisely the additional feature-noise coverage provided by WNM.
 SURFACE_DOMAIN = {
     "sd_feat1": (5.0, 200.0),
     "sd_feat2": (5.0, 200.0),
