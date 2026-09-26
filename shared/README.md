@@ -1,34 +1,24 @@
-# Shared runtime and identity layer
+# Shared model utilities
 
-The `shared/` package contains maintained code used across fitting, prediction,
-export, plotting, and surrogate loading. New WNM code should depend on these
-focused modules rather than on `shared/utils.py`.
+The `shared/` package provides model evaluation, checkpoint loading, circular geometry, and data helpers used by fitting, prediction, exports, and plotting.
 
-## Maintained modules
+## Modules
 
-- `wnm.py` - conditional wrapped-normal-mixture runtime, artifact
-  serialization, circular density primitives, and motor-noise handling.
-- `surrogate.py` - family-aware checkpoint resolution, production artifact
-  selection, stored-run checkpoint identity, and supported-domain lookup.
-- `prediction.py` - common predictor operations used by fitting, plotting,
-  rescoring, the public prediction interface, and the browser.
-- `mu1_axis.py` - authoritative periodic bias grid, cell width, wrapping,
-  integration, sign masks, and bin indexing.
-- `circular.py` - circular curve smoothing.
-- `empirical.py` - empirical KDE/bandwidth and bias-curve helpers.
-- `behavioral_data.py` - behavioral-trial filtering used by fitting and
-  postprocessing.
-- `paths.py` - repository/results input and output path resolution.
-- `hashing.py` - streaming file SHA-256 used for artifact and run identity.
+| Module | Purpose |
+|---|---|
+| `wnm.py` | Conditional wrapped-normal mixture, circular densities, motor noise, and artifact serialization |
+| `surrogate.py` | Checkpoint selection, saved-run model identity, and supported-domain lookup |
+| `prediction.py` | Common prediction operations |
+| `mu1_axis.py` | Periodic bias grid, wrapping, integration, sign masks, and bin indexing |
+| `circular.py` | Circular curve smoothing |
+| `empirical.py` | Empirical density estimation, bandwidths, and bias curves |
+| `behavioral_data.py` | Behavioral-trial filtering |
+| `paths.py` | Input and output path resolution |
+| `hashing.py` | File hashes for artifact and run identity |
+| `utils.py` | Surface-network and averaged-surface helpers |
 
-## Historical compatibility
+For usage examples, see the [fitting guide](../model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md) and [prediction guide](../surface_simulator_for_predictions/README.md).
 
-`utils.py` remains for the retained surface-NN/raw-surface workflow and older
-checkpoint utilities. Maintained WNM modules should not add new dependencies on
-it.
+## Notes for developers
 
-The public fitting and prediction entry points are documented in the root
-[README](../README.md), the fitting guide under
-[`model_fit_to_data/`](../model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md),
-and the prediction guide under
-[`surface_simulator_for_predictions/`](../surface_simulator_for_predictions/README.md).
+Use `surrogate.py` to load models and resolve the checkpoint recorded in a saved fit. Build prediction consumers on `prediction.py` so fitting, plotting, and exports share the same calculations. Use the focused modules above when adding model or data functionality.

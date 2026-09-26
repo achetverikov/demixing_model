@@ -1,119 +1,50 @@
-# Pretrained checkpoints
+# Included trained models
 
-The production surrogates are the packaged K=12 conditional wrapped-normal
-mixtures:
+Choose a model with `--n-samples 20` or `--n-samples 100` when fitting or generating predictions. The corresponding checkpoint loads automatically.
 
-| File | K | Hidden | min_scale | Sim samples / item | Selected step | Corpus | NLL |
-|---|---:|---|---:|---:|---:|---|---:|
-| `current_wnm_k12_20samples.pkl` | 12 | (128, 256, 256) | 0.25 | 20 | 90000 | continuous_density_4.1p | 3.9785 |
-| `current_wnm_k12_100samples.pkl` | 12 | (128, 256, 256) | 0.25 | 100 | 89000 | continuous_density_4.1o | 3.1657 |
+| Internal evidence samples | Checkpoint |
+|---:|---|
+| 20 | `current_wnm_k12_20samples.pkl` |
+| 100 | `current_wnm_k12_100samples.pkl` |
 
-The `continuous_density_4.1*` values are immutable historical corpus-stage labels, not current source-code paths.
+The sample count sets how much internal evidence the observer has in each simulated trial. Each sample is drawn from the two-item mixture, with equal probability of coming from either item. More samples provide more evidence for separating the representations.
 
-Fresh fitting and prediction calls select these by `n_samples`. The only retained
-surface-network checkpoint is `surface_legacy_epoch1425_10ktrain_20samples.pkl`
-for explicit 20-sample historical reproduction. Earlier 20- and 100-sample
-surface checkpoints have been removed; no packaged 100-sample surface checkpoint
-is installed.
+## Parameters and units
 
-**Sim samples / item**: in the demixing model, the brain runs its mixture-fitting inference over a set of noisy internal samples it has of each presented item.  This number parameterizes how rich that internal representation is — 20 samples means a noisy / lower-evidence regime, 100 samples means a sharper, more-evidence regime.  Different values produce qualitatively similar bias curves but reallocate where the noise lives (more assumed internal samples → more inferred internal spatial noise when fit to the same data).
+The predictor takes `[sd_feat1, sd_feat2, sd_spat, feat_diff]` in 360° model units. It predicts the target item's circular response-error distribution; swap `sd_feat1` and `sd_feat2` to obtain the other item's prediction. Positive bias means attraction toward the competing item, and density is measured per model degree.
 
-**Circular geometry**: the first feature dimension is wrapped (360° model space), matching how the surfaces are computed in `surface_computation/jax_fit_functions.py` (`wrap_1st = True`).
+| Input | Supported range in model degrees |
+|---|---|
+| Target feature noise, `sd_feat1` | 2.5–200 |
+| Non-target feature noise, `sd_feat2` | 2.5–200 |
+| Identifiability noise, `sd_spat` | 5–200 |
+| Stimulus difference, `feat_diff` | 0.5–180 |
 
-**Historical surface-NN training surfaces**: "10k" means 10,000 simulations per surface, not grid points. The parameter grid is the combined Level-1+2 grid: sd_feat1, sd_feat2, sd_spat each on a **5° step over [5, 200]** (40 values per axis). The folder stores the canonical half (sd_feat1 ≤ sd_feat2); mirror augmentation produces 64,005 stored training rows because five diagonal cases are duplicated in the source bundles. This negligible duplication does not change batch geometry or training speed.
+The fitter reads parameter bounds from the checkpoint. For 180° data, it converts behavioral angles into model units; exports include columns in both model and study-scale degrees.
 
-**Historical surface-NN parameter range**: sd_feat1, sd_feat2, sd_spat were swept over [5, 200] degrees (model space). This paragraph describes the retained surface checkpoints, not the WNM corpus/domain below.
+## Model architecture and training
 
-## Conditional wrapped-normal mixture (WNM)
+Each checkpoint contains a conditional wrapped-normal mixture (WNM) with 12 components, hidden layers `(128, 256, 256)`, and a minimum component scale of 0.25 model degrees. Training minimizes negative log-likelihood (NLL) on simulated response errors. See the [pipeline explanation](../docs/model_pipeline.md) and [training guide](../surrogate_training/wnm/README.md).
 
-The production surrogate. Where the historical surface network emits a 180 x 90 log-density
-surface, these artifacts emit the parameters of a K-component wrapped-normal
-mixture over the component-1 bias, continuous in both the bias and the feature
-difference. They are not load-compatible with `shared/utils.py:load_checkpoint`,
-so new code should reach a checkpoint through `shared/surrogate.py:load_surrogate`,
-which reads the family from the file's own content rather than from its name.
+| Internal samples | Selected training step | In-sample NLL |
+|---:|---:|---:|
+| 20 | 90,000 | 3.9785 |
+| 100 | 89,000 | 3.1657 |
 
-Both ordinary CSV fitting and compiled-bundle fitting use these WNM artifacts
-through the continuous gradient backend. The lattice backends refuse a mixture
-checkpoint, and the continuous backend refuses a surface checkpoint. Historical
-surface reproduction therefore remains explicit rather than acting as a second
-default.
+Both checkpoints use all training trajectories. The stopping step is selected using a 10% in-sample diagnostic slice; the table reports that training diagnostic. Generalization is evaluated separately on independent simulation trajectories.
 
-**The NLL column is in-sample.** Both artifacts come from the `alldata` training
-variant, which trains on every trajectory and picks its stopping step on an
-in-sample 10% slice -- deliberately mirroring the surface network, which has no
-validation split at all. The number is a training diagnostic and must never be
-reported as a held-out score. Held-out accuracy is measured separately, on the
-4.1q benchmark, whose trajectories are guaranteed disjoint from the corpus.
+## Use a custom checkpoint
 
-**Parameter order** is `[sd_feat1, sd_feat2, sd_spat, feat_diff]` in model
-degrees, with `d' = 42 / sd_spat`. The model predicts component 1; component 2
-comes from swapping `sd_feat1` and `sd_feat2`, not from a sign flip. Bias is
-positive for attraction toward the other item, density is per model degree, and
-the period is 360. Each artifact carries all of this in its own `meta` dict --
-read it from there rather than from this file.
+Pass `--checkpoint-path path/to/model.pkl` to fitting or prediction commands. Package a training checkpoint with `python -m surrogate_training.wnm.package_artifact`; the [training guide](../surrogate_training/wnm/README.md) gives a complete example.
 
-**Supported domain** (`meta["supported_domain"]`, schema `wnm/2`):
-
-| Parameter | Declared | Corpus hull |
-|---|---|---|
-| `sd_feat1`, `sd_feat2` | [2.5, 200] | [2.500, 198.11] / [2.535, 199.95] |
-| `sd_spat` | [5, 200] | [5.0018, 200.0] |
-| `feat_diff` | [0.5, 180] | [0.5, 180.0] |
-
-Per parameter, because the corpus is: `sd_feat` reaches 2.5 degrees while
-`sd_spat` stops at 5, since `sd_spat = 42/d'` and d-prime was capped at 8.4. One
-shared interval would have to be either the union, claiming `sd_spat` coverage
-that does not exist, or the intersection -- which is what an earlier version was,
-and which refused roughly a sixth of the feature-noise region the network was
-actually trained on.
-
-The declared box rounds the measured hull outward to the design's round numbers,
-accepting a sliver of extrapolation (largest 1.89 degrees, at `sd_feat1`'s top).
-`meta["corpus_hull"]` records what the corpus reaches and
-`meta["declared_domain_overhang"]` the accepted extrapolation at each end, so
-neither has to be taken on trust. The packager refuses a declared box that rounds
-inward past the corpus, and one that rounds outward by more than 5 degrees.
-
-Note that `sd_feat` extends *below* the historical surface fitting floor of 5: that wider
-narrow-density coverage is what motivates this surrogate. Search bounds now come
-from the loaded artifact's own domain (`shared/surrogate.py:search_bounds`), so a
-WNM fit searches `sd_feat` from 2.5 while the surface backend keeps its trained
-[5, 200] on every axis. That applies to the public command too, under
-`--search continuous`; a surface-backed run is unaffected.
-
-**Regenerating one**: `python -m surrogate_training.wnm.package_artifact` packages a
-selected training checkpoint from a training stage's `run_cache/`. It copies
-weights, writes to a temporary path, checks that the reloaded artifact reproduces
-the selected checkpoint exactly and accepts its own advertised domain, and only
-then renames it into place.
-
-## How consumers pick a checkpoint
-
-Several checkpoint-identity defects were found during the 2026 transition review and are fixed; the rules
-that replaced them are worth knowing, because each was a way to use one model's
-predictions with another model's parameters and say nothing about it.
-
-- **A fitted run records its surrogate**, and consumers of that run resolve
-  through `shared.surrogate.checkpoint_for_run`, which matches the run
-  fingerprint's `checkpoint_sha256`. An explicit checkpoint is verified against
-  that digest rather than merely honoured. A run with neither a fingerprint nor
-  an explicit checkpoint raises: there is no fallback to the production artifact,
-  because that would substitute today's model for the one the fit used.
-- **A fresh prediction picks by `n_samples`**, through
-  `shared.surrogate.production_checkpoint`. Exactly two artifacts are production
-  at a time, one per observer model.
-- **Output is labelled from the artifact**, never from the request. The
-  simulator loads through `load_surrogate` with the requested count, which raises
-  on a mismatch, and its rows carry `surrogate_family` and `surrogate_artifact`.
-  The averaged-surface branch keeps `n_samples` as the request, since there the
-  directory carries the identity -- and that directory name is matched on an
-  exact sample-count token, with ambiguous names refused.
-
+Fitted runs record the checkpoint's SHA-256 digest. Exporters and plotters resolve that recorded model and verify any explicit checkpoint override against it. Fresh predictions select by `--n-samples`, check the requested sample count, and label outputs with the loaded model's identity.
 
 ## Notes for developers
 
-The source surfaces are untracked generated artifacts, not files shipped with
-the repository. Their conventional names under `$DEMIXING_ARTIFACT_ROOT` are
-`averaged_surfaces_10k_{20,100}samples_circular/`. These names document
-checkpoint provenance; a normal checkout is not expected to contain them.
+Load checkpoints through `shared.surrogate.load_surrogate`. Use `production_checkpoint` for fresh predictions and `checkpoint_for_run` for saved fits. Architecture, sample count, units, and supported-domain metadata are stored in each artifact.
+
+The declared domain rounds the measured training hull outward to the design limits. `meta["corpus_hull"]` records the sampled bounds and `meta["declared_domain_overhang"]` records extrapolation at each edge. The packager allows up to 5° of outward rounding and checks predictions after reloading the packaged file.
+
+The corpus labels are `continuous_density_4.1p` for 20 samples and `continuous_density_4.1o` for 100 samples; independent validation uses `continuous_density_4.1q`. These generated corpora and results live under `$DEMIXING_ARTIFACT_ROOT`. They are not shipped and are not expected in a normal checkout.
+
+`surface_legacy_epoch1425_10ktrain_20samples.pkl` is also included for the surface-network tools. It uses a 128-row periodic decoder, a 128-column training grid, and the `circular_trajectory` objective on 10k-simulation KDE surfaces. Its three noise axes span 5–200 model degrees. See the [surface-network training guide](../neural_network_optimization/Neural_Network_Optimization_Pipeline_Documentation.md).

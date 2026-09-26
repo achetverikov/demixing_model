@@ -1146,8 +1146,8 @@ if __name__ == '__main__':
     )
     inputs = parser.add_mutually_exclusive_group(required=True)
     inputs.add_argument('--data-path',
-                        help='Legacy CSV input: surface backend and recovery tooling only. '
-                             'Production WNM fitting requires --bundle.')
+                        help='Trial-level CSV containing experiment, participant, condition, '
+                             'stimulus difference, and signed response error columns.')
     inputs.add_argument('--bundle',
                         help='Compiled contextual_biases_database bundle for controlled '
                              'cross-model/cross-dataset analyses.')
@@ -1156,8 +1156,8 @@ if __name__ == '__main__':
                              'model for --n-samples is used.')
     parser.add_argument('--n-samples', type=int, choices=surrogate.SUPPORTED_SAMPLE_COUNTS,
                         default=20,
-                        help='Observer evidence samples per item. Selects the packaged production '
-                             'surrogate when --checkpoint-path is omitted.')
+                        help='Internal evidence samples per simulated trial. Selects the '
+                             'included model when --checkpoint-path is omitted.')
     parser.add_argument('--output-dir', required=True,
                         help='Directory for results.')
 
@@ -1185,9 +1185,7 @@ if __name__ == '__main__':
                              'any results already in --output-dir must match this run.')
     parser.add_argument('--force-refit', action='store_true',
                         help='Discard existing results in --output-dir and refit from scratch, '
-                             'skipping the run-fingerprint check. This is the escape hatch for a '
-                             'fingerprint mismatch; it is NOT needed to add a method to a run '
-                             'whose fingerprint matches, which resumes normally.')
+                             'replacing the recorded data, model, and settings.')
     parser.add_argument('--max-subjects', type=int, default=None,
                         help='Stop after this many subject×experiment groups.')
     parser.add_argument('--corr-weight', type=float, default=0.25)
@@ -1198,9 +1196,9 @@ if __name__ == '__main__':
                         help='Base directory for relative output paths.')
     parser.add_argument('--search', choices=['hierarchical', 'exhaustive', 'continuous'],
                         default='continuous',
-                        help='Search backend. Continuous WNM fitting is the default. Hierarchical '
-                             'and exhaustive are historical surface-grid backends and require an '
-                             'explicit surface checkpoint; exhaustive applies only to density.')
+                        help='Search backend. Continuous multistart optimization is the default. '
+                             'Hierarchical and exhaustive grid searches require a surface '
+                             'checkpoint; exhaustive applies to density.')
     parser.add_argument('--continuous-starts', type=int, default=DEFAULT_N_STARTS,
                         help='Multistart count for --search continuous (production: 64, run as '
                              'two sequential batches of 32).')

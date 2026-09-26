@@ -2,7 +2,7 @@
 
 The Demixing Model requires Python 3.11 or newer. An NVIDIA GPU is strongly recommended for fitting and required for practical full-surface generation. The repository provides GPU and CPU development containers as well as a manual installation route.
 
-If you do not usually configure Python or CUDA environments, use the development container. A development container is a prepared workspace that installs the correct software versions for you when the repository opens in VS Code.
+For a ready-to-use Python and CUDA environment, choose the development container. A development container is a prepared workspace that installs the correct software versions for you when the repository opens in VS Code.
 
 ## Which setup should I use?
 
@@ -20,7 +20,7 @@ Prerequisites:
 - an NVIDIA GPU with an up-to-date host driver;
 - VS Code with the Dev Containers extension.
 
-On **Windows**, use Docker Desktop with its WSL 2 backend. Update WSL with `wsl --update` and install a current NVIDIA Windows driver that supports GPU access through WSL 2. You do not need to install the CUDA Toolkit on Windows, a Linux NVIDIA driver inside WSL, or the NVIDIA Container Toolkit separately; the CUDA software used by the model is provided by the development container. See the [Docker Desktop GPU requirements](https://docs.docker.com/desktop/features/gpu/) and [NVIDIA CUDA on WSL guide](https://docs.nvidia.com/cuda/wsl-user-guide/).
+On **Windows**, use Docker Desktop with its WSL 2 backend. Update WSL with `wsl --update` and install a current NVIDIA Windows driver that supports GPU access through WSL 2. The development container provides the CUDA software used by the model. See the [Docker Desktop GPU requirements](https://docs.docker.com/desktop/features/gpu/) and [NVIDIA CUDA on WSL guide](https://docs.nvidia.com/cuda/wsl-user-guide/).
 
 On **Linux**, install Docker Engine, a compatible NVIDIA driver, and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) so Docker can pass the GPU through to the container.
 
@@ -93,33 +93,19 @@ install.packages(c("arrow", "stringr", "data.table"))
 
 ## Verification
 
-Start with the maintained standalone pytest baseline:
+Run the automated checks:
 
 ```bash
 PYTHONPATH=. python -m pytest
 ```
 
-The default pytest configuration collects `tests/` and excludes
-cross-repository `integration` and historical `legacy_surface` suites.
-See `tests/README.md` for the explicit commands to run those opt-in contracts.
+The default suite checks the standalone package. See the [test guide](tests/README.md) for additional cross-repository and surface-network checks.
 
-The current end-to-end user-path smoke fits the packaged WNM, exports results,
-generates plots, and runs the prediction API:
+For a small end-to-end check that fits data, exports results, generates plots, and makes predictions:
 
 ```bash
 PYTHON_BIN=python bash tests/run_smoke_wnm.sh
 ```
-
-The remaining smoke scripts exercise the historical simulation/surface-training
-pipeline and are substantially more compute-heavy:
-
-```bash
-PYTHON_BIN=python bash tests/run_smoke_pipeline.sh
-PYTHON_BIN=python bash tests/run_smoke_standard.sh
-PYTHON_BIN=python bash tests/run_smoke_compare_seeds.sh
-```
-
-`tests/run_smoke_pipeline.sh` refuses CPU execution unless `ALLOW_CPU=1` is set.
 
 ## Troubleshooting
 
@@ -129,19 +115,21 @@ Run the device check above in the same environment used for the model. In the de
 
 ### CUDA out-of-memory errors
 
-Do not run multiple fitting or surface-generation jobs on one GPU. Stop other GPU processes first. The GPU container already sets `XLA_PYTHON_CLIENT_PREALLOCATE=false`; the same variable can be exported in a manual environment if JAX preallocation conflicts with other processes.
+Run one fitting or surface-generation job at a time on each GPU. Stop other GPU processes first. The GPU container already sets `XLA_PYTHON_CLIENT_PREALLOCATE=false`; the same variable can be exported in a manual environment if JAX preallocation conflicts with other processes.
 
 ### Fitting appears to restart or skip work
 
-Fitting resumes by default from `<output-dir>/extended_fit_results.pkl` — that pickle, not `extended_progress.json`, which is a human-readable summary nothing reads back. Use a new output directory or pass `--no-resume` for an intentional fresh run.
+Fitting resumes from `<output-dir>/extended_fit_results.pkl`. The companion `extended_progress.json` provides a readable summary. Use `--no-resume` to recompute a run with the same settings.
 
-Results produced with a different checkpoint, dataset, objective definition, grid, or circular-space setting cannot be mixed, and the fitter enforces this rather than trusting you to remember: every run computes a fingerprint of those settings and stores it in `<output-dir>/extended_run_fingerprint.json`. If the fingerprint of the results already in the output directory differs from the current run — or is missing, as it is for any fit made before this check existed — the run refuses to start and prints which fields differ. Pass `--force-refit` to discard those results and refit from scratch, or fit into a different directory. `--force-refit` is not needed to *add* a method to a run whose fingerprint matches; that resumes normally.
+The fitter checks the data, model, and settings against `extended_run_fingerprint.json`. If they differ, it lists the differences. Choose a new output directory to keep both runs, or pass `--force-refit` to discard existing results and refit. You can add a fitting criterion to a matching run by rerunning with an expanded `--include-methods` list.
 
-### Generated artifacts are not where expected
+### Locate generated outputs
 
-Relative fit outputs are placed under `results/`. Historical raw-surface tools and WNM training scripts also honor `DEMIXING_ARTIFACT_ROOT`; without it, their default artifact root is the repository-local `results/` directory.
+Relative fit outputs are placed under `results/`. Absolute output paths are used as supplied. Tools that use an artifact root read `DEMIXING_ARTIFACT_ROOT`, which defaults to the repository's `results/` directory.
 
-## Maintainer: rebuild container images
+## Notes for developers
+
+Rebuild and publish the container images with:
 
 ```bash
 # GPU image (CUDA, amd64)

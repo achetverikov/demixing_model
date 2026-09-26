@@ -1,6 +1,6 @@
 # Simulated Samples Grid Pipeline
 
-> **Historical surface pipeline.** This document describes the averaged-surface generation path retained for surface-NN reproduction and raw-surface analyses. The production WNM does not require this grid. For current WNM training-data generation, start with [README.md](README.md) and `python -m surface_computation.generate_wnm_training_data`.
+Use this pipeline to generate a grid of simulated response distributions for surface inspection, identifiability-dimension predictions, or surface-network training. For conditional-mixture training data, see the [simulation guide](README.md).
 
 ## Overview
 

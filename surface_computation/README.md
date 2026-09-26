@@ -1,44 +1,39 @@
-# Simulation and training-data generation
+# Generate simulation data
 
-This package contains both the current WNM simulation/training-data path and the
-historical averaged-surface pipeline retained for reproduction and raw `mu2`
-analyses.
+Use these tools to simulate the Demixing Model and prepare data for a custom predictor. The [main README](../README.md) provides prediction and fitting examples using the included trained models.
 
-## Current WNM training-data path
+## Generate training data
 
-`generate_wnm_training_data.py` samples continuous parameter designs and stores
-raw EM bias outcomes. It delegates the design to `wnm_design.py` and simulator
-calls to `wnm_simulation.py`, which in turn use the maintained JAX simulator.
-
-Example:
+`generate_wnm_training_data.py` samples noise parameters and stimulus differences, simulates internal evidence, and records the response errors recovered by the observer's mixture fit.
 
 ```bash
-PYTHONPATH=. python -m surface_computation.generate_wnm_training_data \
+python -m surface_computation.generate_wnm_training_data \
+  --n-samples 20 \
   --n-points 4000 \
   --n-simulations 200 \
-  --out $DEMIXING_ARTIFACT_ROOT/wnm/train.npz
+  --out /path/to/training_data.npz
 ```
 
-The resulting NPZ is consumed by `surrogate_training.wnm.data` and
-`surrogate_training.wnm.train`. It contains raw outcomes rather than KDEs or
-likelihood surfaces.
+- `--n-samples` sets the total internal evidence samples in each simulated trial; the generator defaults to 100.
+- `--n-points` sets the number of parameter combinations in the design.
+- `--n-simulations` sets the repeated simulations per design point.
 
-`legacy_sample_import.py` is a bridge for usable raw outcomes that still exist
-inside the older grid corpus. It does not make the historical surface pipeline a
-runtime dependency of WNM fitting or prediction.
+The NPZ stores the parameter design, raw feature-bias outcomes for both items, and generation metadata. The [training tools](../surrogate_training/wnm/README.md) use these outcomes to fit a conditional wrapped-normal mixture (WNM).
 
-## Historical averaged-surface path
+The generator saves simulation chunks beside the output so interrupted runs can resume. Keep simulation and Python caches under `/tmp`, and run one GPU job at a time on a shared device.
 
-`simulated_samples_grid.py` and its supporting lock/object-store utilities
-generate the parameter-grid samples and averaged surfaces used by the historical
-surface neural network. This path is retained for reproduction and for analyses
-that require raw averaged surfaces, including separate `mu2` outputs.
+## Generate averaged surfaces
 
-See:
+For direct inspection of simulated distributions, surface-network training, or identifiability-dimension (`mu2`) predictions, use `simulated_samples_grid.py`. It generates samples on a parameter grid; averaging tools then turn them into density surfaces.
 
-- [Likelihood_Surface_Pipeline_Documentation.md](Likelihood_Surface_Pipeline_Documentation.md)
-- [../neural_network_optimization/Neural_Network_Optimization_Pipeline_Documentation.md](../neural_network_optimization/Neural_Network_Optimization_Pipeline_Documentation.md)
-- [../cloud/README_vast.md](../cloud/README_vast.md)
+- [Grid simulation guide](Likelihood_Surface_Pipeline_Documentation.md)
+- [Surface averaging and network training](../neural_network_optimization/Neural_Network_Optimization_Pipeline_Documentation.md)
+- [Distributed generation on Vast.ai](../cloud/README_vast.md)
 
-Generated corpora and surfaces belong under `$DEMIXING_ARTIFACT_ROOT` (or the
-configured results location), not in the source tree.
+A complete grid requires substantial GPU time and storage.
+
+## Notes for developers
+
+`wnm_design.py` constructs parameter designs. `wnm_simulation.py` calls the JAX observer simulator and supports item-swap augmentation. `legacy_sample_import.py` loads raw outcomes from grid-corpus files.
+
+Generated corpora and surfaces belong under `$DEMIXING_ARTIFACT_ROOT` or another configured results location. They are not shipped and are not expected in a normal checkout.

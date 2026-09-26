@@ -1,6 +1,6 @@
 # Vast.ai Surface Pipeline
 
-> **Historical surface infrastructure.** This distributed path builds averaged surfaces for the retained surface-NN/raw-surface workflow. Ordinary WNM fitting, prediction, and WNM training do not require Vast.ai, Redis, or object storage.
+Use this guide to distribute simulation-surface generation across Vast.ai GPU instances, with Redis coordinating work and object storage collecting outputs. For local simulation and predictor training, start with the [simulation guide](../surface_computation/README.md).
 
 This run mode uses:
 

@@ -2,10 +2,9 @@
 """
 Demixing Model Prediction Generator
 
-This script reads parameter combinations from CSV/Arrow, evaluates the packaged
-production surrogate (WNM by default), or explicitly uses the historical surface
-network / stored averaged surfaces, and writes prediction curves for Python or R
-analysis.
+Read noise parameters from CSV, Parquet, or Arrow and write predicted bias and
+response-variability curves for Python or R analysis. Choose a trained model or
+stored averaged simulation surfaces as the prediction source.
 """
 
 import pandas as pd
@@ -468,7 +467,7 @@ def main():
     parser.add_argument('input_path', nargs='?',
                         help='Path to CSV or Arrow file with parameters')
     parser.add_argument('n_samples', nargs='?', type=int,
-                        help='Number of samples used for training (e.g., 20, 100)')
+                        help='Internal evidence samples per simulated trial (20 or 100)')
     parser.add_argument('output_path', nargs='?',
                         help='Path to save results (Arrow/CSV file)')
     parser.add_argument('--input-path', dest='input_path_named',
@@ -480,8 +479,8 @@ def main():
     parser.add_argument('--skip-motor-noise', action='store_true', 
                        help='Skip motor noise computation (sd_motor = 0)')
     parser.add_argument('--surface-source', choices=['model', 'nn', 'raw'], default='model',
-                       help='model: use the current packaged production surrogate (default, WNM); '
-                            'nn: explicitly use the historical surface network; '
+                       help='model: use the selected trained predictor (default); '
+                            'nn: use the surface-network predictor; '
                             'raw: load averaged simulation surfaces and include mu2 outputs')
     parser.add_argument('--averaged-surfaces-dir',
                        help='Path to averaged surfaces directory (required with --surface-source raw).')

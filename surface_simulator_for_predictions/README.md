@@ -1,73 +1,48 @@
-# Prediction generator
+# Generate predictions in Python and R
 
-Use this tool when you have fitted parameter values—or a theoretical set of noise values—and want to see the bias and response-variability curves predicted by the Demixing Model. The standard route uses the trained models included in `pretrained/` and does not require any additional simulation files. Both Python and R interfaces are available.
+Supply fitted parameters or a theoretical set of noise values to generate bias and response-variability curves across stimulus dissimilarity. The tool loads the trained model for your chosen internal sample count.
 
-## Python: predictions with the included model
+## Prepare a parameter table
 
-Run commands from the repository root. The input may be CSV, Parquet, or Arrow and needs one row per parameter combination:
+Use CSV, Parquet, or Arrow with one row per parameter combination:
 
 | Column | Required | Meaning |
 |---|---|---|
-| `sd_feat1` | yes | Feature noise for the target item |
-| `sd_feat2` | yes | Feature noise for the competing item |
-| `sd_spat` | yes | Uncertainty about which feature belongs to which item/location |
-| `sd_motor` | unless `--skip-motor-noise` | Response-stage motor noise |
+| `sd_feat1` | Yes | Target-item feature noise |
+| `sd_feat2` | Yes | Competing-item feature noise |
+| `sd_spat` | Yes | Uncertainty about which evidence belongs to which item |
+| `sd_motor` | Unless `--skip-motor-noise` is used | Response-stage motor noise |
+
+Supply noise values in 360° model units. For example, 10° on a 180° orientation scale corresponds to 20 model degrees. See the [model reference](../pretrained/README.md) for supported parameter ranges.
+
+## Run predictions in Python
+
+From the repository root:
 
 ```bash
-PYTHONPATH=. python surface_simulator_for_predictions/surface_simulator.py \
+python surface_simulator_for_predictions/surface_simulator.py \
   --input-path example_data/prediction_parameters.csv \
   --n-samples 20 \
   --output-path results/prediction_example.parquet \
   --skip-motor-noise
 ```
 
-The `--n-samples 20` selects one of the two theoretical internal-sampling assumptions. It does not refer to the number of experimental trials. The matching packaged WNM (`pretrained/current_wnm_k12_20samples.pkl`) is loaded automatically; pass `--checkpoint-path` only to reproduce a different artifact.
+`--n-samples` selects the 20- or 100-sample observer model. This is the amount of internal evidence available in a simulated trial. Use `--checkpoint-path` to select a custom trained model.
 
-The three required inputs can also be given positionally — `surface_simulator.py INPUT N_SAMPLES OUTPUT` — which is what the smoke scripts use.
+The output contains one row per input combination:
 
-The output contains one row per input combination. Its main prediction columns are:
+| Field | Contents |
+|---|---|
+| `mu1_density_curve` | Asymmetry of the predicted feature-error distribution |
+| `mu1_expectation_curve` | Predicted circular mean bias in model degrees |
+| `sd_curve` | Predicted circular response SD in model degrees |
+| `feat_diff_grid` | Stimulus differences in model degrees, stored in the first row with grid/configuration metadata |
 
-- `mu1_density_curve`: asymmetry of the predicted response distribution;
-- `mu1_expectation_curve`: predicted mean response bias;
-- `sd_curve`: predicted response variability;
-- `feat_diff_grid` and bias-grid/configuration metadata in the first row.
+Positive bias means attraction; negative bias means repulsion. Each prediction is a curve across dissimilarity. Parquet and Arrow preserve curves as numeric arrays; CSV stores them as text.
 
-Each value is a curve across stimulus dissimilarity rather than a single average. Parquet/Arrow preserves these curves as numeric arrays and is recommended. CSV stores them as text.
+## Run predictions in R
 
-## Advanced: predictions from raw simulation surfaces
-
-The packaged WNM predicts the reported `mu1` bias distribution. Researchers who need the separate `mu2` spatial-bias outputs must provide raw averaged simulation surfaces:
-
-```bash
-PYTHONPATH=. python surface_simulator_for_predictions/surface_simulator.py \
-  --input-path example_data/prediction_parameters.csv \
-  --n-samples 20 \
-  --output-path results/prediction_example_raw.parquet \
-  --surface-source raw \
-  --averaged-surfaces-dir /path/to/averaged_surfaces_10k_20samples_circular \
-  --skip-motor-noise
-```
-
-Raw mode requires the exact requested parameter combinations to exist on the 5° surface grid. It adds `mu2_density_curve` and `mu2_expectation_curve`. Both loose surface files and compressed bundle directories are supported; bundle-backed directories must be writable so requested files can be materialized on demand.
-
-Averaged surfaces are not included in the repository and are not currently published as release assets.
-
-## Complete CLI
-
-```text
-surface_simulator.py INPUT N_SAMPLES OUTPUT      # or the named forms below
-  [--input-path INPUT] [--n-samples N] [--output-path OUTPUT]
-  [--skip-motor-noise]
-  [--surface-source {model,nn,raw}]
-  [--checkpoint-path CHECKPOINT.pkl]
-  [--averaged-surfaces-dir DIRECTORY]
-```
-
-`model` is the default and uses the current packaged surrogate (WNM). `nn` explicitly selects the historical surface network. `--averaged-surfaces-dir` is required with `--surface-source raw`.
-
-## R interface
-
-The wrapper requires `arrow`, `stringr`, and `data.table`. It writes a temporary Parquet parameter table, invokes Python, reads the results, and returns one row per parameter combination and feature difference.
+The wrapper requires `arrow`, `stringr`, and `data.table`. It invokes Python and returns one row per parameter combination and feature difference.
 
 ```r
 source("surface_simulator_for_predictions/surface_simulator.R")
@@ -85,4 +60,43 @@ predictions <- simulate_surfaces(
 )
 ```
 
-For raw mode, set `surface_source = "raw"` and provide an absolute `averaged_surfaces_dir`. Set `surface_source = "nn"` only for historical surface-NN reproduction. The old `use_nn_surfaces` boolean remains a compatibility alias but is deprecated. Helper functions `simulate_unequal_noise2()` and `simulate_equal_noise()` construct common parameter sweeps.
+Helpers `simulate_unequal_noise2()` and `simulate_equal_noise()` construct common parameter sweeps.
+
+## Predict from averaged simulation surfaces
+
+Use raw mode to inspect averaged simulation predictions, including bias in the separate identifiability dimension (`mu2`). Provide a directory of generated averaged surfaces:
+
+```bash
+python surface_simulator_for_predictions/surface_simulator.py \
+  --input-path example_data/prediction_parameters.csv \
+  --n-samples 20 \
+  --output-path results/prediction_example_raw.parquet \
+  --surface-source raw \
+  --averaged-surfaces-dir /path/to/averaged_surfaces_10k_20samples_circular \
+  --skip-motor-noise
+```
+
+The requested parameter combinations must exist on the 5° surface grid. Raw mode adds `mu2_density_curve` and `mu2_expectation_curve`. Both loose surface files and compressed bundles are supported; use a writable directory for bundles so requested files can be extracted.
+
+In R, set `surface_source = "raw"` and provide an absolute `averaged_surfaces_dir`. See the [simulation guide](../surface_computation/README.md) for generating surfaces.
+
+## Command reference
+
+```text
+surface_simulator.py INPUT N_SAMPLES OUTPUT      # positional form
+  [--input-path INPUT] [--n-samples N] [--output-path OUTPUT]
+  [--skip-motor-noise]
+  [--surface-source {model,nn,raw}]
+  [--checkpoint-path CHECKPOINT.pkl]
+  [--averaged-surfaces-dir DIRECTORY]
+```
+
+`model` loads the selected trained predictor. `raw` reads averaged surfaces from `--averaged-surfaces-dir`. `nn` selects the surface-network predictor.
+
+## Notes for developers
+
+The prediction interface uses `shared.surrogate` for model identity and `shared.prediction` for evaluation. Output rows carry `surrogate_family` and `surrogate_artifact`.
+
+The R argument `use_nn_surfaces` is a deprecated compatibility alias; use `surface_source` in new code.
+
+Averaged surfaces are generated artifacts under `$DEMIXING_ARTIFACT_ROOT`. They are not shipped and are not expected in a normal checkout.

@@ -1,236 +1,8 @@
-# Batch Fit Analysis Pipeline
+# Fit behavioral data
 
-## Overview
+Fit the Demixing Model to trial-level response errors, then export parameters and plot predictions across stimulus dissimilarity. Run these commands from the repository root after following the [installation guide](../INSTALL.md).
 
-This document describes the reusable model fitting and result pipeline in `model_fit_to_data/`.
-
-There are two WNM input paths with different intended uses:
-
-- **Ordinary end-user CSV fitting:** `fit_model_to_data.py --data-path ...`
-  derives the participant/condition groups, filtering, empirical targets, and
-  observed-design operators directly from the supplied table. This is the
-  default user-facing path.
-- **Compiled comparison fitting:** `fit_model_to_data.py --bundle ...` consumes
-  a validated `contextual_biases_database` bundle. Use this when multiple model
-  families or datasets must share exactly the same cleaned trial population,
-  analysis cells, bandwidths, targets, and row identities.
-
-Both WNM paths use the same analytic predictor and continuous optimizer and write
-fingerprinted results to `--output-dir`. The historical surface NN remains
-reachable only through an explicit surface checkpoint plus a lattice search.
-
----
-
-## Pipeline Flow Diagram
-
-Compiled comparison path:
-
-```text
-compiled bundle
-      │
-      ▼
-fit_model_to_data.py
-      │
-      ▼
-ContinuousEngine + packaged WNM
-      │
-      ▼
-extended_fit_results.pkl + extended_run_fingerprint.json
-      │
-      ├── create_unified_subject_plots.py
-      ├── plot_pdf_slices.py
-      └── export_wnm_fit_curves.py
-```
-
-The ordinary CSV/WNM path performs the same target construction locally:
-
-```text
-CSV trials
-   │
-   ▼
-load/filter/group conditions
-   │
-   ▼
-build exact-coordinate empirical targets
-   │
-   ▼
-ContinuousEngine + packaged WNM
-   │
-   ▼
-extended_fit_results.pkl + extended_run_fingerprint.json
-   │
-   ├── export_wnm_fit_curves.py
-   ├── create_unified_subject_plots.py
-   └── plot_pdf_slices.py
-```
-
-Historical surface-NN reproduction remains available explicitly with a surface
-checkpoint and `--search hierarchical` or `--search exhaustive`; it is not a
-default path.
-
----
-
-## Default Settings (`fit_model_to_data.py`)
-
-The bare CLI now selects the packaged WNM:
-
-- `--include-methods density`
-- `--n-samples 20`
-- packaged `current_wnm_k12_20samples.pkl` unless `--checkpoint-path` overrides it
-- `--min-trials 30`
-- `--search continuous`
-- 64 deterministic starts in two sequential batches of 32
-- outliers excluded by default
-
-For a normal one-model analysis, `--data-path` is sufficient. For controlled
-cross-model comparisons, use `--bundle`; the bundle freezes empirical semantics
-upstream and adds stable row identities for likelihood exports.
-
-Historical surface fitting requires both an explicit surface checkpoint and an
-explicit lattice search mode.
-
-## Search backends
-
-| Backend | What it does | When |
-|---|---|---|
-| `continuous` | Bounded multistart gradient optimization of the analytic WNM objectives | Default for both ordinary CSV and compiled-bundle WNM fitting |
-| `hierarchical` | Zooming grid search over the sampled surface surrogate | Historical surface-NN reproduction only |
-| `exhaustive` | Scans a precomputed 1-degree lattice of density-asymmetry curves | Historical surface `density` only |
-
-On the historical surface path dispatch is per **method**: `--search exhaustive`
-routes `density` to the scan and leaves every other method hierarchical,
-because the cache holds density curves and nothing else. Bundle-native WNM runs
-do not use the surface curve cache.
-
-The scan is exact on its lattice. At a fixed shared parameter the conditions are
-independent, so each condition's own minimum can be taken separately and summed
-to give the joint optimum — which is what makes a full scan affordable. It cannot
-search *between* lattice points, so it is not uniformly better than the zoom:
-measured over 51 csh2026 groups the two agree to 0.15% of the loss (median), with
-the zoom ahead in 30 groups on sub-degree points and the scan ahead in 21 where
-the zoom settled in a worse basin. The scan takes ~4 s per group against ~34 s.
-
-`--curve-cache PATH` selects the cache root; it is built on demand if absent
-(single-writer locked), or ahead of time with
-`model_fit_to_data/build_curve_cache.py`. The cache is keyed by a digest of
-everything that changes a curve — checkpoint, both parameter lattices, the
-feat_diff and mu1_bias grids, the density-target settings — so a cache built
-under different settings cannot be read by mistake. `--no-skip-motor-noise` is
-refused under `exhaustive`: `sd_motor` is a fourth axis the cache does not span.
-
-## Refusing stale results
-
-A run records how it was produced in `<output-dir>/extended_run_fingerprint.json`
-— dataset and checkpoint hashes, circular space, grids, objective definitions,
-search backend, column mapping, outlier policy. Resuming into a directory whose
-fingerprint differs, or which has results but no fingerprint, **raises** and
-prints which fields differ, rather than appending fits computed one way onto fits
-computed another. `--force-refit` discards those results and refits; it is not
-needed to add a method to a run whose fingerprint matches.
-
-## Objective status
-
-The maintained WNM objectives are `density` (default), `smoothed_exp`, `likelihood`, `crps`, `balanced_crps`, and `bias_weighted_crps`. The hard-binned `expectation` and `density_legacy` objectives remain available only for historical reproduction and should not be used for new analyses.
-
-## Dissimilarity smoothing in the fitting objectives
-
-The legacy surface NN predicts simulation surfaces that already contain a nominal
-6° Gaussian smoother across dissimilarity (three steps on the 2° grid). The WNM
-backend instead evaluates its conditional distribution analytically at the stored
-prediction coordinates. Fitting then handles the empirical and predicted sides as
-follows:
-
-| Objective | Empirical side | Predicted side |
-|---|---|---|
-| `likelihood`, `crps` | Raw trials | Family-specific direct distribution evaluation; WNM uses the analytic conditional density/cell probabilities, surface replay uses the matching NN column |
-| `expectation` *(historical)* | Circular means in 4° bins | Surrogate circular mean at the matching coordinates |
-| `smoothed_exp` | Rolling circular moments, nominal 20° Gaussian SD | Surrogate complex moments pooled through the same observed-design operator |
-| `density` | Exact wrapped signed mass after a pooled-SJ bias KDE and nominal 20° Gaussian trial weights | Surrogate density convolved by the same bias KDE, then pooled through the same observed-design operator |
-| `density_legacy` *(historical)* | Legacy sampled-KDE density-asymmetry curve | Legacy surface asymmetry curve with a nominal 20° Gaussian convolution |
-| `balanced_crps`, `bias_weighted_crps` | Conditional empirical distributions, nominal 20° Gaussian trial weights | Family-specific predicted response distribution |
-
-Thus the current `density` and `smoothed_exp` objectives apply the identical
-empirical observed-design operator to either model family's prediction. The
-surface NN still inherits the upstream 6° simulation smoother because that is
-part of the legacy surrogate itself, not an extra fitting-objective smoother.
-The WNM path adds no reconstructed surface or hidden dissimilarity interpolation.
-
----
-
-## The density objective
-
-`density` minimises `1 - CCC`, Lin's concordance correlation between the
-predicted and empirical density-asymmetry curves. With
-`D = var_p + var_t + (mean_p - mean_t)^2`, `1 - CCC = MSE/D` and `CCC = r * C_b`,
-so the score carries accuracy (`C_b`: right amplitude and offset) as well as
-precision (`r`: right shape).
-
-`density_legacy` is the pre-2026-08 objective, `0.75*MSE/range + 0.25*(1-r)`,
-retained so published numbers stay reproducible. Its MSE term divides by `range`
-rather than `range**2`, which is not scale-free and left the term too weak to
-constrain amplitude: over 204 csh2026 condition fits it accepted 115 curves at
-least 5x too small in amplitude, against none under CCC. `--corr-weight` reaches
-only `density_legacy`; it is inert for `density`.
-
-A constant empirical target makes both objectives **raise**: CCC is undefined
-there and returns its worst value for a perfect match. Conditions are never
-silently dropped from a fit.
-
-## Outputs
-
-Each condition entry in `extended_fit_results.pkl` includes method-specific fields:
-- `{method}_fitted_params`
-- `{method}_optimization_time`
-- `{method}_loss`
-
-The production WNM tabular export is generated by
-`export_wnm_fit_curves.py`. It carries fitted parameters, method-specific fit
-losses, cross-objective evaluation losses, explicit model/physical angular
-units, bundle identity, surrogate identity, and likelihood replay checks. The
-retired plotter-specific CCC decomposition columns are no longer part of the
-production export contract.
-
----
-
-## Post-Fit Plots
-
-Use `create_unified_subject_plots.py` to generate unified subject and group-summary
-plots from saved results. CSV export from this plotter has been retired. Bundle-native result keys are opaque analysis-cell
-IDs; the plotter reads subject, experiment, condition, and report-order labels
-from the stored `analysis_cell_values` metadata. The run fingerprint identifies
-and verifies the fitted surrogate, and the saved results identify the physical
-circular period, so neither checkpoint nor `--circ-space` should normally be
-supplied. A conflicting period override raises rather than silently relabeling
-curves or fitted SDs.
-
-```bash
-python model_fit_to_data/create_unified_subject_plots.py \
-  --results-path <output-dir>/extended_fit_results.pkl \
-  --output-dir <output-dir> \
-  --summary-plots --no-individual-plots
-```
-
-The standalone PDF-slice command follows the same fingerprint identity and now
-supports both direct WNM and historical surface fits:
-
-```bash
-python model_fit_to_data/plot_pdf_slices.py \
-  --results-path <output-dir>/extended_fit_results.pkl \
-  --output-dir <output-dir> \
-  --optimizer density
-```
-
-For WNM tabular exports, `export_wnm_fit_curves.py` is the single output
-path. It writes fitted parameters and direct analytic curves for both ordinary
-CSV and compiled-bundle fits. Compiled bundles additionally provide stable
-analysis-cell, fit-group, and row identities, so the exporter can write
-per-trial likelihood products and replay checks for those runs.
-
----
-
-## How To Run
-
-### Ordinary WNM fit from CSV
+## Fit a CSV
 
 ```bash
 python model_fit_to_data/fit_model_to_data.py \
@@ -239,32 +11,145 @@ python model_fit_to_data/fit_model_to_data.py \
   --output-dir results/fritsche
 ```
 
-### Compiled WNM fit for model comparison
+For orientation data, add `--circ-space 180`. The default, 360°, suits color and motion direction.
+
+The CSV contains one row per trial:
+
+| Column | Meaning | Rename with |
+|---|---|---|
+| `expName` | Experiment identifier | `--exp-col` |
+| `subject` | Participant identifier | `--subject-col` |
+| `condition` | Condition identifier | `--condition-col` |
+| `abs_td_dist` | Absolute target–competitor difference in study degrees | `--x-col` |
+| `bias_to_distr_corr` | Response error signed toward the competitor: positive for attraction, negative for repulsion | `--y-col` |
+| `is_outlier` | Optional flag: 1 excludes the trial | `--outlier-col` |
+
+The fitter groups conditions within each participant and experiment. Each condition gets its own `sd_feat1` and `sd_feat2`; the group shares `sd_spat` and, when enabled, `sd_motor`. By default, conditions need at least 30 usable trials and flagged outliers are excluded.
+
+## Choose a fitting criterion
+
+Select one or more criteria with `--include-methods`, for example:
 
 ```bash
 python model_fit_to_data/fit_model_to_data.py \
-  --bundle ../contextual_biases_database/data/bundles/<dataset>/<bundle> \
+  --data-path path/to/trials.csv \
+  --output-dir results/my_study \
+  --include-methods density smoothed_exp likelihood
+```
+
+Each criterion produces a separate fit:
+
+| Criterion | What it matches |
+|---|---|
+| `density` (default) | Density asymmetry: how much response probability lies toward versus away from the competing item, across dissimilarity |
+| `smoothed_exp` | The smoothed circular-mean bias curve |
+| `likelihood` | The conditional response density at each observed trial |
+| `crps` | Trial-level response distributions, scored using circular distance |
+| `balanced_crps` | Conditional response distributions, with equal weight across supported dissimilarities |
+| `bias_weighted_crps` | Conditional response distributions, weighted by empirical bias |
+
+Choose the criterion to match the question: `smoothed_exp` for mean bias, `density` for attraction–repulsion asymmetry, or a distribution-based criterion for the full pattern of response errors. Inspect the resulting curves across dissimilarity as well as the loss.
+
+### Density asymmetry and mean bias
+
+`density` minimizes `1 − CCC`, where CCC is Lin's concordance correlation between empirical and predicted asymmetry curves. It measures agreement in shape, amplitude, and offset. A perfect match has loss zero. A constant empirical target cannot be fitted with this criterion and produces an error identifying the affected condition.
+
+`smoothed_exp` minimizes the weighted squared angular difference between empirical and predicted circular means.
+
+Both criteria pool predictions at the observed stimulus differences using the same dissimilarity weights as the empirical estimates. The default Gaussian weighting has a nominal SD of 20° in model units. For `density`, the predicted response density also receives the same bias-axis KDE bandwidth as the empirical density estimate. This makes the plotted and fitted summaries comparable at the observed trial design.
+
+`balanced_crps` and `bias_weighted_crps` likewise pool predicted distributions using the empirical dissimilarity weights. `likelihood` and `crps` score individual trials directly.
+
+## Adjust the fit
+
+| Option | Default | Use |
+|---|---|---|
+| `--n-samples` | `20` | Choose the 20- or 100-sample observer model |
+| `--circ-space` | `360` | Set the angular period of the behavioral data to 180 or 360 |
+| `--min-trials` | `30` | Set the minimum usable trials per condition |
+| `--include-outliers` | Off | Include trials flagged as outliers |
+| `--no-skip-motor-noise` | Off | Estimate response-stage noise shared across conditions |
+| `--continuous-starts` | `64` | Set the number of optimization starting points |
+| `--continuous-seed` | `0` | Set the seed used to generate starting points |
+| `--checkpoint-path` | Selected by `--n-samples` | Load a custom trained model |
+
+The optimizer uses bounded L-BFGS-B from 64 deterministic starting points, evaluated in two sequential batches of 32. It jointly estimates condition-specific and shared parameters and records the outcome of each start. Bounds come from the selected model's supported domain.
+
+Motor noise broadens the response distribution through a circular Gaussian convolution. When enabled, its upper bound is based on the smallest condition error SD, with a 10% margin and a maximum of 50 model degrees. Mean-bias fitting is skipped in motor-noise runs because symmetric motor noise leaves the circular mean unchanged.
+
+## Results and resuming
+
+Relative output directories are placed under `results/`; absolute paths are used as supplied.
+
+| File | Contents |
+|---|---|
+| `extended_fit_results.pkl` | Fitted parameters, method-specific losses, empirical targets, and metadata; used to resume fitting and generate outputs |
+| `extended_run_fingerprint.json` | Data and checkpoint hashes, column mapping, filtering, circular geometry, objective definitions, and optimizer settings |
+| `extended_progress.json` | Human-readable progress summary |
+
+Rerun the command to resume. Additional criteria can be added to a run when its fingerprint matches. Use `--no-resume` to recompute with the same settings. For changed data or settings, choose a new output directory, or use `--force-refit` to discard existing results and refit.
+
+Each condition stores `{method}_fitted_params`, `{method}_loss`, and `{method}_optimization_time`. Exports and plots load the model identified by the run fingerprint and use the saved angular period.
+
+## Export tables
+
+```bash
+python model_fit_to_data/export_wnm_fit_curves.py \
+  --results-dir results/my_study \
+  --output-dir results/my_study/csv_exports
+```
+
+The exporter creates:
+
+- `fitted_parameters.csv`: noise estimates, fitted losses, and evaluations under the other criteria;
+- `fitted_curves.csv`: predictions across stimulus dissimilarity;
+- `manifest.json`: model identity and unit definitions.
+
+Use columns ending in `*_model_deg` or `*_model_deg2` for the internal 360° scale, and `*_deg` or `*_deg2` for the study's physical angular scale. Unsuffixed SD columns contain model degrees.
+
+Compiled-bundle fits also produce `trial_loglik_split/` and `trial_loglik_checks.csv`. These associate likelihoods with the original trial identities and verify that their sum reproduces the fitted likelihood objective under the recorded numerical precision.
+
+## Plot results
+
+Create group-summary plots:
+
+```bash
+python model_fit_to_data/create_unified_subject_plots.py \
+  --results-path results/my_study/extended_fit_results.pkl \
+  --output-dir results/my_study \
+  --summary-plots --no-individual-plots
+```
+
+Use `--individual-plots` to add participant plots. To examine response distributions at selected stimulus differences:
+
+```bash
+python model_fit_to_data/plot_pdf_slices.py \
+  --results-path results/my_study/extended_fit_results.pkl \
+  --output-dir results/my_study \
+  --optimizer density
+```
+
+Set `--optimizer` to the criterion used for the fit. Labels, circular period, and model identity are read from the saved results.
+
+## Fit a compiled bundle
+
+Use a `contextual_biases_database` bundle when comparing model families or coordinating analyses across datasets. A bundle supplies shared trial selection, angular geometry, bandwidths, empirical targets, and stable row identities.
+
+```bash
+python model_fit_to_data/fit_model_to_data.py \
+  --bundle ../contextual_biases_database/data/bundles/<dataset>/<analysis> \
   --n-samples 100 \
   --output-dir results/<dataset>
 ```
 
-### Historical surface-NN replay
+Then run the same export and plotting commands shown above. Bundle metadata supplies participant, experiment, and condition labels.
 
-```bash
-python model_fit_to_data/fit_model_to_data.py \
-  --data-path example_data/fritsche_prepared.csv \
-  --checkpoint-path pretrained/surface_legacy_epoch1425_10ktrain_20samples.pkl \
-  --search hierarchical \
-  --output-dir results/fritsche_surface_replay
-```
+## Notes for developers
 
----
+The fitting pipeline uses `shared/prediction.py` to evaluate the conditional wrapped-normal mixture and `continuous_fit.py` / `continuous_optimizer.py` for parameter estimation. `fitting_targets.py`, `empirical_targets.py`, and `wnm_scoring.py` define the empirical summaries and their matched model predictions. `compiled_bundle.py` loads bundle inputs.
 
-## Related Files
+The surface-network tools accept an explicit surface checkpoint with `--search hierarchical` or `--search exhaustive`. Hierarchical search refines a parameter grid; exhaustive search scans cached density-asymmetry curves on a lattice and requires motor noise fixed at zero. `--curve-cache` selects the cache location; `build_curve_cache.py` prepares it. In exhaustive mode, other criteria use hierarchical search.
 
-- `fit_model_to_data.py` — WNM-first fitting entry point for ordinary CSVs and compiled comparison bundles
-- `compiled_bundle.py` — strict reader for bundle-native WNM inputs
-- `create_unified_subject_plots.py` — family-aware post-fit subject, summary, and PDF-slice plots
-- `plot_pdf_slices.py` — family-aware conditional-density slice plots
-- `export_wnm_fit_curves.py` — WNM tabular exporter for fitted curves/parameters, plus row-level likelihood products when compiled row identities are available
-- `grid_based_multi_condition_optimizer_jax_loops.py` — legacy surface optimizer core
+The compatibility criteria `expectation` and `density_legacy` provide hard-binned mean fitting and a range-scaled MSE/correlation asymmetry loss, respectively. `--corr-weight` configures `density_legacy`. Use the criteria listed above for new analyses.
+
+Detailed surface-search benchmarks and earlier objective comparisons are preserved with generated results under `$DEMIXING_ARTIFACT_ROOT/exploration_archive/documentation_20260926/`. These artifacts are not shipped and are not expected in a normal checkout.

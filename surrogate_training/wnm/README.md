@@ -1,63 +1,55 @@
-# WNM surrogate training
+# Train a custom predictor
 
-This package trains and packages the conditional wrapped-normal-mixture (WNM)
-surrogate used by the production fitting and prediction paths.
+This pipeline trains a conditional wrapped-normal mixture (WNM) on simulated response errors and packages it for fitting and prediction. The [included models](../../pretrained/README.md) provide ready-to-use 20- and 100-sample predictors.
 
-Ordinary users do **not** need to run this pipeline. The packaged 20- and
-100-sample production artifacts are already included under `pretrained/`.
+Run commands from the repository root.
 
-## Data flow
+## 1. Generate training data
 
-1. Generate or load raw simulator outcomes.
-   - Continuous/off-grid designs:
-     ```bash
-     python -m surface_computation.generate_wnm_training_data \
-       --n-samples 20 --out /path/to/training_data.npz
-     ```
-   - Existing raw grid corpus: loaded through `surface_computation.legacy_sample_import`
-2. Train the conditional mixture:
-   ```bash
-   PYTHONPATH=. python -m surrogate_training.wnm.train \
-     --source /path/to/training_data.npz \
-     --components 12 \
-     --out /path/to/run_checkpoint.pkl
-   ```
-3. Package a selected training checkpoint into a self-contained production
-   artifact:
-   ```bash
-   python -m surrogate_training.wnm.package_artifact \
-     --fit /path/to/run_checkpoint.pkl \
-     --n-samples 20 \
-     --out /path/to/custom_wnm_20samples.pkl
-   ```
-4. Production consumers load artifacts through `shared.surrogate`, not by
-   opening training checkpoints directly.
+```bash
+python -m surface_computation.generate_wnm_training_data \
+  --n-samples 20 \
+  --out /path/to/training_data.npz
+```
 
-Use the same `--n-samples` as the generated training data (the generator defaults
-to 100). The trainer records sample identity, selected step, and the training
-parameter hull, including mirrored rows. The packager refuses a different sample
-count. Its declared domain is that hull, not the production checkpoints' full
-domain; coverage alone does not establish surrogate accuracy. Validate a custom
-model independently before using it for scientific inference.
+Choose the internal sample count for the observer you want to model. See the [simulation guide](../../surface_computation/README.md) for design size, repetitions, and output details.
 
-Historical selected-fit dictionaries still require `--corpus-stage`; that option
-is not used for checkpoints produced by the maintained trainer.
+## 2. Train the mixture
 
-The packager copies weights without retraining, records architecture and
-scientific metadata, preserves the recorded training domain, reloads the artifact,
-and checks predictions at a parameter panel before replacing the destination file.
-Historical stage-based packaging additionally checks the original corpus manifests.
+```bash
+python -m surrogate_training.wnm.train \
+  --source /path/to/training_data.npz \
+  --components 12 \
+  --out /path/to/run_checkpoint.pkl
+```
 
-## Files
+Training minimizes negative log-likelihood on the raw simulated biases. The checkpoint records the sample count, selected step, architecture, and training parameter bounds, including the swapped-item examples.
 
-- `train.py` - WNM training loop and checkpoint selection.
-- `data.py` - raw-outcome stores, batching, mirror augmentation, and source loading.
-- `evaluation.py` - training-time moment and NLL evaluation helpers.
-- `package_artifact.py` - conversion from selected training checkpoint to
-  production artifact.
-- `shared/wnm.py` - maintained runtime model and artifact serialization format.
-- `pretrained/README.md` - identity, domain, and provenance of the packaged
-  production artifacts.
+## 3. Package the checkpoint
 
-Historical corpus-stage names such as `continuous_density_4.1p` are immutable
-provenance labels. They are not current source-code paths.
+```bash
+python -m surrogate_training.wnm.package_artifact \
+  --fit /path/to/run_checkpoint.pkl \
+  --n-samples 20 \
+  --out /path/to/custom_wnm_20samples.pkl
+```
+
+Use the same `--n-samples` as the generated data. The packager copies the weights, records scientific metadata and the training domain, reloads the artifact, and checks its predictions before saving the final file.
+
+Validate the packaged model against independent simulations across its parameter domain, including the shape of bias and variability curves across dissimilarity.
+
+## 4. Use the model
+
+Pass `--checkpoint-path /path/to/custom_wnm_20samples.pkl` and `--n-samples 20` to the [fitter](../../model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md) or [prediction generator](../../surface_simulator_for_predictions/README.md).
+
+## Notes for developers
+
+- `train.py`: training loop and checkpoint selection.
+- `data.py`: source loading, batching, and item-swap augmentation.
+- `evaluation.py`: moment and likelihood evaluation.
+- `package_artifact.py`: model packaging.
+- `shared/wnm.py`: runtime model and serialization format.
+
+Consumers load packaged artifacts through `shared.surrogate`. The packaged domain follows the source checkpoint's training bounds. Selected-fit dictionaries from stage-based experiments use `--corpus-stage` to locate their source manifests.
+
+Corpus labels such as `continuous_density_4.1p` identify generated experiment artifacts under `$DEMIXING_ARTIFACT_ROOT`. These artifacts are not shipped and are not expected in a normal checkout.

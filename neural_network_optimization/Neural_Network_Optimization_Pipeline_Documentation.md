@@ -1,22 +1,13 @@
-# Historical Surface-NN Optimization Pipeline
+# Average simulation surfaces and train a surface network
 
-## Overview
+Use these tools to turn simulated samples into averaged density surfaces and train a network that predicts those surfaces. For the conditional-mixture predictor used by the main fitting and prediction tools, see the [training guide](../surrogate_training/wnm/README.md).
 
-This document describes the historical surface-NN surrogate pipeline retained
-for reproduction. WNM is now the production surrogate for fitting and
-prediction; see the root README and `pretrained/README.md` for current usage.
-
-The historical pipeline has two steps:
+There are two steps:
 
 1. Create averaged surfaces from simulated samples.
 2. Train the mirror-aware network on those surfaces.
 
-`combine_mirrored_surfaces.py` is a leftover from an older three-step version where
-mirroring was a separate pass. The current `create_averaged_surfaces_from_samples.py`
-already loads both `(sf1, sf2, sp)` and `(sf2, sf1, sp)` sample files, merges them
-with appropriate component flipping, and builds the KDE surfaces in one step.
-
----
+`create_averaged_surfaces_from_samples.py` loads both `(sf1, sf2, sp)` and `(sf2, sf1, sp)` sample files, exchanges the matching components, and builds the KDE surfaces in one pass.
 
 ## Pipeline Flow
 
@@ -61,41 +52,9 @@ with appropriate component flipping, and builds the KDE surfaces in one step.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-The flags above reproduce the architecture and objective of the former
-20-observation surface-NN run. The CLI defaults remain `circular`, 64 native
-mu1 rows, and 90 training feature columns so older experiments stay
-reproducible; omitting the three historical run flags therefore starts a
-different model.
+The example selects `circular_trajectory`, 128 native bias rows, and 128 training feature columns. The CLI defaults are `circular`, 64 rows, and 90 columns; pass the example flags to use the configuration of the included surface checkpoint.
 
-## Former 20-observation surface surrogate
-
-The historical checkpoint is
-`pretrained/surface_legacy_epoch1425_10ktrain_20samples.pkl`. It was selected from a
-1500-epoch run trained on the 10k-simulation surfaces using:
-
-- a native 128-row periodic decoder;
-- 128 feature-difference columns in the training loss, resized to 90 only for
-  inference;
-- the `circular_trajectory` objective: equal-weight forward KL, circular
-  energy, first-circular-moment vector error, density-asymmetry error, and
-  second-difference error of the circular-moment trajectory across feature
-  dissimilarity;
-- AdamW, batch size 32, peak learning rate 0.002, weight decay 1e-4, and a
-  1000-step warmup followed by cosine decay.
-
-The targets remain the regular 10k-simulation KDE surfaces. Two independent
-100k-simulation reference sets were used only for validation. Epoch 1425 gave
-the best balanced validation score; the lower training loss at epoch 1500 was
-not used as the selection criterion.
-
-The loaded source currently produces 64,005 augmented rows because five
-diagonal records are duplicated in the bundles. Each epoch uses 2,000 complete
-batches, or 64,000 rows; the five unused rows have no meaningful speed effect.
-See `pretrained/README.md` for the versioned checkpoint provenance.
-
----
-
-## Disk Space: Stubbing Raw Sample Files
+## Reduce raw-sample storage
 
 Raw sample files are ~6 MB each (~50 GB for a full L1 run). Once averaged, they can be
 replaced with tiny stubs (~1 KB) that preserve the filename/hash so
@@ -109,8 +68,7 @@ python neural_network_optimization/create_averaged_surfaces_from_samples.py \
   --stub-samples
 ```
 
-Without `--stub-samples` (the default) sample files are left untouched.  The script is
-safe to re-run either way — it skips combinations whose averaged surface already exists.
+By default, raw sample files are preserved. With `--stub-samples`, their simulated outcomes are deleted after averaging, so keep a copy if you need them for further analysis. Rerunning skips combinations whose averaged surface already exists.
 
 ---
 
@@ -148,22 +106,19 @@ config.param_grid_low          # derived Level-2 lower bound = 5
 config.mu1_surface_shape = (180, 90)   # (bias_points, feat_diff_points)
 ```
 
-`--feat-bandwidth` is expressed in feature-difference **grid steps**, not degrees.
-The historical deployed surface grid advances by 2°, so the default
+`--feat-bandwidth` is expressed in feature-difference **grid steps**.
+The surface grid advances by 2°, so the default
 `--feat-bandwidth 3` gives a nominal 6° Gaussian SD across neighboring
 simulated dissimilarities. This smoothing
 is part of each training target and is consequently baked into the trained NN output.
 
-The mu1 axis is a half-open periodic grid, `[-180, 180)` in 2° cells. The
-historical surface model is trained through a 128-row native decoder but always
-returns the configured 180-row periodic density. Feature difference is bounded rather
-than circular.
+The mu1 axis is a half-open periodic grid, `[-180, 180)` in 2° cells. The included surface model uses a 128-row native decoder and returns the configured 180-row periodic density. Feature difference has a bounded axis.
 
 ## Warm-starting a completed run
 
 `--init-checkpoint` loads parameters into a fresh optimizer schedule, while
 `--epoch-offset` continues checkpoint numbering and the deterministic shuffle
-stream. This is a warm restart, not an exact optimizer-state resume. For
+stream. The optimizer starts with a fresh state and learning-rate schedule. For
 example, a 500-epoch continuation of epoch 1500 uses `--epochs 500
 --epoch-offset 1500 --init-checkpoint .../model_epoch_1500.pkl`. A completed
 cosine schedule has zero learning rate, so any meaningful continuation must
@@ -171,9 +126,6 @@ choose and document a new learning-rate schedule.
 
 ## Notes for developers
 
-The full experiment inventory, figures, CSV files, 100k references, and
-intermediate checkpoints are generated artifacts, not repository contents. In
-the external artifact workspace they are indexed at
-`$DEMIXING_ARTIFACT_ROOT/mu1_experiments/README.md`, with the historical
-protocol in `OBJECTIVE_ABLATION.md` beside it. A normal checkout is not expected
-to contain these paths.
+The included surface checkpoint, `pretrained/surface_legacy_epoch1425_10ktrain_20samples.pkl`, was selected at epoch 1425 of a 1500-epoch run on 10k-simulation KDE surfaces. It uses a 128-row periodic decoder, 128 training feature columns, and the `circular_trajectory` objective: equal-weight forward KL, circular energy, first-moment error, density-asymmetry error, and second-difference error of the circular-moment trajectory. Training uses AdamW, batch size 32, peak learning rate 0.002, weight decay `1e-4`, and a 1000-step warmup followed by cosine decay.
+
+Experiment inventories, validation references, and intermediate checkpoints are generated artifacts under `$DEMIXING_ARTIFACT_ROOT/mu1_experiments/`, indexed by `README.md` and `OBJECTIVE_ABLATION.md`. They are not shipped and are not expected in a normal checkout. Additional source-bundle and checkpoint-selection details are preserved under `$DEMIXING_ARTIFACT_ROOT/exploration_archive/documentation_20260926/`.
