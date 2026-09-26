@@ -1785,10 +1785,10 @@ def create_unified_plots_with_summaries(
     # back to today's production artifact. An explicit --checkpoint-path is
     # verified against the recorded digest when one exists.
     #
-    # Resolving by n_samples alone was wrong twice over: the old default named
-    # epoch 1500 while the fitter's named epoch 1425 -- different architectures,
-    # not just different epochs -- and after a promotion it would recompute a
-    # historical fit's curves from the new model.
+    # Resolving by n_samples alone was wrong twice over: the old surface defaults
+    # could select a different checkpoint from the fitter, and any later change
+    # in the production family/default could recompute historical parameters
+    # through a different forward model.
     resolved_checkpoint_path = surrogate.checkpoint_for_run(
         resolved_results_path,
         explicit=resolve_input_path(checkpoint_path, results_dir) if checkpoint_path else None,
