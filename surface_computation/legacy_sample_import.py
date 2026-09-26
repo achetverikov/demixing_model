@@ -8,7 +8,7 @@ are dropped and the file is rewritten as a ~400-byte stub (a ``'stub'`` marker
 and empty ``mu1_samples``/``mu2_samples`` arrays).  Only ~2096 files (~6.5 MB
 each, covering ~1605 of the 64000 grid triples plus their ``_r0``/``_r1`` mirror
 runs) still carry the raw per-simulation biases — 90 ``feat_diff`` rows x 10,000
-EM outcomes x 2 components — which are exactly what this prototype wants.
+EM outcomes x 2 components — which are exactly what the WNM raw-sample training path consumes.
 
 Because stubs outnumber usable files ~30:1, :func:`list_files` filters by size
 *before* any ``n_files`` subsample, so a request for 800 files returns 800
@@ -18,7 +18,7 @@ Two further caveats, both handled by the callers rather than hidden here:
 
 * The usable files are still **on a grid** in all four inputs (5 degrees in the
   SDs, 2 degrees in ``feat_diff``).  Fine for training, but they cannot validate
-  off-grid generalisation; ``generate_training_data.py --validation`` simulates
+  off-grid generalisation; ``python -m surface_computation.generate_wnm_training_data --validation`` simulates
   fresh continuous parameter combinations for that.
 * Despite the ``fullcov`` in the folder name these fits are diagonal — the flag
   was a no-op when they were produced (see the repo's flag-dispatch fix), and
