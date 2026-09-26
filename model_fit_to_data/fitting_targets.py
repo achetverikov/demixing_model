@@ -9,8 +9,8 @@ empirical bias distributions the CRPS variants score against.
 It used to live inside the surface optimizer's ``_precompute_target_curves``,
 which meant a second search engine could only reach it by constructing that
 optimizer -- and constructing it means loading a surface checkpoint. Targets do
-not depend on any surrogate, so requiring one to build them would have tied a
-future engine to the backend it is meant to replace. Nothing here loads a model.
+not depend on any surrogate, so they live outside both the production WNM
+engine and the historical surface optimizer. Nothing here loads a model.
 
 The extracted legacy fields remain unchanged and are pinned by
 ``tests/test_fitting_targets.py``. The matched density target and observed-design
