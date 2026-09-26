@@ -1,7 +1,7 @@
 [project]
 name = "demixing-model"
 version = "0.0.0"
-description = "Demixing Model pipelines (simulation, NN training, fitting, browser)."
+description = "Demixing Model pipelines for simulation, WNM training, fitting, prediction, and historical surface tools."
 requires-python = ">=3.10"
 dependencies = [
   "jax==0.10.1",
