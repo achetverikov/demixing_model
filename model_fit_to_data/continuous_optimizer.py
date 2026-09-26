@@ -8,7 +8,7 @@ that -- its density, moments and signed-arc asymmetry are closed forms, and the
 production CCC loss is a smooth function of them -- so the whole path from
 parameters to loss has a gradient.
 
-The recovery panel selected this as the WNM production search: 64 deterministic
+The validated WNM production search uses 64 deterministic
 starts evaluated with the pinned batched JAX L-BFGS-B port as two sequential
 batches of 32. The surface backend retains its hierarchical lattice search.
 
@@ -39,7 +39,7 @@ defaults below are chosen against that floor rather than copied from a textbook,
 and the benchmark records ``loss_spread`` so a search that is merely stalling on
 noise is distinguishable from one that agrees across starts.
 
-The recovery panel selected float32 with ``highest`` matmul precision. Do not
+The validated production configuration uses float32 with ``highest`` matmul precision. Do not
 enable x64 here: it is a global JAX flag, so it would also change the surface
 backend's arithmetic and invalidate its parity fixtures.
 """
