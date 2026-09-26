@@ -15,6 +15,7 @@ BUILD_TOOLS = (
 )
 
 PINNED_PACKAGES = (
+    ("jax-lbfgsb", "0.1.0", "jax-lbfgsb @ git+https://github.com/achetverikov/JAX_L-BFGS-B_port.git@0350da1"),
     # jax/jaxlib are nightly dev builds in the base image; inherited via --system-site-packages
     ("flax", "0.12.7", "flax==0.12.7"),
     ("optax", "0.2.8", "optax==0.2.8"),

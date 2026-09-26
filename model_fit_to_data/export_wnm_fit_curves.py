@@ -133,6 +133,8 @@ def export_curves(results_dir: Path, checkpoint: Path | None, output_dir: Path,
     rows = []
     parameter_rows = []
     for condition, result in results.items():
+        # Older CSV results stored input counts, including discarded rows.
+        n_scored = len(result["data_df"])
         empirical = result["empirical_curves"]
         values = dict(result.get("analysis_cell_values") or {})
         if not values:
@@ -164,7 +166,7 @@ def export_curves(results_dir: Path, checkpoint: Path | None, output_dir: Path,
                 "experiment": experiment,
                 "subject": subject, "condition": source_condition,
                 "report_order": report_order, "analysis_cell_values": cell_values,
-                "optimizer": method, "n_trials": result["n_trials"],
+                "optimizer": method, "n_trials": n_scored,
                 "model_scale": angle_scale,
                 "sd_feat1": parameters[0], "sd_feat2": parameters[1],
                 "sd_spat": parameters[2], "sd_motor": parameters[3],
@@ -193,10 +195,10 @@ def export_curves(results_dir: Path, checkpoint: Path | None, output_dir: Path,
                     result[f"{method}_eval_likelihood_loss"],
                 "eval_likelihood_nll_density_deg":
                     result[f"{method}_eval_likelihood_loss"]
-                    - result["n_trials"] * np.log(angle_scale),
+                    - n_scored * np.log(angle_scale),
                 "eval_likelihood_nll_mass":
                     result[f"{method}_eval_likelihood_loss"]
-                    - result["n_trials"] * np.log(float(config.mu1_bias_step)),
+                    - n_scored * np.log(float(config.mu1_bias_step)),
                 **bundle_identity, **identity,
             })
             with jax.default_matmul_precision(matmul_precision):

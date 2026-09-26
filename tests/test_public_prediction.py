@@ -66,3 +66,18 @@ def test_historical_surface_prediction_requires_explicit_source(tmp_path):
 
     frame = pd.read_csv(output_path)
     assert frame.loc[0, "surrogate_family"] == "surface_nn"
+
+
+def test_direct_prediction_script_without_pythonpath(tmp_path):
+    """Public CLI contract: a checkout command must not rely on CI's PYTHONPATH."""
+    import os
+    import subprocess
+    import sys
+    root = Path(__file__).resolve().parents[1]
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    result = subprocess.run([sys.executable, str(root / "surface_simulator_for_predictions" /
+                             "surface_simulator.py"), "--help"], cwd=tmp_path,
+                            env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert "--input-path" in result.stdout

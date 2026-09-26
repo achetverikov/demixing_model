@@ -1,8 +1,12 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "demixing-model"
 version = "0.0.0"
 description = "Demixing Model pipelines for simulation, WNM training, fitting, prediction, and historical surface tools."
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
   "jax==0.10.1",
   "jaxlib==0.10.1",        # CPU runtime; replaced automatically by jax[cuda13-local]
@@ -39,3 +43,9 @@ markers = [
   "slow: substantially slower than ordinary unit/contract tests",
   "gpu: intended for GPU-backed validation",
 ]
+
+[tool.setuptools.packages.find]
+include = ["shared*", "model_fit_to_data*", "surface_simulator_for_predictions*", "surface_computation*", "surrogate_training*", "neural_network_optimization*", "surface_browser*", "cloud*", "pretrained*"]
+
+[tool.setuptools.package-data]
+pretrained = ["*.pkl"]

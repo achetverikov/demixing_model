@@ -456,6 +456,7 @@ def process_subject(
     compiled_group=None,
     shared_targets=None,
     bundle_manifest=None,
+    min_trials: int = 10,
 ) -> Dict:
     methods_to_run = missing_methods if missing_methods is not None else methods
     log(f"\nProcessing {subject_id}: {len(subject_conditions)} condition(s)" +
@@ -498,7 +499,7 @@ def process_subject(
             clean = filter_data_for_fitting(
                 fit_input, feat_diff_col=x_col, bias_col=y_col, verbose=False,
                 min_diss=min_diss, max_diss=max_diss)
-            if len(clean) < 10:
+            if len(clean) < min_trials:
                 log(f"  Skipping {cond_key}: only {len(clean)} valid trials after filtering.", "yellow")
                 continue
             data = clean[[x_col, y_col]].values.copy()
@@ -621,8 +622,7 @@ def process_subject(
         entry.update({
             'condition': cond_key,
             'data_df': condition_datasets[cond_key],
-            'n_trials': (len(condition_datasets[cond_key]) if compiled_group is not None
-                         else len(subject_conditions[cond_key])),
+            'n_trials': len(condition_datasets[cond_key]),
             'empirical_curves': empirical_curves.get(cond_key, {}),
             'circ_space': (float(np.asarray(shared_targets['circular_period_deg'])[
                 compiled_group.analysis_cell_index[local_index]])
@@ -934,6 +934,15 @@ def run_fitting(
             f"{len(curve_source.feat_pairs)} lattice points "
             f"(cache {curve_cache_key}).", "green")
 
+    # Select the scored population before applying the requested trial threshold.
+    high = (optimizer.predictor.domain["feat_diff"][1] / angle_scale_to_model
+            if continuous_engine is not None else _cfg.feat_diff_range[1] / angle_scale_to_model)
+    low = 0.0 if continuous_engine is not None else _cfg.feat_diff_range[0] / angle_scale_to_model
+    if continuous_engine is not None:
+        _validate_continuous_feature_domain(df, x_col, y_col, high)
+        df = df[df[x_col].gt(0) & df[x_col].lt(high)]
+    df = filter_data_for_fitting(df, feat_diff_col=x_col, bias_col=y_col,
+                                verbose=False, min_diss=low, max_diss=high)
     subject_groups = group_conditions(df, exp_col, subject_col, condition_col, min_trials)
     prediction_buckets = {}
     if continuous_engine is not None:
@@ -1017,6 +1026,7 @@ def run_fitting(
                     x_col, y_col, subject_existing, missing,
                     angle_scale_to_model=angle_scale_to_model,
                     circ_space=circ_space,
+                    min_trials=min_trials,
                     progress=active_progress,
                     curve_source=curve_source,
                     prediction_capacity=(prediction_buckets[subject_id].capacity

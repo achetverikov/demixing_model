@@ -338,4 +338,4 @@ def test_current_surface_fingerprint_pins_matched_curve_objectives():
     assert "surrogate_family" not in payload
     assert "continuous_spec" not in payload
     assert rf.fingerprint_digest(payload) == (
-        "51148bc7418e3db857d13f8b688643d07058160ad9a6776fed8d0567c1b0a782")
+        "be5840acbf19ccf6db8f49b373bad16315251d996541989ac626a0111d2b8e58")

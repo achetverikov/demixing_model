@@ -1,6 +1,6 @@
 # Installation
 
-The Demixing Model requires Python 3.10 or newer. An NVIDIA GPU is strongly recommended for fitting and required for practical full-surface generation. The repository provides GPU and CPU development containers as well as a manual installation route.
+The Demixing Model requires Python 3.11 or newer. An NVIDIA GPU is strongly recommended for fitting and required for practical full-surface generation. The repository provides GPU and CPU development containers as well as a manual installation route.
 
 If you do not usually configure Python or CUDA environments, use the development container. A development container is a prepared workspace that installs the correct software versions for you when the repository opens in VS Code.
 

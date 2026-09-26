@@ -155,3 +155,18 @@ summarized above.
 Audit and plan snapshots stored beside generated result bundles under
 `$DEMIXING_ARTIFACT_ROOT` are immutable experiment provenance, not live work
 plans. They remain with those artifacts and do not compete with `TODO.md`.
+
+
+## 2026-09-26 audit fixes
+
+- CSV eligibility now applies `min_trials` to cleaned, scored rows; result counts
+  and likelihood export unit conversions use that same population. CSV run
+  fingerprint schema 4 prevents resuming pre-fix populations. Existing result
+  exports derive counts from stored scored rows, so re-exporting repairs the
+  count-based conversions; rerun fits if the corrected eligibility rule matters.
+- Configured installable packages and pretrained checkpoint data, made CI install
+  the project, corrected Python support to 3.11+, added the container optimizer
+  dependency, and made direct prediction commands independent of PYTHONPATH.
+- Connected maintained WNM training checkpoints to artifact packaging with sample
+  identity, selected-step, and measured training-domain metadata. Historical
+  stage-based packaging remains explicit. Included pretrained weights are unchanged.

@@ -17,7 +17,7 @@ Both uses rely on the pre-created model files included in the repository. Recrea
 
 ## Installation
 
-Python 3.10+ is required. An **NVIDIA GPU** is strongly recommended for fitting; generating a small set of predictions is less demanding.
+Python 3.11+ is required. An **NVIDIA GPU** is strongly recommended for fitting; generating a small set of predictions is less demanding.
 
 - **Recommended:** download or clone the repository, open its folder in VS Code, and choose **Dev Containers: Reopen in Container**. This provides Python, R, and the GPU libraries without requiring you to configure them separately.
 - **CPU:** select `.devcontainer/cpu/devcontainer.json`. It works on Intel and Apple Silicon but fitting is much slower.

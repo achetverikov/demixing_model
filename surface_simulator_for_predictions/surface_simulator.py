@@ -18,6 +18,11 @@ import re
 from pathlib import Path
 from typing import Optional, Tuple
 
+# Support direct script execution from a checkout without PYTHONPATH.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
     GridBasedMultiConditionOptimizer,
     generate_nn_density_asymmetry_batch,

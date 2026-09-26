@@ -7,7 +7,8 @@ import pytest
 from model_fit_to_data import export_wnm_fit_curves as export_module
 
 
-def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, monkeypatch):
+@pytest.mark.parametrize("historical_csv", [False, True])
+def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, monkeypatch, historical_csv):
     results_dir = tmp_path / "fit"
     output_dir = tmp_path / "curves"
     results_dir.mkdir()
@@ -38,6 +39,12 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
             "density_eval_bias_weighted_crps_loss": 3.0,
         }
     }
+    if historical_csv:
+        # The old CSV writer counted discarded rows but had no compiled provenance.
+        entry = results["condition one"]
+        entry["n_trials"] = 4
+        for key in ("ordered_row_ids", "fit_group_id", "bundle_identity"):
+            entry.pop(key)
     with (results_dir / "extended_fit_results.pkl").open("wb") as handle:
         pickle.dump(results, handle)
 
@@ -96,9 +103,11 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
     assert frame["bias_deg"].tolist() == [1.5, 2.0]
     assert frame["dm_version"].unique().tolist() == ["wnm_k12_20samples"]
     assert (output_dir / "fitted_curves.csv").exists()
-    assert (output_dir / "trial_loglik_split" / "likelihood.parquet").exists()
+    assert (output_dir / "trial_loglik_split" / "likelihood.parquet").exists() == (not historical_csv)
     parameters = export_module.pd.read_csv(output_dir / "fitted_parameters.csv")
-    assert parameters.loc[0, "fit_group_id"] == "fit-one"
+    assert parameters.loc[0, "n_trials"] == 2
+    if not historical_csv:
+        assert parameters.loc[0, "fit_group_id"] == "fit-one"
     assert parameters.loc[0, "density_loss"] == 0.5
     assert parameters.loc[0, "eval_likelihood_loss"] == 2.0
     assert parameters.loc[0, "model_scale"] == 2.0
@@ -113,8 +122,9 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
         2.0 - 2.0 * np.log(2.0))
     assert frame.loc[0, "density_bandwidth_model_deg"] == 7.5
     assert frame.loc[0, "density_bandwidth_deg"] == 3.75
-    assert parameters.loc[0, "bundle_id"] == "bundle-test"
-    assert frame.loc[0, "bundle_id"] == "bundle-test"
+    if not historical_csv:
+        assert parameters.loc[0, "bundle_id"] == "bundle-test"
+        assert frame.loc[0, "bundle_id"] == "bundle-test"
     assert (output_dir / "condition_one.png").exists()
     assert "direct analytic WNM" in (output_dir / "manifest.json").read_text()
 

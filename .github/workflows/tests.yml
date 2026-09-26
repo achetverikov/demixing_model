@@ -41,19 +41,11 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          python - <<'PY'
-          import subprocess
-          import sys
-          import tomllib
+          python -m pip install ".[dev]"
 
-          with open("pyproject.toml", "rb") as handle:
-              project = tomllib.load(handle)["project"]
-          dependencies = [
-              *project["dependencies"],
-              *project["optional-dependencies"]["dev"],
-          ]
-          subprocess.check_call([sys.executable, "-m", "pip", "install", *dependencies])
-          PY
+      - name: Verify installed checkpoint assets outside checkout
+        working-directory: ${{ runner.temp }}
+        run: python -c "from shared.surrogate import production_checkpoint; assert all(production_checkpoint(n).is_file() for n in (20, 100))"
 
       - name: Run maintained tests
         run: python -m pytest --durations=30
@@ -78,19 +70,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          python - <<'PY'
-          import subprocess
-          import sys
-          import tomllib
-
-          with open("pyproject.toml", "rb") as handle:
-              project = tomllib.load(handle)["project"]
-          dependencies = [
-              *project["dependencies"],
-              *project["optional-dependencies"]["dev"],
-          ]
-          subprocess.check_call([sys.executable, "-m", "pip", "install", *dependencies])
-          PY
+          python -m pip install ".[dev]"
 
       - name: Run WNM end-to-end smoke test
         run: bash tests/run_smoke_wnm.sh
