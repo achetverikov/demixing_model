@@ -70,8 +70,8 @@ COMPILED_EVALUATION_METHODS = [
 
 #: The only objective the exhaustive backend can search. Dispatch is per METHOD,
 #: not per run: a global --search flag would either go unused or be misapplied,
-#: since production fits six methods in one call and only this one has a curve
-#: cache behind it.
+#: because one invocation may fit several objectives and only density has a
+#: surface curve cache behind it.
 EXHAUSTIVE_METHODS = ('density',)
 
 #: Hierarchical search settings this script fits with. Named rather than inlined
