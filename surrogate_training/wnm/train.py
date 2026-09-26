@@ -14,7 +14,7 @@ Usage (from the repo root)::
 
 ``--source`` accepts either a corpus directory name under
 ``$DEMIXING_ARTIFACT_ROOT`` (grid parameters, free of new simulation cost) or an
-``.npz`` written by ``generate_training_data.py`` (continuous parameters).
+``.npz`` written by ``python -m surface_computation.generate_wnm_training_data`` (continuous parameters).
 """
 
 from __future__ import annotations
