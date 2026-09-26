@@ -1,8 +1,10 @@
 # Simulated Samples Grid Pipeline
 
+> **Historical surface pipeline.** This document describes the averaged-surface generation path retained for surface-NN reproduction and raw-surface analyses. The production WNM does not require this grid. For current WNM training-data generation, start with [README.md](README.md) and `python -m surface_computation.generate_wnm_training_data`.
+
 ## Overview
 
-This document describes the current pipeline for `simulated_samples_grid.py`, which generates simulated bias samples across a 3D parameter grid with dynamic chunking and multi-machine coordination.
+`simulated_samples_grid.py` generates simulated bias samples across a 3D parameter grid with dynamic chunking and multi-machine coordination.
 
 ---
 
