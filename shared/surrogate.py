@@ -89,7 +89,7 @@ def production_family() -> str:
 
     Scripts and pipelines should ask for an observer model by ``n_samples`` and
     let :func:`production_checkpoint` answer, rather than naming a file. A caller
-    that hardcodes a filename keeps pointing at that file after promotion, which
+    that hardcodes a filename keeps pointing at that file if the production default changes, which
     is how a plot or a prediction ends up computed from a different model than the
     fit it accompanies.
     """
@@ -134,7 +134,7 @@ def checkpoint_for_run(results_path, explicit=None, n_samples: Optional[int] = N
     Consumers of a fit -- rescoring, plotting, prediction -- must use the
     surrogate that produced the parameters, not whatever is production today.
     Resolving by ``n_samples`` alone is right for a fresh prediction and wrong
-    for anything accompanying stored parameters: after a promotion it would
+    for anything accompanying stored parameters: after a production-default change it would
     recompute a historical fit's curves from the new model and show them beside
     the old fit's numbers.
 
@@ -185,8 +185,8 @@ def checkpoint_for_run(results_path, explicit=None, n_samples: Optional[int] = N
         "\n"
         "There is deliberately no fallback to the production artifact for n_samples. That "
         "would substitute today's model for the one a stored fit was produced with: before "
-        "promotion it can pick epoch 1425 for parameters fitted at epoch 1500 -- different "
-        "architectures -- and after promotion it would recompute a surface fit's curves from "
+        "a default change it can pick epoch 1425 for parameters fitted at epoch 1500 -- different "
+        "architectures -- and after a family/default change it would recompute a surface fit's curves from "
         "the mixture. Both cases plot one model's curves beside another model's parameters, "
         "and neither announces itself.")
 
