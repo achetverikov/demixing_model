@@ -2,8 +2,8 @@
 
 This log records completed decisions and superseded work. `TODO.md` is the only
 live work plan. Detailed numerical evidence remains in
-`continuous_density/*FINDINGS.md`, `continuous_density/RESULTS.md`, and git
-history rather than being repeated as future work here.
+`docs/history/wnm_transition/` and git history rather than being repeated as
+future work here.
 
 ## 2026-09 — WNM production transition
 
@@ -48,6 +48,37 @@ history rather than being repeated as future work here.
   wrapped-normal-mixture experiment to the trajectory-trained K=12 model with
   independent training, checkpoint-selection, and final-test data. That work is
   complete; the prototype task no longer acts as a separate plan.
+
+## 2026-09 — architecture consolidation after WNM cutover
+
+- Completed the repository redistribution identified by the architecture audit.
+  Maintained WNM runtime now lives in `shared/wnm.py`; fitting/scoring and
+  likelihood evaluation live under `model_fit_to_data/`; training and packaging
+  live under `surrogate_training/wnm/`; and simulation, design, training-data
+  generation, and legacy raw-sample import live under `surface_computation/`.
+- Removed the temporary `continuous_density/` namespace after moving maintained
+  functionality to its permanent functional homes. No maintained production code
+  imports from that namespace.
+- Centralized neutral fitting objectives and empirical target construction,
+  result-key identity, streaming file hashing, and WNM likelihood evaluation so
+  each maintained scientific/identity quantity has one production implementation.
+- Split WNM-facing path, behavioral-data, circular-smoothing, and empirical
+  KDE/bandwidth helpers out of the legacy `shared/utils.py` dependency sink and
+  normalized maintained `model_fit_to_data.*` package imports.
+- Consolidated WNM artifact loading so `shared.surrogate` delegates reconstruction
+  to the maintained WNM loader instead of maintaining an independent parser.
+- Moved transition findings to `docs/history/wnm_transition/`. Development-only
+  transition validation, recovery, optimizer-comparison, and representation
+  experiments were kept off the production branch rather than becoming part of
+  the maintained runtime contract.
+- Removed generated transition validation outputs from the source tree and
+  separated maintained pytest coverage from integration and legacy-surface
+  coverage.
+- Verified the final production snapshot with both the maintained pytest suite and
+  the WNM public-path end-to-end smoke before merging PR #2 into `main`.
+- The detailed `ARCHITECTURE_AUDIT.md` served as the migration plan and diagnosis.
+  Its implemented conclusions are summarized here; the original file remains
+  recoverable from git history.
 
 ## 2026-08 — circular-axis and density-search work
 
