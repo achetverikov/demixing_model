@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Package a research WNM fit into a self-contained production artifact.
+"""Package a selected WNM training checkpoint into a self-contained production artifact.
 
 The training scripts under ``results/wnm_4.1*/scripts`` write a
 fit dictionary -- ``variables``, ``selected_step``, ``final_step``,
 ``validation_nll`` and the path of the run checkpoint it was selected from.  That
-is enough to continue research and not enough to run in production: it records no
+is enough to continue training/evaluation but not enough to run in production: it records no
 architecture, so nothing can rebuild the network without the training script, and
 no provenance, so nothing downstream can say which observer model or corpus a
 prediction came from.
@@ -23,7 +23,7 @@ Usage (from the repo root)::
 
 The packaged file is verified before it reaches its destination: it is written to
 a temporary path, loaded back through the production loader, and evaluated on a
-fixed parameter panel that must reproduce the research weights bit for bit and
+fixed parameter panel that must reproduce the selected training weights bit for bit and
 that must pass the domain validation the artifact itself advertises.  Only then
 is it renamed into place.  Packaging is a copy, so anything less than exact
 agreement means the architecture was reconstructed wrongly -- and a failed
@@ -300,7 +300,7 @@ def main():
         fit = pickle.load(handle)
     for key in ("variables", "selected_step"):
         if key not in fit:
-            raise SystemExit(f"{args.fit} is missing {key!r}; this is not a research WNM fit")
+            raise SystemExit(f"{args.fit} is missing {key!r}; this is not a WNM training checkpoint")
 
     # The two observer models share an architecture, so an n20 fit packaged
     # against the n100 stage would load, run, and be labelled n100 -- weights
@@ -348,7 +348,7 @@ def main():
         for key, expected in reference.items():
             if not np.array_equal(packaged[key], expected):
                 raise SystemExit(
-                    f"packaged artifact does not reproduce the research weights: {key} differs "
+                    f"packaged artifact does not reproduce the selected training weights: {key} differs "
                     f"by up to {np.max(np.abs(packaged[key] - expected)):.3e} on the "
                     "verification panel. Packaging copies weights, so any difference is a "
                     "reconstruction bug.")
