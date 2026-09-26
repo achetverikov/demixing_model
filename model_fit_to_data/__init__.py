@@ -1,1 +1,1 @@
-"""Fitting, scoring, recovery, and result-processing tools for Demixing Model."""
+"""Fitting, scoring, export, plotting, and result-processing tools for Demixing Model."""
