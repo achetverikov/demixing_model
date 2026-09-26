@@ -1,8 +1,8 @@
-"""Fit one subject's conditions by bounded gradient search over the mixture.
+"""Fit one subject's conditions by bounded gradient search over the WNM.
 
-The third search backend, alongside the hierarchical zoom and the exhaustive
-lattice scan. It returns every key ``fit_model_to_data.process_subject`` consumes,
-so result handling does not fork a third way.
+This is the production WNM search backend. The hierarchical zoom and exhaustive
+lattice scan remain only for explicit historical surface-NN reproduction. The
+result uses the same downstream fit-result contract as those legacy backends.
 
 It is a superset, not an identical shape: like the exhaustive backend it adds
 ``search_backend``, which the hierarchical backend does not emit at all. Any
@@ -16,9 +16,10 @@ starts ran, how far apart they finished, and which bounds the winner sits on.
 A lattice search has no analogue of the first two, and a benchmark that compared
 backends without them would be comparing a single number from each.
 
-The recovery panel selected one production policy for all retained objectives:
-64 deterministic starts through the batched JAX L-BFGS-B port, evaluated as two
-sequential batches of 32 in float32 with ``highest`` matmul precision.
+The validated production policy for all retained WNM objectives is 64
+deterministic starts through the batched JAX L-BFGS-B port, evaluated as two
+sequential batches of 32 in float32 with ``highest`` matmul precision. The
+evidence behind this choice is archived under ``docs/history/wnm_transition/``.
 """
 from __future__ import annotations
 
