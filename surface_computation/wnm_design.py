@@ -1,7 +1,8 @@
-"""Continuous, space-filling parameter designs for the density prototype.
+"""Continuous, space-filling parameter designs for WNM surrogate training.
 
-Deliberately *not* restricted to the production 5/10-degree grid: the point of
-the prototype is that the emulator accepts arbitrary continuous parameters.
+These designs are deliberately not restricted to the historical 5/10-degree
+surface grid because the WNM surrogate is trained to accept continuous parameter
+values.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 from scipy.stats import qmc
 
-#: Domain covered by the pretrained production surface network.
+#: Baseline SD domain shared with the historical surface grid.
 SD_BOUNDS = (5.0, 200.0)
 FEAT_DIFF_BOUNDS = (2.0, 180.0)
 
@@ -83,7 +84,7 @@ def low_dprime_trajectory_design(n_curves: int = 24, points_per_curve: int = 45,
 
     The design uses the simulator's actual 42-degree separation.  Feature-noise
     ratios span similar through strongly unequal conditions without reproducing
-    the canonical UEV grid used during development.
+    the canonical UEV grid used in the earlier validation work.
     """
     if n_curves < 1 or points_per_curve < 2:
         raise ValueError('need at least one curve and two points per curve')
