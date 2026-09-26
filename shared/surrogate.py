@@ -21,7 +21,7 @@ Three rules this module exists to enforce:
   carry no sample count, so theirs comes from :data:`SURFACE_CHECKPOINT_REGISTRY`
   or from an explicit argument.  An unregistered surface file has no sample
   identity and must be given one.
-* **Production never loads a research fit.**  The training scripts write a fit
+* **Production never loads a training checkpoint.**  The training scripts write a fit
   dictionary that lacks the architecture; it must go through the packager first.
   Loading one here raises and says so.
 """
@@ -329,7 +329,7 @@ def _read_blob(path: Path) -> Any:
 def detect_family(path, blob=None) -> str:
     """Return the family of the checkpoint at ``path`` from its content.
 
-    Never inspects the filename.  Raises for a research WNM fit dictionary,
+    Never inspects the filename.  Raises for a WNM training checkpoint dictionary,
     which carries weights but no architecture and so cannot be loaded without
     the training script that wrote it.
     """
@@ -343,7 +343,7 @@ def detect_family(path, blob=None) -> str:
         return FAMILY_SURFACE_NN
     if "variables" in blob and "selected_step" in blob:
         raise ValueError(
-            f"{path} is a research WNM fit (variables + selected_step), not a production "
+            f"{path} is a WNM training checkpoint (variables + selected_step), not a production "
             "artifact: it records no architecture, so nothing can reconstruct the network "
             "from it alone. Package it first with surrogate_training/wnm/package_artifact.py.")
     raise ValueError(f"{path}: unrecognised checkpoint layout, keys {sorted(blob)}")
