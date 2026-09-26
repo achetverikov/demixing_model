@@ -27,12 +27,11 @@ Pipeline and report consolidation is owned by
 
 ## 2. Consolidate repository architecture after the WNM cutover
 
-The detailed audit and proposed target structure are in
-[`ARCHITECTURE_AUDIT.md`](ARCHITECTURE_AUDIT.md). In particular,
-`continuous_density/` was a temporary transition workspace and should be
-dissolved by moving its production pieces into the repository's functional
-layers: simulator/training-data generation, surrogate training/packaging,
-shared WNM runtime math and fitting/scoring. Development-only validation workflows are intentionally kept off the production branch.
+`continuous_density/` was a temporary transition workspace. Its maintained
+components have been redistributed into the repository's functional layers:
+simulator/training-data generation, surrogate training/packaging, shared WNM
+runtime math, and fitting/scoring. Development-only validation workflows are
+intentionally kept off the production branch.
 
 The pre-refactor test cleanup and maintained WNM baseline have been completed.
 
