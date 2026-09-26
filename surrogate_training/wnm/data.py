@@ -3,6 +3,10 @@
 Keeps the compact ``(design, bias)`` layout — ``(M, 4)`` parameters and
 ``(M, S, 2)`` per-simulation biases — and materialises training rows only per
 batch, so the mirror augmentation costs no memory.
+
+Raw training designs use the historical field name ``sd_ident`` for their
+third SD coordinate. Production artifacts and the fitting API expose the same
+quantity as ``sd_spat``.
 """
 
 from __future__ import annotations
