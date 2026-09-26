@@ -1,5 +1,7 @@
 # Vast.ai Surface Pipeline
 
+> **Historical surface infrastructure.** This distributed path builds averaged surfaces for the retained surface-NN/raw-surface workflow. Ordinary WNM fitting, prediction, and WNM training do not require Vast.ai, Redis, or object storage.
+
 This run mode uses:
 
 - Redis for chunk locks and a compact completed-surface set.
