@@ -1,4 +1,21 @@
-# README figure sources
+# Documentation index
+
+For current executable workflows, start with:
+
+- [root README](../README.md) - installation overview, prediction, fitting, and repository map;
+- [installation guide](../INSTALL.md) - environments, GPU/CPU setup, verification, and troubleshooting;
+- [fitting pipeline](../model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md) - WNM fitting, objectives, outputs, exports, plotting, and historical surface replay;
+- [prediction interface](../surface_simulator_for_predictions/README.md) - Python/R prediction generation;
+- [simulation and training-data generation](../surface_computation/README.md) - current WNM simulation path and historical surface generation;
+- [WNM training and packaging](../surrogate_training/wnm/README.md) - training checkpoints and production artifacts;
+- [shared runtime layer](../shared/README.md) - WNM runtime, surrogate identity, prediction operations, and common helpers;
+- [prediction/surface browser](../surface_browser/README.md) - WNM on-demand browsing and optional stored-surface views;
+- [pretrained artifacts](../pretrained/README.md) - production checkpoint identity, provenance, and supported domains;
+- [tests](../tests/README.md) - maintained pytest baseline and smoke pipelines.
+
+The remainder of this file documents README figure generation and the historical transition archive.
+
+## README figure sources
 
 `generate_pipeline_figure.py` creates an experimental pipeline figure that is not currently embedded in the main README. Its construction panels are illustrations grounded in the model code rather than a literal depiction of one simulation or the exact neural-network architecture. The likelihood surface, prediction curves, behavioral observations, and fitted curve are read from project outputs.
 
