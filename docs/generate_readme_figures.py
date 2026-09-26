@@ -108,7 +108,7 @@ def main():
                         default=Path("example_data/fischer_whitney_prepared.csv"))
     parser.add_argument("--fit-curves", type=Path,
                         default=Path("results/fischer_whitney_20samples_circular/csv_exports/fitted_curves.csv"))
-    parser.add_argument("--fit-objective", default="expectation")
+    parser.add_argument("--fit-objective", default="smoothed_exp")
     parser.add_argument("--predictions", type=Path,
                         default=Path("results/prediction_example.parquet"))
     parser.add_argument("--output-dir", type=Path, default=Path("docs/images"))
