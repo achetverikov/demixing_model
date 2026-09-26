@@ -251,6 +251,19 @@ The pipeline accepts environment overrides such as `DEMIXING_MODEL`, `RESULTS`, 
 
 ## Where to find things
 
+### Production package layout
+
+The current WNM architecture is organized by function:
+
+- `shared/wnm.py` contains the maintained wrapped-normal-mixture runtime and artifact format.
+- `shared/prediction.py` is the family-aware prediction API used by fitting, plotting, exports, and public prediction tools.
+- `model_fit_to_data/` owns fitting objectives, target construction, optimization, result identity, likelihood replay, exports, and plotting.
+- `surrogate_training/wnm/` owns WNM training and packaging.
+- `surface_computation/` owns simulation, WNM design/training-data generation, and the retained historical surface-generation path.
+
+The former `continuous_density/` transition namespace has been removed. Historical transition evidence is preserved under `docs/history/wnm_transition/` and in git history.
+
+
 - `demo_fischer_whitney.py` — end-to-end fitting demonstration.
 - `example_data/` — small fitting and prediction inputs.
 - `pretrained/` — the included 20- and 100-sample trained models.
@@ -263,7 +276,7 @@ The pipeline accepts environment overrides such as `DEMIXING_MODEL`, `RESULTS`, 
 - `shared/` — internal functions used by several parts of the model.
 - `cloud/` — distributed Vast.ai/object-store tooling and benchmarks.
 - `tests/` — focused tests, a WNM end-to-end smoke, and historical surface-generation smokes.
-- `docs/` — README figure assets and their generator.
+- `docs/` — README figure assets/generators plus archived transition findings under `docs/history/wnm_transition/`.
 
 ## Check that the installation works
 
