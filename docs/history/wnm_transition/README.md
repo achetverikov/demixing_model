@@ -14,6 +14,8 @@ findings may reflect the transition-era tree, including the former
 - `surrogate_training/wnm/README.md` for WNM training and packaging;
 - `model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md` for fitting,
   exports, plotting, and historical surface replay;
+- `shared/README.md` for the maintained runtime, prediction, and identity layer;
+- `surface_browser/README.md` for the WNM-first interactive browser;
 - `pretrained/README.md` for production artifact identity and domains.
 
 ## Archived findings
