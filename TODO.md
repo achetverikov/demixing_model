@@ -25,47 +25,7 @@ Pipeline and report consolidation is owned by
 `bias_model_comparison/TODO.md`; canonical data and bundle work is owned by
 `contextual_biases_database/TODO.md`.
 
-## 2. Consolidate repository architecture after the WNM cutover
-
-`continuous_density/` was a temporary transition workspace. Its maintained
-components have been redistributed into the repository's functional layers:
-simulator/training-data generation, surrogate training/packaging, shared WNM
-runtime math, and fitting/scoring. Development-only validation workflows are
-intentionally kept off the production branch.
-
-The pre-refactor test cleanup and maintained WNM baseline have been completed.
-
-Phase B is implemented:
-
-- neutral curve losses, BWCRPS scoring, and empirical BWCRPS/binned-bias target
-  builders live in `model_fit_to_data/objectives.py` and
-  `model_fit_to_data/empirical_targets.py`;
-- WNM engine construction no longer imports the historical surface optimizer;
-- maintained path, behavioral-data, circular-smoothing, and empirical KDE/
-  bandwidth helpers have been split out of `shared/utils.py`;
-- `model_fit_to_data` is now a package and the maintained continuous-fitting
-  path uses absolute package imports;
-- result-key identity, streaming file hashing, and WNM likelihood
-  export/rescoring each have one maintained implementation.
-
-Phase C is complete. The production WNM runtime lives in `shared/wnm.py`;
-training and packaging live in `surrogate_training/wnm/`; simulation,
-continuous design, training-data generation, and legacy raw-sample import live
-in `surface_computation/`. Development-only transition validation and representation experiments are retained on the development branch and excluded from this production tree. The former `continuous_density/` namespace has been removed.
-
-Completed Phase C cleanup:
-
-- production WNM runtime moved to `shared/wnm.py`;
-- WNM training and packaging moved to `surrogate_training/wnm/`;
-- simulation, continuous design, training-data generation, and legacy raw-sample import moved to `surface_computation/`;
-- transition/validation and representation experiments were separated from maintained production code and excluded from the production branch;
-- tracked generated `continuous_density/validation_outputs/` were removed;
-- stale maintained imports and command paths were updated to the functional package layout;
-- the remaining compatibility shims were deleted and `continuous_density/` was removed;
-- the maintained pytest suite and WNM public-path smoke both passed after namespace deletion.
-
-
-## 3. Decide the zero-width pooled-SD convention
+## 2. Decide the zero-width pooled-SD convention
 
 The float32 upper clamp in pooled-SD reporting is currently inert, so a
 distribution concentrated in one reporting cell yields exactly zero degrees.
@@ -74,7 +34,7 @@ should have a resolution floor. This is low priority because current real fits
 do not reach the degenerate case, but changing it changes exported values and
 therefore requires a contract/version bump and regression fixture.
 
-## 4. Remove the repository-local secret exposure
+## 3. Remove the repository-local secret exposure
 
 The ignored `.env` file's local permissions were restricted from `0777` to
 `0600` without reading or copying its values. Move runtime secrets out of the
