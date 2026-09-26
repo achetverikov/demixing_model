@@ -3,7 +3,10 @@
 The theoretical model is untouched: this module only calls
 ``jax_fit_main.simulate_dual_component_bias_distribution`` at *continuous*
 parameter values instead of on the 5/10-degree grid, and returns the raw
-per-simulation ``mu1_bias`` outcomes.  No KDE, no surface, no averaging.
+per-simulation ``mu1_bias`` outcomes. No KDE, no surface, no averaging.
+
+Design arrays use the historical training-field name ``sd_ident`` for the
+third SD coordinate; it is the runtime/fitting parameter ``sd_spat``.
 """
 
 from __future__ import annotations
