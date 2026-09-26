@@ -11,9 +11,9 @@ two objectives disagreeing on exactly that comparison.
 
 The second is what the constant-target refusal guards against: against a constant
 target the CCC formula returns 1 -- the WORST possible loss -- for a perfect
-match, because its numerator and denominator collapse together. The fit raises
-there rather than dropping the condition; see
-test_density_degenerate_target_refusal.py. This is defensive: no empirical target
+match, because its numerator and denominator collapse together. The target
+builder flags such a condition for the fitter. This is defensive: no empirical
+target
 in any current dataset is within six orders of magnitude of degenerate (measured
 minimum variance 2.2e-04 over 681 real target curves).
 """
