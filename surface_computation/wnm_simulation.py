@@ -23,7 +23,7 @@ from surface_computation.wnm_design import SIM_SPAT_DIFF
 
 from surface_computation import jax_fit_main as jfm
 
-#: Spatial separation used throughout the production grid pipeline.
+#: Spatial separation used by the maintained Demixing Model simulator.
 SPAT_DIFF = SIM_SPAT_DIFF
 
 
