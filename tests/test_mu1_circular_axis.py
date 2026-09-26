@@ -141,13 +141,8 @@ def test_sign_masks_exclude_zero_and_antipode_only():
 # 3. Normalisation — both normalisers, separate code paths
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("which", ["normalize_to_density", "normalize_to_density_flexible"])
-def test_normalisers_integrate_to_one(which):
-    if which == "normalize_to_density":
-        from shared.surface_functions import normalize_to_density as fn
-    else:
-        from neural_network_optimization.mirror_aware_model import (
-            normalize_to_density_flexible as fn)
+def test_normaliser_integrates_to_one():
+    from shared.surface_functions import normalize_to_density as fn
 
     rng = np.random.default_rng(0)
     log_probs = jnp.asarray(rng.normal(size=(2, mu1_size(), 5)))
@@ -250,16 +245,13 @@ def test_legacy_axis_context_manager_restores_state():
 # ---------------------------------------------------------------------------
 
 def test_motor_convolution_is_symmetric_across_the_seam():
-    from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
-        apply_motor_noise_with_precomputed_kernel, create_motor_noise_kernel_fft)
+    from shared.raw_surfaces import apply_motor_noise
 
     n = mu1_size()
-    kernel_fft = create_motor_noise_kernel_fft(6.0, n)
     log_surf = np.full((1, n, 1), -1e9)
     log_surf[0, 0, 0] = 0.0  # impulse at index 0 (= -180, the seam)
 
-    out = np.asarray(apply_motor_noise_with_precomputed_kernel(
-        jnp.asarray(log_surf), kernel_fft))[0, :, 0]
+    out = np.asarray(apply_motor_noise(jnp.asarray(log_surf), 6.0))[0, :, 0]
     p = np.exp(out - out.max())
     # Response must be symmetric about index 0, i.e. p[k] == p[-k] across the
     # wrap.  Tolerance is absolute against the unit peak: the FFT round-trip is
@@ -268,12 +260,6 @@ def test_motor_convolution_is_symmetric_across_the_seam():
         assert abs(p[k] - p[-k]) < 1e-6
 
 
-def test_motor_kernel_fft_period_matches_the_angular_period():
-    from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
-        create_motor_noise_kernel_fft)
-    n = mu1_size()
-    assert n * config.mu1_bias_step == 360  # the FFT period IS the angular period
-    assert create_motor_noise_kernel_fft(3.0, n).shape == (n,)
 
 
 # ---------------------------------------------------------------------------
@@ -363,19 +349,6 @@ def test_periodic_quadrature_integrates_the_uniform_density_to_one():
     assert abs(naive - 1.0) > 1e-3
 
 
-def test_periodic_smoothness_penalises_the_wrap_step():
-    from neural_network_optimization.loss_functions import smoothness_regularization
-
-    x = np.zeros((1, mu1_size(), 3))
-    x[0, 0, :] = 1.0  # a step that exists ONLY across the wrap and at row 0/1
-    loss = float(smoothness_regularization(jnp.asarray(x)))
-    # n differences (not n-1): the wrap-around gradient carries real weight, so
-    # each of the 3 columns contributes two unit steps (into and out of row 0).
-    expected = 2.0 / mu1_size()
-    assert loss == pytest.approx(expected, rel=1e-6)
-
-    naive = float(jnp.mean(jnp.diff(jnp.asarray(x), axis=1) ** 2))
-    assert naive < expected  # jnp.diff never compares the last row to the first
 
 
 # ---------------------------------------------------------------------------
@@ -477,25 +450,6 @@ def test_legacy_surfaces_raise_rather_than_being_silently_dropped(tmp_path):
         load_filtered_surfaces(str(tmp_path), low=10, high=100)
 
 
-def test_training_loader_raises_on_legacy_surfaces(tmp_path):
-    """The training path is a fourth loader, and its bare `except` swallows.
-
-    Both of its per-file loops print-and-continue on any exception, so a guard
-    raised inside them would leave a silently shorter training set instead of an
-    error — and training on legacy targets teaches the network to reproduce the
-    duplicated wrap row.  Hence the guard runs outside those handlers.
-    """
-    import pickle
-    import sys as _sys
-    _nn = str(Path(__file__).resolve().parents[1] / "neural_network_optimization")
-    if _nn not in _sys.path:
-        _sys.path.insert(0, _nn)
-    from mirror_aware_training import load_averaged_surfaces
-
-    path = tmp_path / "averaged_sf1_30.0_sf2_40.0_sp_50.0.pkl"
-    path.write_bytes(pickle.dumps(_legacy_surface_payload()))
-    with pytest.raises(ValueError, match="migrat"):
-        load_averaged_surfaces(str(tmp_path))
 
 
 def test_load_filtered_surfaces_accepts_migrated_surfaces(tmp_path):
@@ -572,76 +526,3 @@ def test_migration_handles_bundles_without_touching_manifests(tmp_path):
     assert surface.mu1_comp1_surface.shape[0] == mu1_size()
     assert manifest.read_text() == before
     assert migrate_bundle(bundle) == 0  # idempotent
-
-
-# ---------------------------------------------------------------------------
-# 11. Checkpoint metadata: mismatch refusal, both directions
-# ---------------------------------------------------------------------------
-
-class _FakeApplyFn:
-    """Module-level (hence picklable) stand-in for a checkpoint's apply_fn.
-
-    ``rows="config"`` mimics the real model, whose output row count is read from
-    config at call time — which is exactly why a legacy checkpoint would
-    silently interpolate rather than emit 181 rows to trim.
-    """
-
-    def __init__(self, rows):
-        self.rows = rows
-
-    def __call__(self, params, x):
-        n = config.mu1_bias_grid_size if self.rows == "config" else self.rows
-        return jnp.zeros((jnp.asarray(x).shape[0], n, 5))
-
-
-def _write_checkpoint(path, rows, *, with_metadata):
-    import pickle
-    from shared.mu1_axis import GRID_CONVENTION
-
-    data = {"params": {}, "opt_state": {}, "step": 0, "epoch": 1, "loss": 0.0,
-            "timestamp": "now", "apply_fn": _FakeApplyFn(rows)}
-    if with_metadata:
-        data["grid_convention"] = GRID_CONVENTION
-        data["mu1_bias_grid_size"] = mu1_size()
-    path.write_bytes(pickle.dumps(data))
-    return path
-
-
-def test_legacy_checkpoint_output_is_trimmed_not_resized(tmp_path):
-    """No metadata => legacy: run at 181 rows, then trim + renormalise."""
-    from shared.utils import load_checkpoint
-
-    path = _write_checkpoint(tmp_path / "legacy.pkl", "config", with_metadata=False)
-    state, _ = load_checkpoint(path)
-    out = np.asarray(state.apply_fn({}, jnp.ones((2, 3))))
-    assert out.shape[1] == mu1_size()
-    # Renormalised on the periodic axis.
-    assert np.allclose(np.exp(out).sum(axis=1) * mu1_cell_width(), 1.0, atol=1e-5)
-
-
-def test_checkpoint_metadata_mismatch_is_refused_both_directions(tmp_path):
-    from shared.utils import load_checkpoint
-
-    # Declares periodic, emits legacy row count.
-    path = _write_checkpoint(tmp_path / "a.pkl", LEGACY_MU1_GRID_SIZE, with_metadata=True)
-    state, _ = load_checkpoint(path)
-    with pytest.raises(ValueError, match="grid_convention"):
-        state.apply_fn({}, jnp.ones((1, 3)))
-
-    # No metadata (so: legacy) but emits the periodic row count.
-    path = _write_checkpoint(tmp_path / "b.pkl", mu1_size(), with_metadata=False)
-    state, _ = load_checkpoint(path)
-    with pytest.raises(ValueError, match="legacy"):
-        state.apply_fn({}, jnp.ones((1, 3)))
-
-
-def test_unknown_grid_convention_is_refused(tmp_path):
-    import pickle
-    from shared.utils import load_checkpoint
-
-    path = _write_checkpoint(tmp_path / "c.pkl", "config", with_metadata=True)
-    data = pickle.loads(path.read_bytes())
-    data["grid_convention"] = "something_else"
-    path.write_bytes(pickle.dumps(data))
-    with pytest.raises(ValueError, match="unknown grid_convention"):
-        load_checkpoint(path)

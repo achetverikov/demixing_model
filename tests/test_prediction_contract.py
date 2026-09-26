@@ -7,10 +7,8 @@ density's mass read off a 2-degree grid, a surrogate extrapolating outside its
 training domain because nothing checked. Every one of those produces plausible
 numbers, so each gets a test here.
 
-The surface-parity test is the load-bearing one: ``SurfacePredictor`` restates
-the historical discrete asymmetry, and if that restatement is not exactly
-``compute_single_density_asymmetry`` then the two families are being compared
-through two different estimators.
+The stored-surface check keeps ``SurfacePredictor`` aligned with the raw
+simulation's discrete asymmetry estimator.
 """
 import sys
 from pathlib import Path
@@ -301,7 +299,7 @@ def test_surface_smoothed_curve_matches_the_historical_implementation():
 def test_surface_predictor_will_not_pretend_to_apply_motor_noise():
     surfaces = jnp.zeros((1, len(mu1_grid()), 90))
     predictor = SurfacePredictor(surfaces, n_samples=20, artifact="test.pkl")
-    with pytest.raises(NotImplementedError, match="FFT"):
+    with pytest.raises(NotImplementedError, match="Apply motor noise"):
         predictor.with_motor_noise(10.0)
 
 # ---------------------------------------------------------------------------

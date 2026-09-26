@@ -148,8 +148,6 @@ Then run the same export and plotting commands shown above. Bundle metadata supp
 
 The fitting pipeline uses `shared/prediction.py` to evaluate the conditional wrapped-normal mixture and `continuous_fit.py` / `continuous_optimizer.py` for parameter estimation. `fitting_targets.py`, `empirical_targets.py`, and `wnm_scoring.py` define the empirical summaries and their matched model predictions. `compiled_bundle.py` loads bundle inputs.
 
-The surface-network tools accept an explicit surface checkpoint with `--search hierarchical` or `--search exhaustive`. Hierarchical search refines a parameter grid; exhaustive search scans cached density-asymmetry curves on a lattice and requires motor noise fixed at zero. `--curve-cache` selects the cache location; `build_curve_cache.py` prepares it. In exhaustive mode, other criteria use hierarchical search.
-
 The compatibility criteria `expectation` and `density_legacy` provide hard-binned mean fitting and a range-scaled MSE/correlation asymmetry loss, respectively. `--corr-weight` configures `density_legacy`. Use the criteria listed above for new analyses.
 
 Detailed surface-search benchmarks and earlier objective comparisons are preserved with generated results under `$DEMIXING_ARTIFACT_ROOT/exploration_archive/documentation_20260926/`. These artifacts are not shipped and are not expected in a normal checkout.

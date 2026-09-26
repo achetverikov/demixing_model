@@ -28,8 +28,9 @@ BASE_KWARGS = dict(
         "density", "density_legacy", "expectation", "smoothed_exp", "likelihood",
         "crps", "balanced_crps", "bias_weighted_crps",
     ],
-    search_backend="hierarchical",
-    curve_cache_key=None,
+    search_backend="continuous",
+    surrogate_family="wnm",
+    continuous_spec={"n_starts": 64, "seed": 0, "method": "BatchedLbfgsb"},
     skip_motor_noise=True,
     exp_col="expName",
     subject_col="subject",
@@ -40,8 +41,6 @@ BASE_KWARGS = dict(
     include_outliers=False,
     min_trials=30,
     corr_weight=0.25,
-    grid_spec={"shared_grid_size": 40, "feat_grid_size": 20,
-               "min_grid_step": 1.0, "zoom_factor": 0.5},
     density_curve_spec={"emp_density_weights_sd": 20.0, "density_smoothing_sigma": None,
                         "density_bandwidth_mode": "pooled", "density_bandwidth_rule": "sj"},
 )
@@ -107,16 +106,11 @@ def test_compiled_fingerprint_pins_bundle_products(run_files, tmp_path):
     {"corr_weight": 0.5},
     {"include_outliers": True},
     {"outlier_col": None},
-    {"search_backend": "exhaustive_1deg"},
-    {"curve_cache_key": "abc123"},
     {"skip_motor_noise": False},
     {"x_col": "other_col"},
-    {"grid_spec": dict(BASE_KWARGS["grid_spec"], min_grid_step=0.5)},
-    {"grid_spec": dict(BASE_KWARGS["grid_spec"], feat_grid_size=10)},
     {"density_curve_spec": dict(BASE_KWARGS["density_curve_spec"],
                                 density_bandwidth_rule="silverman")},
     {"degenerate_eps": 1e-10},
-    {"refinement_spec": {"delta": 0.1, "window": 2.0, "step": 0.25}},
 ])
 def test_every_result_changing_setting_moves_the_digest(run_files, overrides):
     data, checkpoint, _ = run_files
@@ -215,28 +209,8 @@ def test_sidecar_round_trips_payload_and_digest(run_files):
 
 # --- the schedule the fingerprint records is the schedule the fit walks ----------
 
-def test_effective_schedule_prepends_a_spanning_step_only_when_needed():
-    # Production: 20 points over [5, 200] cannot be spanned at step 10.
-    schedule = rf.effective_feat_step_schedule(20, 5.0, 200.0)
-    assert schedule[0] == pytest.approx(195.0 / 19)
-    assert schedule[1:] == list(rf.BASE_FEAT_STEP_SCHEDULE)
-    # A grid dense enough to span the domain at the base step gets no prefix.
-    assert rf.effective_feat_step_schedule(40, 5.0, 200.0) == list(rf.BASE_FEAT_STEP_SCHEDULE)
 
 
-def test_recorded_schedule_matches_the_one_the_optimizer_walks(run_files):
-    """The independent check: re-derive the schedule from the optimizer's own
-    stated rule and compare, rather than calling the helper under test twice."""
-    data, checkpoint, _ = run_files
-    payload = make_payload(data, checkpoint)
-    from shared.config import config
-
-    feat_grid_size = BASE_KWARGS["grid_spec"]["feat_grid_size"]
-    expected = [10.0, 6.0, 4.0, 2.0, 1.0]
-    full_span_step = (config.param_range_high - config.param_grid_low) / (feat_grid_size - 1)
-    if full_span_step > expected[0]:
-        expected = [full_span_step] + expected
-    assert payload["feat_step_schedule"] == pytest.approx(expected)
 
 
 def test_payload_records_the_live_mu1_grid_size(run_files):
@@ -255,9 +229,9 @@ def test_payload_records_the_live_mu1_grid_size(run_files):
 def _common(**overrides):
     base = dict(
         data_path=ROOT / "tests" / "data" / "bw_sj_reference.tsv",
-        checkpoint_path=ROOT / "pretrained" / "surface_legacy_epoch1425_10ktrain_20samples.pkl",
+        checkpoint_path=ROOT / "pretrained" / "current_wnm_k12_20samples.pkl",
         circ_space=360, evaluation_methods=["density", "likelihood", "crps"],
-        curve_cache_key=None, skip_motor_noise=True, exp_col="e", subject_col="s",
+        skip_motor_noise=True, exp_col="e", subject_col="s",
         condition_col="c", x_col="x", y_col="y", outlier_col=None,
         include_outliers=False, min_trials=30, corr_weight=0.25,
         density_curve_spec={"emp_density_weights_sd": 20.0})
@@ -265,8 +239,6 @@ def _common(**overrides):
     return base
 
 
-GRID = {"shared_grid_size": 20, "feat_grid_size": 20, "min_grid_step": 0.5,
-        "zoom_factor": 0.5}
 CONTINUOUS = {"n_starts": 64, "seed": 0, "parameterisation": "log",
               "bounds": [[2.5, 200.0], [5.0, 200.0]], "method": "BatchedLbfgsb",
               "optimizer_version": "jax-lbfgsb@0350da1", "batch_size": 32,
@@ -307,35 +279,7 @@ def test_a_missing_or_spurious_continuous_spec_raises():
     with pytest.raises(ValueError, match="requires continuous_spec"):
         rf.compute_run_fingerprint(search_backend="continuous", surrogate_family="wnm",
                                    **_common())
-    with pytest.raises(ValueError, match="does not use one"):
-        rf.compute_run_fingerprint(search_backend="hierarchical", grid_spec=GRID,
-                                   continuous_spec=CONTINUOUS, **_common())
-
-
-def test_only_distributional_objectives_are_versioned_per_family():
-    """The surface backend reads a trial's density at its grid cell's centre; the
-    mixture evaluates at the observation. One version string for both would make
-    a head-to-head information criterion compare different conventions."""
-    methods = ["density", "expectation", "smoothed_exp", "likelihood", "crps",
-               "balanced_crps"]
-    surface = rf.objective_versions_for("surface_nn", methods)
-    wnm = rf.objective_versions_for("wnm", methods)
-
-    # Every curve objective now shares its empirical target/operator contract.
-    for shared in ("density", "expectation", "smoothed_exp"):
-        assert surface[shared] == wnm[shared]
-    # Distributional ones are not.
-    for differing in ("likelihood", "crps", "balanced_crps"):
-        assert surface[differing] != wnm[differing]
-
-    with pytest.raises(ValueError, match="unknown surrogate family"):
-        rf.objective_versions_for("mixture_of_hopes", methods)
-
-
-def test_current_surface_fingerprint_pins_matched_curve_objectives():
-    payload = rf.compute_run_fingerprint(
-        search_backend="hierarchical", grid_spec=GRID, **_common())
-    assert "surrogate_family" not in payload
-    assert "continuous_spec" not in payload
-    assert rf.fingerprint_digest(payload) == (
-        "be5840acbf19ccf6db8f49b373bad16315251d996541989ac626a0111d2b8e58")
+    with pytest.raises(ValueError, match="unsupported search backend"):
+        rf.compute_run_fingerprint(search_backend="hierarchical",
+                                   surrogate_family="wnm", continuous_spec=CONTINUOUS,
+                                   **_common())

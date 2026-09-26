@@ -27,7 +27,7 @@ library(data.table)
 #' @param skip_motor_noise Whether to skip motor noise computation (default: FALSE)
 #' @param use_nn_surfaces Deprecated compatibility alias. TRUE uses the current packaged model; FALSE uses raw averaged surfaces.
 #' @param averaged_surfaces_dir Path to averaged surfaces (required with surface_source="raw").
-#' @param surface_source Prediction source: "model" (default packaged WNM), "nn" (historical surface NN), or "raw" (averaged surfaces with mu2).
+#' @param surface_source Prediction source: "model" (packaged WNM) or "raw" (averaged surfaces with mu2).
 #' @param cleanup Whether to clean up temporary files (default: TRUE)
 #' @param work_dir Directory for temporary input/output Arrow files (default: getwd()).
 #'                 Any path conversion needed to reach the Python process (e.g. WSL
@@ -60,8 +60,8 @@ simulate_surfaces <- function(parameters,
     }
     surface_source <- compatibility_source
   }
-  if (!surface_source %in% c("model", "nn", "raw")) {
-    stop("surface_source must be one of: model, nn, raw")
+  if (!surface_source %in% c("model", "raw")) {
+    stop("surface_source must be one of: model, raw")
   }
   if (surface_source == "raw" && is.null(averaged_surfaces_dir)) {
     stop("averaged_surfaces_dir is required when surface_source = 'raw'")

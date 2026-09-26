@@ -22,12 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
-    GridBasedMultiConditionOptimizer,
-    generate_nn_density_asymmetry_batch,
-    apply_motor_noise,
-    _generate_nn_bias_curve_batch,
-)
+from shared.raw_surfaces import apply_motor_noise, bias_curves, density_asymmetry_curves
 from shared.config import DENSITY_CURVE_SPEC, config
 from shared.mu1_axis import guard_surface_mu1_axis, periodic_integral
 from shared import surrogate
@@ -244,9 +239,8 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
                               surface_source: str = "model"):
     """Generate prediction curves from the packaged model or stored surfaces.
 
-    surface_source="model" uses the current production surrogate, which is WNM.
-    "nn" explicitly selects the historical surface network and "raw" loads
-    averaged simulation surfaces, retaining the separate mu2 outputs.
+    surface_source="model" uses the current WNM surrogate. "raw" loads averaged
+    simulation surfaces, retaining the separate mu2 outputs.
     use_nn_surfaces is accepted only as a compatibility alias: True means the
     current packaged model, False means raw surfaces.
     """
@@ -256,7 +250,7 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
             raise ValueError(
                 "use_nn_surfaces and surface_source request different prediction sources")
         surface_source = compatibility_source
-    if surface_source not in {"model", "nn", "raw"}:
+    if surface_source not in {"model", "raw"}:
         raise ValueError(f"unknown surface_source {surface_source!r}")
 
     print(f"Reading parameters from {input_path}...")
@@ -330,18 +324,13 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
                              if float(motor) > 0 else surface)
             log_surfaces_batch = jnp.stack(noisy)
 
-        density_curves = generate_nn_density_asymmetry_batch(log_surfaces_batch)
-        target_feat_indices = jnp.arange(n_feat_points)
-        expectation_curves = _generate_nn_bias_curve_batch(
-            log_surfaces_batch, target_feat_indices)
+        density_curves = density_asymmetry_curves(log_surfaces_batch)
+        expectation_curves = bias_curves(log_surfaces_batch)
         sd_curves = compute_predicted_sd_curves_batch(
             log_surfaces_batch, feat_diff_grid)
     else:
         if explicit_checkpoint_path:
             resolved_checkpoint_path = Path(explicit_checkpoint_path)
-        elif surface_source == "nn":
-            resolved_checkpoint_path = surrogate.resolve_checkpoint(
-                family=surrogate.FAMILY_SURFACE_NN, n_samples=n_samples)
         else:
             resolved_checkpoint_path = surrogate.production_checkpoint(n_samples)
 
@@ -350,56 +339,30 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
         resolved_n_samples = loaded.n_samples
         surrogate_family = loaded.family
 
-        if surface_source == "nn" and loaded.family != surrogate.FAMILY_SURFACE_NN:
-            raise ValueError(
-                f"surface_source=nn requires a historical surface checkpoint, got "
-                f"{loaded.family!r}")
-
-        if loaded.family == surrogate.FAMILY_WNM:
-            predictor = predictor_from_surrogate(loaded)
-            smoothing_sigma = DENSITY_CURVE_SPEC["density_smoothing_sigma"]
-            if smoothing_sigma is None:
-                smoothing_sigma = (
-                    DENSITY_CURVE_SPEC["emp_density_weights_sd"] / config.feat_diff_step)
-            for sf1, sf2, sp, motor in np.asarray(parameters_array):
-                rows = jnp.column_stack([
-                    jnp.full(feat_diff_grid.shape, sf1),
-                    jnp.full(feat_diff_grid.shape, sf2),
-                    jnp.full(feat_diff_grid.shape, sp),
-                    feat_diff_grid,
-                ])
-                effective_motor = 0.0 if skip_motor_noise else float(motor)
-                mean, _ = predictor.mean_and_resultant(
-                    rows, sd_motor=effective_motor)
-                density = predictor.smoothed_asymmetry_curve(
-                    rows, float(smoothing_sigma), sd_motor=effective_motor)
-                sd = predictor.circular_sd(rows, sd_motor=effective_motor)
-                expectation_curves.append(np.asarray(mean))
-                density_curves.append(np.asarray(density))
-                sd_curves.append(np.asarray(sd))
-            expectation_curves = np.stack(expectation_curves)
-            density_curves = np.stack(density_curves)
-            sd_curves = np.stack(sd_curves)
-        else:
-            optimizer = GridBasedMultiConditionOptimizer(
-                checkpoint_path=str(resolved_checkpoint_path),
-                condition_datasets=None,
-                skip_motor_noise=skip_motor_noise)
-            nn_params = parameters_array[:, :3]
-            log_surfaces_batch = optimizer._predict_batch_fixed_size(
-                nn_params, verbosity=1)
-            if not skip_motor_noise:
-                noisy = []
-                for surface, motor in zip(log_surfaces_batch, parameters_array[:, 3]):
-                    noisy.append(apply_motor_noise(surface[None], float(motor))[0]
-                                 if float(motor) > 0 else surface)
-                log_surfaces_batch = jnp.stack(noisy)
-            density_curves = generate_nn_density_asymmetry_batch(log_surfaces_batch)
-            target_feat_indices = jnp.arange(n_feat_points)
-            expectation_curves = _generate_nn_bias_curve_batch(
-                log_surfaces_batch, target_feat_indices)
-            sd_curves = compute_predicted_sd_curves_batch(
-                log_surfaces_batch, feat_diff_grid)
+        predictor = predictor_from_surrogate(loaded)
+        smoothing_sigma = DENSITY_CURVE_SPEC["density_smoothing_sigma"]
+        if smoothing_sigma is None:
+            smoothing_sigma = (
+                DENSITY_CURVE_SPEC["emp_density_weights_sd"] / config.feat_diff_step)
+        for sf1, sf2, sp, motor in np.asarray(parameters_array):
+            rows = jnp.column_stack([
+                jnp.full(feat_diff_grid.shape, sf1),
+                jnp.full(feat_diff_grid.shape, sf2),
+                jnp.full(feat_diff_grid.shape, sp),
+                feat_diff_grid,
+            ])
+            effective_motor = 0.0 if skip_motor_noise else float(motor)
+            mean, _ = predictor.mean_and_resultant(
+                rows, sd_motor=effective_motor)
+            density = predictor.smoothed_asymmetry_curve(
+                rows, float(smoothing_sigma), sd_motor=effective_motor)
+            sd = predictor.circular_sd(rows, sd_motor=effective_motor)
+            expectation_curves.append(np.asarray(mean))
+            density_curves.append(np.asarray(density))
+            sd_curves.append(np.asarray(sd))
+        expectation_curves = np.stack(expectation_curves)
+        density_curves = np.stack(density_curves)
+        sd_curves = np.stack(sd_curves)
 
     if mu2_surfaces_batch is not None:
         target_feat_indices = jnp.arange(n_feat_points)
@@ -478,9 +441,8 @@ def main():
                         help='Named form of the third positional argument')
     parser.add_argument('--skip-motor-noise', action='store_true', 
                        help='Skip motor noise computation (sd_motor = 0)')
-    parser.add_argument('--surface-source', choices=['model', 'nn', 'raw'], default='model',
+    parser.add_argument('--surface-source', choices=['model', 'raw'], default='model',
                        help='model: use the selected trained predictor (default); '
-                            'nn: use the surface-network predictor; '
                             'raw: load averaged simulation surfaces and include mu2 outputs')
     parser.add_argument('--averaged-surfaces-dir',
                        help='Path to averaged surfaces directory (required with --surface-source raw).')

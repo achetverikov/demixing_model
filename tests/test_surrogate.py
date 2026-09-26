@@ -52,7 +52,8 @@ def test_family_comes_from_content_not_filename(tmp_path):
     assert surrogate.detect_family(misleading) == surrogate.FAMILY_WNM
 
     other = _write(tmp_path, "current_wnm_k12_20samples.pkl", {"apply_fn": object(), "params": {}})
-    assert surrogate.detect_family(other) == surrogate.FAMILY_SURFACE_NN
+    with pytest.raises(ValueError, match="retired surface-NN checkpoint"):
+        surrogate.detect_family(other)
 
 
 def test_research_fit_is_refused_with_a_pointer_to_the_packager(tmp_path):
@@ -74,16 +75,14 @@ def test_unrecognised_layout_raises(tmp_path):
 
 def test_resolving_a_default_requires_an_explicit_sample_count():
     with pytest.raises(ValueError, match="n_samples is required"):
-        surrogate.resolve_checkpoint(surrogate.FAMILY_SURFACE_NN)
+        surrogate.resolve_checkpoint(surrogate.FAMILY_WNM)
 
 
 def test_unknown_family_and_sample_count_are_rejected():
     with pytest.raises(ValueError, match="unknown surrogate family"):
         surrogate.resolve_checkpoint("mixture_of_hopes", 20)
     with pytest.raises(ValueError, match="not one of"):
-        surrogate.resolve_checkpoint(surrogate.FAMILY_SURFACE_NN, 50)
-    with pytest.raises(ValueError, match="no default surface_nn artifact"):
-        surrogate.resolve_checkpoint(surrogate.FAMILY_SURFACE_NN, 100)
+        surrogate.resolve_checkpoint(surrogate.FAMILY_WNM, 50)
 
 
 def test_explicit_path_wins_over_the_defaults(tmp_path):
@@ -91,22 +90,8 @@ def test_explicit_path_wins_over_the_defaults(tmp_path):
     assert surrogate.resolve_checkpoint(None, 20, explicit) == explicit
 
 
-@pytest.mark.legacy_surface
-def test_unregistered_surface_checkpoint_has_no_inferable_identity(tmp_path):
-    """`..._20samples.pkl` in the name is not evidence of the observer model."""
-    stranger = tmp_path / "model_epoch900_10ktrain_20samples.pkl"
-    with pytest.raises(ValueError, match="not in SURFACE_CHECKPOINT_REGISTRY"):
-        surrogate._surface_sample_count(stranger, None)
-    assert surrogate._surface_sample_count(stranger, 20) == 20
 
 
-@pytest.mark.legacy_surface
-def test_registered_surface_checkpoint_rejects_a_contradicting_request():
-    known = Path("surface_legacy_epoch1425_10ktrain_20samples.pkl")
-    assert surrogate._surface_sample_count(known, None) == 20
-    assert surrogate._surface_sample_count(known, 20) == 20
-    with pytest.raises(ValueError, match="different observer models"):
-        surrogate._surface_sample_count(known, 100)
 
 
 # ---------------------------------------------------------------------------
@@ -141,11 +126,6 @@ def test_installed_artifact_declares_its_own_identity(n_samples, path):
     ("family", "artifact", "expected"),
     [
         ("wnm", "current_wnm_k12_20samples.pkl", "wnm_k12_20samples"),
-        (
-            "surface_nn",
-            "surface_legacy_epoch1425_10ktrain_20samples.pkl",
-            "surface_nn_epoch1425_10ktrain_20samples",
-        ),
     ],
 )
 def test_dm_version_identifies_the_implementation(family, artifact, expected):
@@ -164,7 +144,7 @@ def test_requesting_the_wrong_sample_count_raises(n_samples, path):
 @pytest.mark.parametrize("n_samples,path", INSTALLED_WNM)
 def test_requesting_the_wrong_family_raises(n_samples, path):
     with pytest.raises(ValueError, match="family="):
-        surrogate.load_surrogate(family=surrogate.FAMILY_SURFACE_NN, checkpoint_path=path)
+        surrogate.load_surrogate(family="surface_nn", checkpoint_path=path)
 
 
 @pytest.mark.skipif(not INSTALLED_WNM, reason="no packaged WNM artifact installed")
@@ -211,18 +191,6 @@ def test_production_loading_does_not_need_the_corpus_or_training_scripts():
 # Search bounds belong to the surrogate, not to a module constant
 # ---------------------------------------------------------------------------
 
-@pytest.mark.legacy_surface
-def test_surface_search_bounds_are_its_documented_training_range():
-    """Substituting these for the old config constants must be a strict no-op.
-
-    ``config.param_grid_low``/``param_range_high`` were 5.0/200.0, so if these
-    differ, the surface backend's search changed when it should not have.
-    """
-    from shared.config import config
-
-    bounds = surrogate.search_bounds(surrogate.SURFACE_DOMAIN)
-    assert bounds["sd_feat"] == (config.param_grid_low, config.param_range_high)
-    assert bounds["sd_spat"] == (config.param_grid_low, config.param_range_high)
 
 
 @pytest.mark.skipif(not INSTALLED_WNM, reason="no packaged WNM artifact installed")
@@ -279,14 +247,3 @@ def test_an_unsupported_sample_count_is_refused():
     nothing sensible between or beyond them."""
     with pytest.raises(ValueError, match="two different observer models"):
         surrogate.production_checkpoint(50)
-
-@pytest.mark.legacy_surface
-def test_other_checkpoints_stay_reachable_by_name():
-    """Production is the default, not a restriction: a script that takes a
-    checkpoint parameter can still load any installed artifact."""
-    historical = surrogate.SURFACE_DEFAULTS[20]
-    if not historical.exists():
-        pytest.skip("historical checkpoint not installed")
-    assert historical != surrogate.production_checkpoint(20)
-    loaded = surrogate.load_surrogate(checkpoint_path=historical)
-    assert loaded.n_samples == 20

@@ -6,8 +6,7 @@ Represents ``p(b | sd_feat1, sd_feat2, sd_spat, feat_diff)`` directly as
 
 with (pi, mu, sigma) produced by a small MLP.  ``b`` is the ``mu1_bias`` value
 returned by ``jax_fit_main.simulate_dual_component_bias_distribution``; the
-circle is 360 degrees wide and densities are **per degree**, the same per-degree convention used by the retained historical surface network
-(``mirror_aware_model.normalize_to_density_flexible``).
+circle is 360 degrees wide and densities are **per degree**.
 
 There is no bias grid, no feat_diff grid and no KDE anywhere in this module.
 """

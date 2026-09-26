@@ -20,16 +20,12 @@ import sys
 from pathlib import Path
 
 from shared import surrogate
-import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "neural_network_optimization"))
 sys.path.insert(0, str(REPO_ROOT / "model_fit_to_data"))
 
 import jax
-import jax.numpy as jnp
-from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import GridBasedMultiConditionOptimizer
 from model_fit_to_data.create_unified_subject_plots import (
     _resolve_plot_circ_space,
     create_pdf_slice_plots,
@@ -47,8 +43,8 @@ def main():
     parser.add_argument("--results-path", required=True,
                         help="Path to extended_fit_results.pkl.")
     parser.add_argument("--n-samples", type=int, default=20, choices=[20, 100],
-                        help="Observer evidence samples per trial. Used to validate an explicit "
-                             "legacy checkpoint when no fingerprint identity is available.")
+                        help="Observer evidence samples per trial. Used to validate a checkpoint "
+                             "when no fingerprint identity is available.")
     parser.add_argument("--checkpoint-path", default=None,
                         help="Optional surrogate artifact override. It must match the fit fingerprint.")
     parser.add_argument("--output-dir", required=True,
@@ -76,13 +72,7 @@ def main():
     checkpoint = surrogate.checkpoint_for_run(
         args.results_path, explicit=args.checkpoint_path, n_samples=args.n_samples)
     loaded = surrogate.load_surrogate(checkpoint_path=checkpoint)
-    if loaded.family == surrogate.FAMILY_WNM:
-        prediction_backend = predictor_from_surrogate(loaded)
-    else:
-        dummy = jnp.asarray(np.random.default_rng(0).uniform(-180, 180, (100, 2)))
-        prediction_backend = GridBasedMultiConditionOptimizer(
-            str(checkpoint), {"dummy": dummy}, skip_motor_noise=True,
-        )
+    prediction_backend = predictor_from_surrogate(loaded)
 
     sidecar = read_fingerprint_sidecar(Path(args.results_path).parent)
     payload = (sidecar or {}).get("payload", {})

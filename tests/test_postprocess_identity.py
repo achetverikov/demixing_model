@@ -31,11 +31,10 @@ from run_fingerprint import file_sha256  # noqa: E402
 from shared import surrogate  # noqa: E402
 
 WNM = surrogate.WNM_DEFAULTS[20]
-SURFACE_20 = surrogate.SURFACE_DEFAULTS[20]
 WNM_100 = surrogate.WNM_DEFAULTS[100]
 
 pytestmark = pytest.mark.skipif(
-    not (WNM.exists() and WNM_100.exists() and SURFACE_20.exists()),
+    not (WNM.exists() and WNM_100.exists()),
     reason="needs installed artifacts to resolve digests against")
 
 
@@ -45,7 +44,7 @@ def _run_dir(tmp_path, checkpoint, name="results_dir"):
     run.mkdir(parents=True)
     (run / "extended_run_fingerprint.json").write_text(json.dumps({
         "checkpoint_sha256": file_sha256(checkpoint),
-        "surrogate_family": "wnm" if "wnm" in checkpoint.name else "surface_nn"}))
+        "surrogate_family": "wnm"}))
     fits = run / "fitted_parameters.csv"
     fits.write_text("subject\n")
     return fits
@@ -66,7 +65,7 @@ def test_an_explicit_checkpoint_is_verified_not_merely_accepted(tmp_path):
     fits = _run_dir(tmp_path, WNM)
     assert P.infer_checkpoint_path(fits, str(WNM)) == WNM
     with pytest.raises(ValueError, match="not the checkpoint this run was fitted with"):
-        P.infer_checkpoint_path(fits, str(SURFACE_20))
+        P.infer_checkpoint_path(fits, str(WNM_100))
 
 
 def test_without_a_fingerprint_or_an_explicit_path_it_refuses(tmp_path):
@@ -78,7 +77,7 @@ def test_without_a_fingerprint_or_an_explicit_path_it_refuses(tmp_path):
     with pytest.raises(ValueError, match="no run fingerprint near"):
         P.infer_checkpoint_path(fits, None)
     # An explicit path still works for results predating the fingerprint.
-    assert P.infer_checkpoint_path(fits, str(SURFACE_20)) == SURFACE_20
+    assert P.infer_checkpoint_path(fits, str(WNM)) == WNM
 
 
 def test_a_digest_matching_nothing_installed_says_so(tmp_path):

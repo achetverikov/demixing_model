@@ -65,13 +65,7 @@ ALLOWED = {
     "shared/mu1_axis.py": {"literal_181", "mu1_linspace", "inclusive_mu1_arange",
                            "mu1_sign_split", "inclusive_step_formula",
                            "mu1_trapezoid", "mu1_bin_clip"},
-    # Legacy-checkpoint route: names the legacy row count on purpose.
-    "shared/utils.py": {"literal_181"},
     "shared/config.py": {"literal_181"},
-    # The legacy branch of normalize_to_density_flexible reproduces the old
-    # (max-min)/(n-1) width on purpose, so a legacy checkpoint's forward pass is
-    # bit-exact before its output is trimmed.
-    "neural_network_optimization/mirror_aware_model.py": {"inclusive_step_formula"},
     # Migration script: its whole job is the legacy representation.
     "cloud/migrate_surfaces_to_periodic_mu1.py": {"literal_181"},
     # Histogram EDGES, not grid points: the closing +180 edge is correct there.

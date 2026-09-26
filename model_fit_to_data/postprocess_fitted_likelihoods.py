@@ -29,51 +29,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-try:
-    from grid_based_multi_condition_optimizer_jax_loops import (
-        GridBasedMultiConditionOptimizer,
-        apply_motor_noise_with_precomputed_kernel,
-        create_motor_noise_kernel_fft,
-    )
-except ModuleNotFoundError:
-    from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
-        GridBasedMultiConditionOptimizer,
-        apply_motor_noise_with_precomputed_kernel,
-        create_motor_noise_kernel_fft,
-    )
 from shared.config import config
 from shared.behavioral_data import filter_data_for_fitting
 from model_fit_to_data.wnm_likelihood import (
     evaluate_trial_likelihoods,
     exact_cell_log_probability,
 )
-
-# Motor-noise density floor (B1 floor-aware reproduction gate).
-#
-# apply_motor_noise_with_precomputed_kernel clips the convolved probability at 0
-# and re-logs it as log(prob + MOTOR_NOISE_FLOOR_EPS) + log_max. This is a HARD
-# cliff at log_max + log(eps): any trial whose convolved density underflows to ~0
-# pins to that value. In the deep tail of a peaked kernel the pre-log probability
-# is near float32 underflow, so which trials pin to the floor is backend-dependent
-# (CPU vs GPU vs the fit's own build differ by whole nats there). The stored
-# eval_likelihood_loss and this rescore can therefore disagree by tens of nats on
-# such conditions even though every parameter is bit-identical - an inherently
-# ill-conditioned quantity, not a bug. See TODO.md
-# "Motor-noise likelihood reproduction is ill-conditioned at the density floor".
-#
-# MOTOR_NOISE_FLOOR_EPS MUST match the epsilon in
-# grid_based_multi_condition_optimizer_jax_loops.apply_motor_noise_with_precomputed_kernel.
-MOTOR_NOISE_FLOOR_EPS = 1e-10
-# A trial counts as "floor region" (its likelihood is non-reproducible) when its
-# rescored log-density sits within this many nats of the per-surface floor. 6 nats
-# comfortably covers the observed backend-to-backend flip band (trials seen moving
-# between ~-25 and ~-19).
-MOTOR_NOISE_FLOOR_BAND_NATS = 6.0
-# Provable per-trial swing bound: a floor-region trial's log-density can range from
-# the floor (log_max + log(eps)) up to at most the surface max (log_max), a span of
-# -log(eps) nats. Each such trial therefore contributes up to this much reproduction
-# slack; a condition with n floor-region trials is allowed n * this much disagreement.
-MOTOR_NOISE_FLOOR_TRIAL_NATS = float(-np.log(MOTOR_NOISE_FLOOR_EPS))
 
 FIT_META_COLS = [
     "analysis_cell_id",
@@ -202,7 +163,7 @@ REPRODUCTION_VALUE_COLS = [
 
 
 def prepare_reproduction_checks(checks: pd.DataFrame, max_abs_diff: float) -> pd.DataFrame:
-    """Add finite-value and floor-aware tolerance results to reproduction checks."""
+    """Add finite-value and tolerance results to reproduction checks."""
     checks = checks.copy()
     if "n_floor_trials" not in checks.columns:
         checks["n_floor_trials"] = 0
@@ -212,13 +173,10 @@ def prepare_reproduction_checks(checks: pd.DataFrame, max_abs_diff: float) -> pd
     numeric_values = checks[REPRODUCTION_VALUE_COLS].apply(pd.to_numeric, errors="coerce")
     checks[REPRODUCTION_VALUE_COLS] = numeric_values
     checks["values_finite"] = np.isfinite(numeric_values.to_numpy()).all(axis=1)
-    checks["floor_tolerance"] = (
-        max_abs_diff
-        + checks["n_floor_trials"].fillna(0) * MOTOR_NOISE_FLOOR_TRIAL_NATS
-    )
+    # Retain this output column for readers of existing check files.
+    checks["floor_tolerance"] = max_abs_diff
     checks["within_tolerance"] = (
         checks["values_finite"]
-        & np.isfinite(checks["floor_tolerance"])
         & (checks["abs_diff"] <= checks["floor_tolerance"])
     )
     return checks
@@ -242,11 +200,11 @@ def validate_reproduction_checks(checks: pd.DataFrame) -> None:
         worst = failed.loc[failed["abs_diff"].idxmax()]
         raise RuntimeError(
             "Stored eval_likelihood_loss reproduction failed: "
-            f"{len(failed)} condition(s) exceed the floor-aware tolerance; worst "
+            f"{len(failed)} condition(s) exceed the tolerance; worst "
             f"abs_diff {float(worst['abs_diff']):.6g} > tolerance "
             f"{float(worst['floor_tolerance']):.6g} "
             f"({worst['optimizer']} {worst['subject']}/{worst['experiment']}/"
-            f"{worst['condition']}, n_floor_trials={int(worst['n_floor_trials'])})"
+            f"{worst['condition']})"
         )
 
 
@@ -437,25 +395,6 @@ def prepare_condition_rows_from_sources(
     raise last_error
 
 
-def predict_log_surface(
-    optimizer: GridBasedMultiConditionOptimizer,
-    fit_row: pd.Series,
-) -> tuple[np.ndarray, float | None]:
-    params = jnp.asarray([[
-        float(fit_row["sd_feat1"]),
-        float(fit_row["sd_feat2"]),
-        float(fit_row["sd_spat"]),
-    ]], dtype=jnp.float32)
-    log_surface = optimizer._predict_batch_fixed_size(params, verbosity=0)
-    sd_motor = float(fit_row.get("sd_motor", 0.0))
-    floor_log_density = None
-    if sd_motor > 0:
-        floor_log_density = float(np.asarray(log_surface[0]).max() + np.log(MOTOR_NOISE_FLOOR_EPS))
-        kernel_fft = create_motor_noise_kernel_fft(sd_motor, optimizer.n_mu1_bias)
-        log_surface = apply_motor_noise_with_precomputed_kernel(log_surface, kernel_fft)
-    return np.asarray(log_surface[0]), floor_log_density
-
-
 def wnm_trial_log_density(predictor, fit_row: pd.Series, feat_diff_deg, bias_deg):
     """Compatibility wrapper for the canonical WNM likelihood evaluator."""
     parameters = [
@@ -523,7 +462,7 @@ def _score_fit_row_wnm(predictor, scored, data_source, fit_row, circ_space):
 
 
 def score_fit_row(
-    optimizer: GridBasedMultiConditionOptimizer,
+    predictor,
     data_sources: list[tuple[str, pd.DataFrame]],
     fit_row: pd.Series,
     exp_col: str,
@@ -543,98 +482,7 @@ def score_fit_row(
         y_col=y_col,
         circ_space=circ_space,
     )
-    if not isinstance(optimizer, GridBasedMultiConditionOptimizer):
-        return _score_fit_row_wnm(optimizer, scored, data_source, fit_row, circ_space)
-
-    log_surface, floor_log_density = predict_log_surface(optimizer, fit_row)
-    # The NN surface is a continuous density per model-degree (see
-    # shared.surface_functions.normalize_to_density), not a discrete cell mass.
-    # Approximate the cell probability as density × cell width — a midpoint/rectangle
-    # rule at the cell centre, NOT the exact integral of the density over the cell.
-    # The log(cell width) term is a constant offset that cancels in AIC/BIC
-    # differences; "mass" here denotes this approximation. See HISTORY.md.
-    loglik_density_model_deg = log_surface[
-        scored["bias_idx"].to_numpy(int),
-        scored["feat_idx"].to_numpy(int),
-    ]
-    model_bin_width_deg = float(config.mu1_bias_step)
-    loglik_mass = loglik_density_model_deg + np.log(model_bin_width_deg)
-    bin_width_deg = physical_bin_width_deg(circ_space)
-    scored["loglik_density_model_deg"] = loglik_density_model_deg
-    scored["nll_density_model_deg"] = -scored["loglik_density_model_deg"]
-    scored["loglik_mass"] = loglik_mass
-    scored["nll_mass"] = -scored["loglik_mass"]
-    scored["loglik_density_deg"] = scored["loglik_mass"] - np.log(bin_width_deg)
-    scored["nll_density_deg"] = scored["nll_mass"] + np.log(bin_width_deg)
-    scored["bin_width_deg"] = bin_width_deg
-    # The surface backend has no exact cell integral to offer -- its output is a
-    # sampled grid, and the rectangle rule *is* its mass convention. Recording
-    # NaN rather than omitting the column keeps the two families' exports the
-    # same shape, so a comparison that needs the exact integral finds it missing
-    # on this side instead of silently comparing it against the approximation.
-    scored["loglik_cell_probability"] = np.nan
-    scored["fit_subject"] = fit_row["subject"]
-    scored["fit_experiment"] = fit_row["experiment"]
-    scored["fit_condition"] = fit_row["condition"]
-    scored["optimizer"] = fit_row["optimizer"]
-    scored["sd_feat1"] = float(fit_row["sd_feat1"])
-    scored["sd_feat2"] = float(fit_row["sd_feat2"])
-    scored["sd_spat"] = float(fit_row["sd_spat"])
-    scored["sd_motor"] = float(fit_row["sd_motor"])
-    scored["prepared_data_source"] = data_source
-    scored["loglik_convention"] = "grid_cell_centre"
-
-    # The fitter's stored eval_likelihood_loss indexes the NN log-density directly
-    # and reduces with JAX segment_sum. Validate against that reduction, not a
-    # pandas/NumPy sum of exported rows, because float32 reduction order can differ
-    # by ~1e-2 on large/high-NLL conditions.
-    flat_indices = (
-        scored["bias_idx"].to_numpy(int) * optimizer.n_feat_diff
-        + scored["feat_idx"].to_numpy(int)
-    )
-    fit_log_probs = log_surface.reshape(-1)[flat_indices]
-    rescored_nll_density_model_deg = -float(jax.ops.segment_sum(
-        jnp.asarray(fit_log_probs, dtype=jnp.float32),
-        jnp.zeros(len(fit_log_probs), dtype=jnp.int32),
-        num_segments=1,
-    )[0])
-    per_trial_sum_nll_density_model_deg = float(scored["nll_density_model_deg"].sum())
-    rescored_nll_mass = float(scored["nll_mass"].sum())
-    stored_nll = float(fit_row["eval_likelihood_loss"])
-
-    # Floor-aware reproduction gate (B1). Motor noise introduces a hard density floor
-    # at log_max + log(eps); trials pinned near it are non-reproducible across compute
-    # backends. Count how many of THIS rescore's trials sit in that floor region so the
-    # gate can allow the resulting (bounded) disagreement. Only motor-noise fits have
-    # the floor: the raw NN surface has no such cliff, so sd_motor == 0 => zero floor
-    # trials and the strict 0.01 tolerance is preserved unchanged.
-    sd_motor = float(fit_row["sd_motor"])
-    if sd_motor > 0 and floor_log_density is not None:
-        n_floor_trials = int(np.sum(
-            loglik_density_model_deg <= floor_log_density + MOTOR_NOISE_FLOOR_BAND_NATS
-        ))
-    else:
-        n_floor_trials = 0
-
-    check = {
-        "subject": fit_row["subject"],
-        "experiment": fit_row["experiment"],
-        "condition": fit_row["condition"],
-        "optimizer": fit_row["optimizer"],
-        "prepared_data_source": data_source,
-        "stored_eval_likelihood_loss": stored_nll,
-        "rescored_nll_density_model_deg": rescored_nll_density_model_deg,
-        "per_trial_sum_nll_density_model_deg": per_trial_sum_nll_density_model_deg,
-        "rescored_nll_mass": rescored_nll_mass,
-        "abs_diff": abs(rescored_nll_density_model_deg - stored_nll),
-        "per_trial_sum_abs_diff": abs(per_trial_sum_nll_density_model_deg - stored_nll),
-        "n_obs_scored": int(len(scored)),
-        "n_floor_trials": n_floor_trials,
-        "model_bin_width_deg": model_bin_width_deg,
-        "bin_width_deg": bin_width_deg,
-    }
-    return scored, check
-
+    return _score_fit_row_wnm(predictor, scored, data_source, fit_row, circ_space)
 
 def postprocess(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFrame]:
     fits_csv = Path(args.fits_csv)
@@ -643,35 +491,21 @@ def postprocess(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFrame]:
     trial_data = load_trial_data(Path(args.data_path), args.outlier_col, args.include_outliers)
     data_sources = [(str(Path(args.data_path)), trial_data)]
 
-    # The engine follows the checkpoint's family. score_fit_row has had a mixture
-    # branch since this path was written, but nothing could reach it: postprocess
-    # always built the surface optimizer, so rescoring a mixture fit raised on a
-    # missing 'apply_fn' key. Testing the helper while the driver called it
-    # differently proved nothing.
     from shared import surrogate as _surrogate
     from shared.prediction import predictor_from_surrogate
 
-    family = _surrogate.detect_family(checkpoint_path)
     _, fingerprint = _surrogate.find_run_fingerprint(fits_csv)
     matmul_precision = (fingerprint or {}).get(
         "continuous_spec", {}).get("matmul_precision", "default")
-    if family == _surrogate.FAMILY_WNM:
-        optimizer = predictor_from_surrogate(
-            _surrogate.load_surrogate(checkpoint_path=checkpoint_path))
-    else:
-        dummy = jnp.asarray(np.zeros((1, 2), dtype=np.float32))
-        optimizer = GridBasedMultiConditionOptimizer(
-            str(checkpoint_path),
-            {"dummy": dummy},
-            skip_motor_noise=args.skip_motor_noise,
-        )
+    predictor = predictor_from_surrogate(
+        _surrogate.load_surrogate(checkpoint_path=checkpoint_path))
 
     score_rows = []
     checks = []
     with jax.default_matmul_precision(matmul_precision):
         for _, fit_row in fit_rows.iterrows():
             scored, check = score_fit_row(
-                optimizer=optimizer,
+                predictor=predictor,
                 data_sources=data_sources,
                 fit_row=fit_row,
                 exp_col=args.exp_col,
@@ -735,11 +569,6 @@ def main() -> None:
     out, checks = postprocess(args)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    # Floor-aware reproduction gate (B1). Each condition is allowed the strict
-    # --max-check-abs-diff, plus extra slack for trials pinned to the motor-noise
-    # density floor, whose likelihood is not reproducible across compute backends.
-    # A condition with no floor trials keeps the strict tolerance unchanged, so
-    # genuine reproduction bugs in the well-conditioned regime still fail hard.
     checks = prepare_reproduction_checks(checks, args.max_check_abs_diff)
     checks.to_csv(check_output, index=False)
 
@@ -747,23 +576,6 @@ def main() -> None:
     if not finite_abs_diff.empty:
         max_abs_diff = float(finite_abs_diff.max())
         print(f"stored-vs-rescored max abs diff: {max_abs_diff:.6g}")
-        floor_tolerated = checks[
-            (~checks["within_tolerance"].isna())
-            & checks["within_tolerance"]
-            & (checks["abs_diff"] > args.max_check_abs_diff)
-        ]
-        if not floor_tolerated.empty:
-            print(
-                f"{len(floor_tolerated)} condition(s) exceeded the strict "
-                f"{args.max_check_abs_diff:.6g} tolerance but are explained by "
-                "motor-noise floor trials (see within_tolerance/n_floor_trials columns):"
-            )
-            for _, r in floor_tolerated.iterrows():
-                print(
-                    f"  {r['optimizer']} {r['subject']}/{r['experiment']}/{r['condition']}: "
-                    f"abs_diff={r['abs_diff']:.4g} n_floor_trials={int(r['n_floor_trials'])} "
-                    f"floor_tolerance={r['floor_tolerance']:.4g}"
-                )
     validate_reproduction_checks(checks)
     write_split_trial_loglik(out, output, compression=args.parquet_compression)
     print(f"wrote {len(out)} rows -> {output}")

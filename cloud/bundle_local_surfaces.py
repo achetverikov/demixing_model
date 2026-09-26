@@ -10,7 +10,6 @@ payloads in that same format from such a directory, so both distribution sets
 can be shipped (and consumed) the same way.
 
 Consumers of the output:
-  - ``neural_network_optimization/mirror_aware_training.py`` (auto-detects bundles)
   - ``shared.utils.ensure_averaged_surface_file`` (materialises one surface on demand)
   - ``cloud/unpack_surface_bundles.py`` (expands back to loose ``.pkl``)
 

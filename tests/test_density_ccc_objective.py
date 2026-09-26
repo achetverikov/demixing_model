@@ -30,10 +30,8 @@ for path in (ROOT, ROOT / "model_fit_to_data"):
 
 import jax.numpy as jnp
 
-from grid_based_multi_condition_optimizer_jax_loops import (
-    DEGENERATE_TARGET_EPS,
-    _compute_curve_losses,
-)
+from density_objective import DEGENERATE_TARGET_EPS
+from objectives import compute_curve_losses as _compute_curve_losses
 from density_objective import ccc_components as _ccc_components
 
 

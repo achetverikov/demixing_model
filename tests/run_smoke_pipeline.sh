@@ -8,8 +8,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
-# Ensure repo modules and training model module are importable when unpickling.
-export PYTHONPATH="${PYTHONPATH:-}:$ROOT:$ROOT/neural_network_optimization"
+# Ensure checkout modules are importable when unpickling.
+export PYTHONPATH="${PYTHONPATH:-}:$ROOT"
 
 # Require a GPU unless explicitly bypassed.
 ALLOW_CPU="${ALLOW_CPU:-0}"
@@ -25,15 +25,7 @@ EOF
   fi
 fi
 
-TRIMMED_CSV="$ROOT/example_data/data_color_comb_color2_two_subjects.csv"
-
-# Step 0: Confirm trimmed example data exists
-if [[ ! -f "$TRIMMED_CSV" ]]; then
-  echo "Missing trimmed data file: $TRIMMED_CSV" >&2
-  exit 1
-fi
-
-# Step 1: Simulate samples and average in-memory (pipeline mode)
+# Simulate samples and average in memory (pipeline mode).
 PARAM_DIR="$ROOT/tests/param_list"
 rm -rf "$PARAM_DIR"
 mkdir -p "$PARAM_DIR"
@@ -50,7 +42,7 @@ for combo in \
 done
 
 AVG_DIR="averaged_surfaces_smoke_pipeline"
-rm -rf "$AVG_DIR" "results/checkpoints_smoke_pipeline" "results/model_fit_to_data_smoke_pipeline"
+rm -rf "$AVG_DIR"
 
 $PYTHON_BIN surface_computation/simulated_samples_grid.py \
   --machine-id PC_TEST \
@@ -60,32 +52,4 @@ $PYTHON_BIN surface_computation/simulated_samples_grid.py \
   --pipeline \
   --averaged-surfaces-dir "$AVG_DIR"
 
-# Step 2: Train mirror-aware model (short run)
-$PYTHON_BIN neural_network_optimization/mirror_aware_training.py \
-  --surfaces-folder "$AVG_DIR" \
-  --epochs 25 \
-  --batch-size 4 \
-  --learning-rate 1e-3 \
-  --weight-decay 1e-4 \
-  --save-dir "checkpoints_smoke_pipeline"
-
-# Step 3: Fit model to trimmed human data
-$PYTHON_BIN model_fit_to_data/fit_model_to_data.py \
-  --checkpoint-path "checkpoints_smoke_pipeline/model_epoch_0025.pkl" \
-  --search hierarchical \
-  --output-dir "model_fit_to_data_smoke_pipeline" \
-  --data-path "example_data/data_color_comb_color2_two_subjects.csv" \
-  --subject-col subject_exp \
-  --condition-col noise \
-  --no-resume \
-  --max-subjects 2
-
-# Step 4: Generate unified plots from smoke results
-$PYTHON_BIN model_fit_to_data/create_unified_subject_plots.py \
-  --results-path "model_fit_to_data_smoke_pipeline/extended_fit_results.pkl" \
-  --checkpoint-path "checkpoints_smoke_pipeline/model_epoch_0025.pkl" \
-  --output-dir "model_fit_to_data_smoke_pipeline" \
-  --individual-plots \
-  --summary-plots
-
-echo "Smoke pipeline (pipeline mode) completed successfully."
+echo "Raw surface smoke (pipeline mode) completed successfully."

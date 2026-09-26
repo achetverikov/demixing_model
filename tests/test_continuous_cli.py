@@ -27,7 +27,6 @@ for path in (ROOT, ROOT / "model_fit_to_data"):
 from shared import surrogate  # noqa: E402
 
 WNM = surrogate.WNM_DEFAULTS[20]
-SURFACE = ROOT / "pretrained" / "surface_legacy_epoch1425_10ktrain_20samples.pkl"
 pytestmark = pytest.mark.skipif(not WNM.exists(), reason="no packaged WNM artifact")
 
 
@@ -145,13 +144,9 @@ def test_a_different_start_budget_refuses_to_resume(dataset, baseline_run, tmp_p
         _run(dataset, out, continuous_starts=16)
 
 
-def test_the_backends_refuse_each_other_s_checkpoints(dataset, tmp_path):
-    """The surface backend emits a sampled grid and has no gradients; the
-    lattice backends cannot drive a mixture."""
-    with pytest.raises(ValueError, match="wrapped-normal-mixture"):
-        _run(dataset, tmp_path / "a", checkpoint_path=str(SURFACE))
-    with pytest.raises(ValueError, match="cannot drive"):
-        _run(dataset, tmp_path / "b", search="hierarchical", checkpoint_path=str(WNM))
+def test_removed_search_backend_is_refused(dataset, tmp_path):
+    with pytest.raises(ValueError, match="unsupported search backend"):
+        _run(dataset, tmp_path / "b", search="hierarchical")
 
 
 # ---------------------------------------------------------------------------

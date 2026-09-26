@@ -86,12 +86,12 @@ In R, set `surface_source = "raw"` and provide an absolute `averaged_surfaces_di
 surface_simulator.py INPUT N_SAMPLES OUTPUT      # positional form
   [--input-path INPUT] [--n-samples N] [--output-path OUTPUT]
   [--skip-motor-noise]
-  [--surface-source {model,nn,raw}]
+  [--surface-source {model,raw}]
   [--checkpoint-path CHECKPOINT.pkl]
   [--averaged-surfaces-dir DIRECTORY]
 ```
 
-`model` loads the selected trained predictor. `raw` reads averaged surfaces from `--averaged-surfaces-dir`. `nn` selects the surface-network predictor.
+`model` loads the current WNM predictor. `raw` reads averaged surfaces from `--averaged-surfaces-dir`.
 
 ## Notes for developers
 

@@ -44,8 +44,7 @@ import wnm_scoring as S  # noqa: E402
 from compiled_bundle import (CompiledWNMGroup,  # noqa: E402
                              fitting_targets_from_compiled,
                              load_compiled_wnm_bundle)
-from grid_based_multi_condition_optimizer_jax_loops import (  # noqa: E402
-    _compute_curve_losses, bwcrps_energy_score)
+from objectives import compute_curve_losses as _compute_curve_losses, bwcrps_energy_score  # noqa: E402
 
 from contextual_biases_database.objectives import (  # noqa: E402
     BIAS_GRID_DEG, FEATURE_GRID_DEG, circular_distance_matrix,

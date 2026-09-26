@@ -1,11 +1,4 @@
-"""One checkpoint resolver and one family-aware loader for both surrogates.
-
-Two model families answer the same scientific question -- given
-``(sd_feat1, sd_feat2, sd_spat, feat_diff)``, what is the distribution of the
-component-1 bias?  The historical family is the **surface NN**, which emits a
-180x90 log-density surface; the production family is the **conditional wrapped-normal
-mixture** (WNM), which emits mixture parameters and is continuous in both the
-bias and the feature difference.
+"""Checkpoint resolution and identity for the packaged wrapped-normal mixture.
 
 Every public entry point should reach a checkpoint through :func:`load_surrogate`
 rather than opening a path itself, so that exactly one place knows which
@@ -17,10 +10,6 @@ Three rules this module exists to enforce:
 * **Metadata decides the family, never the filename.**  A packaged WNM artifact
   declares its own family and sample count; a request that contradicts what the
   file says raises rather than silently winning.
-* **No identity is guessed from a substring.**  Historical surface checkpoints
-  carry no sample count, so theirs comes from :data:`SURFACE_CHECKPOINT_REGISTRY`
-  or from an explicit argument.  An unregistered surface file has no sample
-  identity and must be given one.
 * **Production never loads a training checkpoint.**  The training scripts write a fit
   dictionary that lacks the architecture; it must go through the packager first.
   Loading one here raises and says so.
@@ -28,7 +17,6 @@ Three rules this module exists to enforce:
 from __future__ import annotations
 
 import pickle
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -36,9 +24,8 @@ from typing import Any, Optional
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PRETRAINED_DIR = REPO_ROOT / "pretrained"
 
-FAMILY_SURFACE_NN = "surface_nn"
 FAMILY_WNM = "wnm"
-FAMILIES = (FAMILY_SURFACE_NN, FAMILY_WNM)
+FAMILIES = (FAMILY_WNM,)
 
 #: Kept as the name older code imports; it is the production family, not a
 #: second setting. There was briefly a separate ``PRODUCTION_FAMILY``, which
@@ -46,19 +33,6 @@ FAMILIES = (FAMILY_SURFACE_NN, FAMILY_WNM)
 #: ``production_checkpoint(20)`` could return one family while a bare
 #: ``load_surrogate(n_samples=20)`` returned another. One switch prevents that.
 DEFAULT_FAMILY = FAMILY_WNM
-
-#: Sample identity for the historical surface checkpoints, which predate any
-#: metadata.  This is a recorded fact about specific files, not a parsing rule:
-#: a surface checkpoint that is not listed here has no known sample count and
-#: must be given one explicitly.
-SURFACE_CHECKPOINT_REGISTRY = {
-    "surface_legacy_epoch1425_10ktrain_20samples.pkl": 20,
-}
-
-#: Which surface checkpoint a bare ``(family, n_samples)`` request resolves to.
-SURFACE_DEFAULTS = {
-    20: PRETRAINED_DIR / "surface_legacy_epoch1425_10ktrain_20samples.pkl",
-}
 
 #: Same, for the WNM artifacts.  Populated by the packaging step; a missing file
 #: is reported as "not installed yet" rather than as a bad request.
@@ -76,9 +50,6 @@ def production_family() -> str:
     count, and :data:`DEFAULT_FAMILY` is the one switch that says which pair.
     (There was briefly a second constant named ``PRODUCTION_FAMILY``; it is gone,
     and a test asserts it has not come back.)
-    The 2026 WNM cutover flipped this switch once; historical surface artifacts
-    remain reachable only when explicitly requested.
-
     A function rather than a second constant, so that reading it cannot pick up a
     stale copy and so there is nowhere for a second switch to appear.
 
@@ -104,8 +75,7 @@ def production_checkpoint(n_samples: int) -> Path:
             "different observer models, not a resolution setting, so there is nothing "
             "sensible between or beyond them.")
     family = production_family()
-    table = SURFACE_DEFAULTS if family == FAMILY_SURFACE_NN else WNM_DEFAULTS
-    path = table[n_samples]
+    path = WNM_DEFAULTS[n_samples]
     if not path.exists():
         raise FileNotFoundError(
             f"the production {family} artifact for n_samples={n_samples} is not "
@@ -118,12 +88,8 @@ def dm_version(family: str, artifact: str) -> str:
     stem = Path(artifact).stem
     if family == FAMILY_WNM and stem.startswith("current_"):
         stem = stem.removeprefix("current_")
-    if family == FAMILY_SURFACE_NN and stem.startswith("surface_legacy_"):
-        stem = stem.removeprefix("surface_legacy_")
     if stem == family or stem.startswith(f"{family}_"):
         return stem
-    if family == FAMILY_SURFACE_NN and stem.startswith("model_"):
-        stem = stem.removeprefix("model_")
     return f"{family}_{stem}"
 
 
@@ -183,11 +149,8 @@ def checkpoint_for_run(results_path, explicit=None, n_samples: Optional[int] = N
         "explicitly.\n"
         "\n"
         "There is deliberately no fallback to the production artifact for n_samples. That "
-        "would substitute today's model for the one a stored fit was produced with: before "
-        "a default change it can pick another checkpoint for the same observer model, "
-        "and after a family/default change it would recompute a surface fit's curves from "
-        "the mixture. Both cases plot one model's curves beside another model's parameters, "
-        "and neither announces itself.")
+        "could plot one model's curves beside another model's parameters without "
+        "announcing the mismatch.")
 
 
 def find_run_fingerprint(path):
@@ -215,9 +178,7 @@ def file_digest(path) -> str:
 
 def installed_checkpoints() -> list:
     """Every artifact a run could have used, for digest lookup."""
-    candidates = list(SURFACE_DEFAULTS.values())
-    candidates += [PRETRAINED_DIR / name for name in SURFACE_CHECKPOINT_REGISTRY]
-    candidates += list(WNM_DEFAULTS.values())
+    candidates = list(WNM_DEFAULTS.values())
     seen, unique = set(), []
     for candidate in candidates:
         if candidate.is_file() and candidate not in seen:
@@ -229,18 +190,6 @@ def installed_checkpoints() -> list:
 def load_production(n_samples: int) -> "LoadedSurrogate":
     """Load the production artifact for one observer model."""
     return load_surrogate(checkpoint_path=production_checkpoint(n_samples))
-
-#: The surface network's training domain, in model degrees.  Its parameter grid
-#: was swept over [5, 200] on all three SDs (see ``pretrained/README.md``), and
-#: unlike the WNM artifacts it carries no metadata, so the fact is recorded here.
-#: It is narrower than the WNM domain on the feature axis: the surface corpus
-#: never went below 5, which is precisely the additional feature-noise coverage provided by WNM.
-SURFACE_DOMAIN = {
-    "sd_feat1": (5.0, 200.0),
-    "sd_feat2": (5.0, 200.0),
-    "sd_spat": (5.0, 200.0),
-    "feat_diff": (2.0, 180.0),
-}
 
 
 def search_bounds(domain) -> dict:
@@ -277,13 +226,8 @@ class LoadedSurrogate:
             not a precision knob, and results from two sample counts are not
             interchangeable.
         path: the file actually loaded, resolved and absolute.
-        payload: family-specific loaded content.  For ``surface_nn`` a
-            ``{'state', 'checkpoint_info'}`` dict from
-            :func:`shared.utils.load_checkpoint`; for ``wnm`` a
-            ``{'model', 'variables'}`` dict from
-            :func:`shared.wnm.load_model`.
-        meta: the artifact's recorded provenance.  Empty for historical surface
-            checkpoints, which have none.
+        payload: ``{'model', 'variables'}`` for the packaged WNM.
+        meta: the artifact's recorded provenance.
     """
 
     family: str
@@ -306,21 +250,7 @@ class LoadedSurrogate:
         return identity
 
 
-def _ensure_surface_imports() -> None:
-    """Put ``neural_network_optimization`` on the path before unpickling.
-
-    Surface checkpoints pickle a Flax module by reference, so unpickling one
-    imports ``mirror_aware_model``.  The optimizer used to arrange this itself,
-    immediately before its own load; now that a checkpoint's family is read from
-    its content, the import has to be available to whoever opens the file first.
-    """
-    directory = str(REPO_ROOT / "neural_network_optimization")
-    if directory not in sys.path:
-        sys.path.insert(0, directory)
-
-
 def _read_blob(path: Path) -> Any:
-    _ensure_surface_imports()
     with open(path, "rb") as handle:
         return pickle.load(handle)
 
@@ -341,7 +271,7 @@ def detect_family(path, blob=None) -> str:
     if "model_config" in blob and "variables" in blob:
         return FAMILY_WNM
     if "apply_fn" in blob and "params" in blob:
-        return FAMILY_SURFACE_NN
+        raise ValueError(f"{path} is a retired surface-NN checkpoint; use a packaged WNM artifact")
     if "variables" in blob and "selected_step" in blob:
         raise ValueError(
             f"{path} is a WNM training checkpoint (variables + selected_step), not a production "
@@ -372,34 +302,11 @@ def resolve_checkpoint(family: Optional[str] = None,
     if n_samples not in SUPPORTED_SAMPLE_COUNTS:
         raise ValueError(f"n_samples={n_samples} is not one of {SUPPORTED_SAMPLE_COUNTS}")
 
-    table = SURFACE_DEFAULTS if family == FAMILY_SURFACE_NN else WNM_DEFAULTS
-    if n_samples not in table:
-        raise ValueError(
-            f"no default {family} artifact for n_samples={n_samples}; "
-            "pass an explicit checkpoint")
-    path = table[n_samples]
+    path = WNM_DEFAULTS[n_samples]
     if not path.exists():
         raise FileNotFoundError(
             f"no {family} artifact installed for n_samples={n_samples}: expected {path}")
     return path
-
-
-def _surface_sample_count(path: Path, requested: Optional[int]) -> int:
-    known = SURFACE_CHECKPOINT_REGISTRY.get(path.name)
-    if known is None:
-        if requested is None:
-            raise ValueError(
-                f"{path.name} is not in SURFACE_CHECKPOINT_REGISTRY and surface checkpoints "
-                "record no sample count, so its observer model is unknown. Pass n_samples "
-                "explicitly, or register the file if it is a known artifact. Its identity is "
-                "not inferable from its name.")
-        return requested
-    if requested is not None and requested != known:
-        raise ValueError(
-            f"{path.name} is the n_samples={known} checkpoint but n_samples={requested} was "
-            "requested; these are different observer models and their results are not "
-            "interchangeable.")
-    return known
 
 
 def load_surrogate(family: Optional[str] = None,
@@ -428,31 +335,22 @@ def load_surrogate(family: Optional[str] = None,
             f"{path.name} is a {actual} checkpoint but family={family!r} was requested. "
             "The artifact's own metadata decides its family.")
 
-    if actual == FAMILY_WNM:
-        from shared.wnm import ConditionalWrappedMixture
+    from shared.wnm import ConditionalWrappedMixture
 
-        meta = dict(blob.get("meta") or {})
-        declared = meta.get("n_samples")
-        if declared is None:
-            raise ValueError(
-                f"{path.name} declares no n_samples in its metadata; a WNM artifact must "
-                "record the observer model it was trained on.")
-        if n_samples is not None and int(n_samples) != int(declared):
-            raise ValueError(
-                f"{path.name} was trained at n_samples={declared} but n_samples={n_samples} "
-                "was requested; these are different observer models.")
-        model = ConditionalWrappedMixture(**blob["model_config"])
-        return LoadedSurrogate(family=FAMILY_WNM, n_samples=int(declared), path=path,
-                               payload={"model": model, "variables": blob["variables"]},
-                               meta=meta)
-
-    from shared.utils import load_checkpoint
-
-    resolved_samples = _surface_sample_count(path, n_samples)
-    state, checkpoint_info = load_checkpoint(str(path))
-    return LoadedSurrogate(family=FAMILY_SURFACE_NN, n_samples=resolved_samples, path=path,
-                           payload={"state": state, "checkpoint_info": checkpoint_info},
-                           meta={})
+    meta = dict(blob.get("meta") or {})
+    declared = meta.get("n_samples")
+    if declared is None:
+        raise ValueError(
+            f"{path.name} declares no n_samples in its metadata; a WNM artifact must "
+            "record the observer model it was trained on.")
+    if n_samples is not None and int(n_samples) != int(declared):
+        raise ValueError(
+            f"{path.name} was trained at n_samples={declared} but n_samples={n_samples} "
+            "was requested; these are different observer models.")
+    model = ConditionalWrappedMixture(**blob["model_config"])
+    return LoadedSurrogate(family=FAMILY_WNM, n_samples=int(declared), path=path,
+                           payload={"model": model, "variables": blob["variables"]},
+                           meta=meta)
 
 
 def add_surrogate_arguments(parser) -> None:

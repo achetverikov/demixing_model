@@ -20,9 +20,8 @@ Motor noise is applied inside this layer, by
 :meth:`BiasPredictor.with_motor_noise`, so no consumer convolves a surface or
 widens a variance itself.
 
-Two concrete implementations, and deliberately no plugin system. WNM is the
-production family; the surface implementation is retained only for explicit
-historical reproduction and raw-surface workflows.
+WNM is the production predictor. The stored-surface adapter remains available
+for raw simulation checks and plots.
 
 **Grid densities are for display; probabilities are for scoring.**  A WNM
 component can be far narrower than the 2-degree reporting cell, so sampling its
@@ -580,8 +579,7 @@ class WrappedMixturePredictor(BiasPredictor):
         moments = self._wm.circular_moment(self.distribution(params, validate, sd_motor), 1)
         pooled = weights @ moments
         mass = jnp.sum(weights, axis=-1)
-        # Same clamp as the surface path, so the two families cannot disagree at
-        # the extremes where a clamp is what decides the answer.
+        # Match the circular-SD clamp used by stored-surface plots.
         resultant = jnp.abs(pooled) / jnp.where(mass > 0, mass, jnp.nan)
         safe = jnp.minimum(jnp.maximum(resultant, 1e-10), 1.0 - 1e-10)
         return jnp.degrees(jnp.sqrt(-2 * jnp.log(safe)))
@@ -595,20 +593,16 @@ class WrappedMixturePredictor(BiasPredictor):
 
 
 class SurfacePredictor(BiasPredictor):
-    """The historical surface network, answered the way it always has been.
+    """Predictions from stored simulation surfaces.
 
     Its outputs are 180-row log-density surfaces, so every quantity here is a
     grid operation: densities are read at cell centres, moments and asymmetry are
     discrete sums over the mu1 axis, and cell probability is density times cell
-    width.  These are the conventions the deployed results were produced under
-    and they are preserved exactly rather than upgraded -- a "better" integral
-    here would silently re-score every historical fit.
-
-    Surfaces are supplied by the caller, which already owns the compiled batching
-    for them; this class does not load or run the network.
+    width. These conventions are retained for raw stored-surface inspection.
+    Surfaces are supplied by the caller; this class does not load a model.
     """
 
-    family = "surface_nn"
+    family = "averaged_surfaces"
 
     def __init__(self, log_surfaces, n_samples: int, artifact: str,
                  sd_motor: float = 0.0):
@@ -627,9 +621,7 @@ class SurfacePredictor(BiasPredictor):
 
     def with_motor_noise(self, sd_motor):
         raise NotImplementedError(
-            "Motor noise for the surface backend is an FFT convolution over the mu1 axis and "
-            "is applied by the optimizer that owns the compiled kernels. Pass surfaces that "
-            "already carry it, and record sd_motor here so the identity is right.")
+            "Apply motor noise to stored surfaces before constructing SurfacePredictor.")
 
     def grid_log_density(self, feat_index):
         """Log density down the mu1 axis at one feature-grid column."""
@@ -656,11 +648,8 @@ class SurfacePredictor(BiasPredictor):
     def pooled_circular_sd(self, bin_weights):
         """Circular SD of each bin's pooled distribution.
 
-        The same estimator the mixture computes analytically, reached the way
-        this family has always reached it: mix the per-column densities on the
-        grid, then take the first moment of the mixture. Kept as an integral
-        rather than converted, because these are the numbers the deployed plots
-        were produced with.
+        Mix the stored per-column densities on the grid, then take the first
+        moment of the mixture.
 
         Args:
             bin_weights: ``(n_surfaces, n_bins, n_feat_diff)`` mixture weights.
@@ -702,15 +691,8 @@ def mixture_plot_curves(predictor, params_by_row, feat_grid, bin_weights=None,
                         density_bandwidths=None, operator_feature_coordinates=None):
     """The four curve families the subject plots draw, for a mixture fit.
 
-    The surface backend derives these by integrating its 180-row grid; the
-    mixture has a closed form for each, so this computes them directly rather
-    than materialising a surface and then integrating it back down. That is not
-    an optimisation: a component narrower than the 2-degree reporting cell is
-    mis-massed by the grid, and those are exactly the fits this surrogate exists
-    to represent.
-
-    Deliberately additive. The surface path is untouched by this function, so no
-    plotted number on that side can move because of it.
+    The mixture has closed forms for these curves, which also preserve the mass
+    of components narrower than a reporting cell.
 
     Args:
         predictor: a ``WrappedMixturePredictor``.
@@ -839,6 +821,4 @@ def predictor_from_surrogate(loaded, sd_motor: float = 0.0) -> BiasPredictor:
             model=loaded.payload["model"], variables=loaded.payload["variables"],
             n_samples=loaded.n_samples, artifact=loaded.path.name, meta=loaded.meta,
             sd_motor=sd_motor)
-    raise NotImplementedError(
-        "The surface backend's predictions come from the optimizer's compiled batching; "
-        "build a SurfacePredictor from surfaces it produced rather than from a checkpoint.")
+    raise ValueError(f"unsupported surrogate family {loaded.family!r}")

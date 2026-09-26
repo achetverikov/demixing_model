@@ -32,9 +32,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from model_fit_to_data.grid_based_multi_condition_optimizer_jax_loops import (
-    GridBasedMultiConditionOptimizer,
-)
 from model_fit_to_data.run_fingerprint import read_fingerprint_sidecar
 from model_fit_to_data.result_identity import (
     canonical_condition_key as _canonical_condition_key,
@@ -52,9 +49,6 @@ from shared.paths import resolve_input_path, resolve_results_path
 
 # Initialize seed manager
 seed = seed_manager.SeedManager(quiet=True)
-
-# Global motor noise kernel cache to avoid recomputing kernels across subjects
-global_motor_kernel_cache = {}
 
 RESULTS_DIR = "results"
 MODEL_FIT_RESULTS_PREFIX = "model_fit_to_data_results_v2"
@@ -82,25 +76,6 @@ OPTIMIZER_LABELS = {
 def _angle_display_scale(circ_space: int = 360) -> float:
     """Scale angular model-space values back to the data circular space."""
     return circ_space / (2 * config.feat_diff_range[1])
-
-
-def _pooled_bias_weighted_crps(log_surfaces, datasets, feat_grid, distance_matrix,
-                               weights_sd):
-    """Distribution-level BWCRPS for separately fitted report-order surfaces.
-
-    The pooling and scoring live in ``shared.prediction`` so both surrogate
-    families share one definition; this wrapper supplies the surface backend's
-    own probability convention -- renormalise the sampled grid over the bias axis
-    -- and is pinned unchanged against a pre-routing reference in
-    ``tests/test_pooled_bwcrps.py``.
-    """
-    from shared.prediction import pooled_bias_weighted_crps
-
-    log_surfaces = np.asarray(log_surfaces, dtype=float)
-    probabilities = np.exp(log_surfaces - log_surfaces.max(axis=1, keepdims=True))
-    probabilities /= probabilities.sum(axis=1, keepdims=True)
-    return pooled_bias_weighted_crps(probabilities, datasets, feat_grid,
-                                     distance_matrix, weights_sd)
 
 
 SD_N_BINS = 18
@@ -225,7 +200,7 @@ def compute_predicted_sd_curves_batch(log_surfaces_batch, feat_vals):
     which pools columns into the empirical bins so the two are comparable.
 
     The sine/cosine moments are periodic integrals (plain sum × cell width),
-    matching the rectangle rule the NN columns are normalized under, and are
+    matching the rectangle rule stored-surface columns use, and are
     divided by the mixture mass explicitly so the estimator does not depend on
     that normalization holding (MODEL_PIPELINE_FOR_AGENTS.md D.10; before the
     circularity fix these were trapezoidal integrals over x=grid, which
@@ -299,50 +274,6 @@ def compute_predicted_sd_curves_batch_pooled(log_surfaces_batch, bin_weights_bat
 
     predictor = SurfacePredictor(log_surfaces_batch, n_samples=0, artifact="plots")
     return predictor.pooled_circular_sd(bin_weights_batch)
-
-
-def _surface_plot_bundle(optimizer, params_batch, motor_noise, feat_vals,
-                         bin_weights_batch):
-    """Run the historical surface curve path without changing its arithmetic."""
-    from grid_based_multi_condition_optimizer_jax_loops import (
-        _generate_nn_bias_curve_batch,
-        apply_motor_noise_with_precomputed_kernel,
-        create_motor_noise_kernel_fft,
-        generate_nn_density_asymmetry_batch,
-    )
-
-    log_surfaces = optimizer._predict_batch_fixed_size(params_batch, verbosity=0)
-    motors = jnp.asarray(motor_noise)
-    unique_motor_noise, inverse_indices = jnp.unique(motors, return_inverse=True)
-    n_mu1_bias = log_surfaces.shape[1]
-    print(f"Found {len(unique_motor_noise)} unique motor noise values: {unique_motor_noise}")
-    surfaces_with_noise = jnp.zeros_like(log_surfaces)
-    for index, sd_motor in enumerate(unique_motor_noise):
-        mask = inverse_indices == index
-        print(f"  Processing motor noise {sd_motor:.1f}: {jnp.sum(mask)} surfaces")
-        if sd_motor > 0:
-            key = (float(sd_motor), n_mu1_bias)
-            if key not in global_motor_kernel_cache:
-                global_motor_kernel_cache[key] = create_motor_noise_kernel_fft(
-                    sd_motor, n_mu1_bias)
-            noisy = apply_motor_noise_with_precomputed_kernel(
-                log_surfaces[mask], global_motor_kernel_cache[key])
-            surfaces_with_noise = surfaces_with_noise.at[mask].set(noisy)
-        else:
-            surfaces_with_noise = surfaces_with_noise.at[mask].set(log_surfaces[mask])
-    log_surfaces = surfaces_with_noise
-
-    print("Computing bias curves for all surfaces...")
-    bias = _generate_nn_bias_curve_batch(log_surfaces, jnp.arange(len(feat_vals)))
-    print("Computing density asymmetry curves for all surfaces...")
-    asymmetry = generate_nn_density_asymmetry_batch(log_surfaces)
-    print("Computing standard deviation curves for all surfaces...")
-    sd = compute_predicted_sd_curves_batch(log_surfaces, feat_vals)
-    pooled_sd = compute_predicted_sd_curves_batch_pooled(log_surfaces, bin_weights_batch)
-    return {
-        "bias": bias, "asymmetry": asymmetry, "sd": sd, "pooled_sd": pooled_sd,
-        "distributions": log_surfaces, "distribution_kind": "log_density",
-    }
 
 
 def _mixture_probability_surfaces(predictor, params_batch, motor_noise, feat_vals):
@@ -527,28 +458,15 @@ def prepare_all_subjects_data(
       FIRST condition's result only and reused for every condition; a method
       fitted only in a later condition is never predicted or plotted.
 
-    Surface fits retain their historical grid computations. WNM fits use direct
-    analytic curves and exact reporting-cell masses, with the observed-design
-    operator and KDE bandwidth stored by the fit.
+    WNM fits use direct analytic curves and exact reporting-cell masses, with
+    the observed-design operator and KDE bandwidth stored by the fit.
 
     Returns:
         Dictionary with all precomputed data for all subjects
     """
 
     print("Preparing data for all subjects in batch...")
-    backend_family = getattr(prediction_backend, "family", surrogate.FAMILY_SURFACE_NN)
-    if hasattr(prediction_backend, "identity"):
-        surrogate_identity = prediction_backend.identity().as_dict()
-    else:
-        surrogate_identity = {
-            "dm_version": surrogate.dm_version(
-                surrogate.FAMILY_SURFACE_NN,
-                Path(prediction_backend.checkpoint_path).name,
-            ),
-            "surrogate_family": surrogate.FAMILY_SURFACE_NN,
-            "surrogate_artifact": Path(prediction_backend.checkpoint_path).name,
-            "surrogate_n_samples": np.nan,
-        }
+    surrogate_identity = prediction_backend.identity().as_dict()
     if density_curve_spec is None:
         density_curve_spec = {
             "emp_density_weights_sd": float(
@@ -632,19 +550,18 @@ def prepare_all_subjects_data(
 
                         all_params_3d.append(params_3d)
                         all_motor_noise.append(motor_noise)
-                        if backend_family == surrogate.FAMILY_WNM:
-                            empirical = result.get("empirical_curves", {})
-                            missing = [key for key in ("feature_operator", "density_bandwidth",
-                                                       "prediction_coordinates")
-                                       if key not in empirical]
-                            if missing:
-                                raise ValueError(
-                                    f"WNM fit {result.get('condition', condition_name)!r} lacks "
-                                    f"its stored {', '.join(missing)}; direct curves cannot "
-                                    "reproduce the fitted objective without them")
-                            all_feature_operators.append(empirical["feature_operator"])
-                            all_density_bandwidths.append(empirical["density_bandwidth"])
-                            all_operator_coordinates.append(empirical["prediction_coordinates"])
+                        empirical = result.get("empirical_curves", {})
+                        missing = [key for key in ("feature_operator", "density_bandwidth",
+                                                   "prediction_coordinates")
+                                   if key not in empirical]
+                        if missing:
+                            raise ValueError(
+                                f"WNM fit {result.get('condition', condition_name)!r} lacks "
+                                f"its stored {', '.join(missing)}; direct curves cannot "
+                                "reproduce the fitted objective without them")
+                        all_feature_operators.append(empirical["feature_operator"])
+                        all_density_bandwidths.append(empirical["density_bandwidth"])
+                        all_operator_coordinates.append(empirical["prediction_coordinates"])
                         param_mapping[(subject_id, experiment, condition_name, opt)] = batch_idx
                         batch_idx += 1
 
@@ -666,28 +583,19 @@ def prepare_all_subjects_data(
     if all_params_3d:
         print(f"Batch computing {len(all_params_3d)} parameter combinations for ALL subjects...")
         params_batch = jnp.array(all_params_3d)
-        if backend_family == surrogate.FAMILY_WNM:
-            bundle = _mixture_plot_bundle(
-                prediction_backend, params_batch, all_motor_noise, feat_vals,
-                weight_rows[weight_index], all_feature_operators,
-                np.asarray(all_density_bandwidths), density_curve_spec,
-                all_operator_coordinates)
-        else:
-            bundle = _surface_plot_bundle(
-                prediction_backend, params_batch, all_motor_noise, feat_vals,
-                weight_rows[weight_index])
+        bundle = _mixture_plot_bundle(
+            prediction_backend, params_batch, all_motor_noise, feat_vals,
+            weight_rows[weight_index], all_feature_operators,
+            np.asarray(all_density_bandwidths), density_curve_spec,
+            all_operator_coordinates)
 
         all_bias_curves = bundle["bias"]
         all_asymm_curves = bundle["asymmetry"]
         all_predicted_sd = bundle["sd"]
         all_predicted_sd_pooled = bundle["pooled_sd"]
-        if backend_family == surrogate.FAMILY_SURFACE_NN:
-            distributions = bundle["distributions"]
-            distance_matrix = prediction_backend.D_circ_matrix
-        else:
-            bias_grid = np.asarray(config.create_grid("mu1_bias"))
-            difference = np.abs(bias_grid[:, None] - bias_grid[None, :])
-            distance_matrix = np.minimum(difference, 360.0 - difference)
+        bias_grid = np.asarray(config.create_grid("mu1_bias"))
+        difference = np.abs(bias_grid[:, None] - bias_grid[None, :])
+        distance_matrix = np.minimum(difference, 360.0 - difference)
 
         # Report-order fits have separate parameters but enter the comparison as
         # one color_2 distribution. Mix their predicted surfaces with the same
@@ -708,15 +616,10 @@ def prepare_all_subjects_data(
             if "data_df" not in first_result or "data_df" not in second_result:
                 continue
             indices = [first_idx, param_mapping[second_key]]
-            if backend_family == surrogate.FAMILY_WNM:
-                selected = _mixture_probability_surfaces(
-                    prediction_backend, np.asarray(params_batch)[indices],
-                    np.asarray(all_motor_noise)[indices], feat_vals)
-                scorer = pooled_bias_weighted_crps
-            else:
-                selected = np.take(distributions, indices, axis=0)
-                scorer = _pooled_bias_weighted_crps
-            score = scorer(
+            selected = _mixture_probability_surfaces(
+                prediction_backend, np.asarray(params_batch)[indices],
+                np.asarray(all_motor_noise)[indices], feat_vals)
+            score = pooled_bias_weighted_crps(
                 selected, [first_result["data_df"], second_result["data_df"]],
                 feat_vals, distance_matrix,
                 density_curve_spec["emp_density_weights_sd"])
@@ -842,10 +745,8 @@ def prepare_all_subjects_data(
                     experiment_empirical_curves[noise_cond] = {
                         'bias': saved_curves['target_bias'],
                         'bias_weights': saved_curves.get('bias_weights'),
-                        'asymmetry': (
-                            saved_curves.get('matched_density_target', saved_curves['target_density'])
-                            if backend_family == surrogate.FAMILY_WNM
-                            else saved_curves['target_density']),
+                        'asymmetry': saved_curves.get(
+                            'matched_density_target', saved_curves['target_density']),
                         'sd': empirical_sd,
                         'bias_grid': saved_curves['density_feat_grid'][saved_curves['bias_feat_indices']],
                         'asymm_grid': saved_curves['density_feat_grid'],
@@ -1547,39 +1448,18 @@ def _empirical_slice(fd_vals: np.ndarray, bias_vals: np.ndarray,
 
 
 def _plot_log_surface(prediction_backend, params, feat_grid, mu1_grid):
-    """Display-grid density from either backend, with fitted motor noise."""
+    """Display-grid WNM density with fitted motor noise."""
     params = np.asarray(params, dtype=float)
     sd_motor = float(params[3]) if len(params) >= 4 else 0.0
-    if getattr(prediction_backend, "family", None) == surrogate.FAMILY_WNM:
-        feat = jnp.asarray(feat_grid, dtype=jnp.float32)
-        rows = jnp.column_stack([
-            jnp.full(feat.shape, params[0]),
-            jnp.full(feat.shape, params[1]),
-            jnp.full(feat.shape, params[2]),
-            feat,
-        ])
-        # Direct analytic WNM evaluation on the display grid; no NN surface is
-        # loaded or reconstructed. Transpose to the plotting helper's
-        # historical (bias, feature) convention.
-        return np.asarray(prediction_backend.grid_log_density(
-            rows, grid=jnp.asarray(mu1_grid), sd_motor=sd_motor)).T
-
-    log_surf = prediction_backend._predict_batch_fixed_size(
-        jnp.array([params[:3]]), verbosity=0)[0]
-    if sd_motor > 0:
-        from grid_based_multi_condition_optimizer_jax_loops import (
-            apply_motor_noise_with_precomputed_kernel,
-            create_motor_noise_kernel_fft,
-        )
-        n_mu1_bias = log_surf.shape[0]
-        key = (sd_motor, n_mu1_bias)
-        if key not in global_motor_kernel_cache:
-            global_motor_kernel_cache[key] = create_motor_noise_kernel_fft(
-                sd_motor, n_mu1_bias)
-        log_surf = apply_motor_noise_with_precomputed_kernel(
-            log_surf[None], global_motor_kernel_cache[key])[0]
-    return np.asarray(log_surf)
-
+    feat = jnp.asarray(feat_grid, dtype=jnp.float32)
+    rows = jnp.column_stack([
+        jnp.full(feat.shape, params[0]),
+        jnp.full(feat.shape, params[1]),
+        jnp.full(feat.shape, params[2]),
+        feat,
+    ])
+    return np.asarray(prediction_backend.grid_log_density(
+        rows, grid=jnp.asarray(mu1_grid), sd_motor=sd_motor)).T
 
 def create_pdf_slice_plots(
     extended_results: Dict,
@@ -1793,7 +1673,6 @@ def create_unified_plots_with_summaries(
         resolved_results_path,
         explicit=resolve_input_path(checkpoint_path, results_dir) if checkpoint_path else None,
         n_samples=n_samples)
-    _family = surrogate.detect_family(resolved_checkpoint_path)
     sidecar = read_fingerprint_sidecar(Path(resolved_results_path).parent)
     fingerprint_payload = (sidecar or {}).get("payload", {})
     density_curve_spec = (fingerprint_payload.get("density_curve_spec") or {
@@ -1816,18 +1695,9 @@ def create_unified_plots_with_summaries(
     circ_space = _resolve_plot_circ_space(extended_results, circ_space)
 
     print("Initializing prediction backend...")
-    if _family == surrogate.FAMILY_WNM:
-        prediction_backend = predictor_from_surrogate(
-            surrogate.load_surrogate(checkpoint_path=resolved_checkpoint_path))
-    else:
-        rng = np.random.default_rng(0)
-        dummy_condition_datasets = {'dummy': jnp.asarray(np.column_stack([
-            rng.uniform(config.feat_diff_range[0], config.feat_diff_range[1], 100),
-            rng.uniform(config.mu1_bias_range[0], config.mu1_bias_range[1], 100),
-        ]))}
-        prediction_backend = GridBasedMultiConditionOptimizer(
-            str(resolved_checkpoint_path), dummy_condition_datasets)
-    print(f"{_family} prediction backend initialized.")
+    prediction_backend = predictor_from_surrogate(
+        surrogate.load_surrogate(checkpoint_path=resolved_checkpoint_path))
+    print("WNM prediction backend initialized.")
     print()
 
     # Create unified subject plots

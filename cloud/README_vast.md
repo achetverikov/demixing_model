@@ -373,8 +373,8 @@ bucket if needed.
 
 ## After Compute
 
-Downstream training and browser tools still expect individual averaged surface
-files. After compute finishes, sync bundles from object storage:
+The browser and raw-prediction tools expect individual averaged surface files.
+After compute finishes, sync bundles from object storage:
 
 ```bash
 python cloud/sync_surface_bundles.py \
@@ -389,9 +389,5 @@ python cloud/unpack_surface_bundles.py \
   --output-dir results/averaged_surfaces_vast
 ```
 
-Then train using the normal averaged-surface directory:
-
-```bash
-python neural_network_optimization/mirror_aware_training.py \
-  --surfaces-folder results/averaged_surfaces_vast
-```
+The unpacked surfaces can be inspected with the surface browser or selected
+directly with the prediction simulator's `--surface-source raw` option.

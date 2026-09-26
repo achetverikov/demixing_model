@@ -27,9 +27,8 @@ for path in (ROOT, ROOT / "model_fit_to_data"):
 from continuous_fit import ContinuousEngine, fit_continuous  # noqa: E402
 from density_objective import degenerate_targets  # noqa: E402
 from fitting_targets import build_fitting_targets  # noqa: E402
-from grid_based_multi_condition_optimizer_jax_loops import (  # noqa: E402
-    _compute_curve_losses, bwcrps_energy_score, compute_bwcrps_condition_targets,
-    compute_target_bias_curve_core)
+from objectives import compute_curve_losses as _compute_curve_losses, bwcrps_energy_score  # noqa: E402
+from empirical_targets import compute_bwcrps_condition_targets, compute_target_bias_curve_core  # noqa: E402
 from shared import surrogate  # noqa: E402
 from shared.config import config  # noqa: E402
 from shared.prediction import predictor_from_surrogate  # noqa: E402
@@ -87,8 +86,6 @@ def density_fit(setup):
 
 def test_the_result_shape_matches_the_other_backends(setup, density_fit):
     """Result handling must not fork three ways."""
-    from exhaustive_density import fit_exhaustive_density  # noqa: F401  (contract source)
-
     result = density_fit
     for key in SHARED_RESULT_KEYS:
         assert key in result, key

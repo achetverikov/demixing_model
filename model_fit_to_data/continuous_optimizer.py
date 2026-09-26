@@ -1,16 +1,11 @@
 """Bounded gradient search over continuous noise parameters.
 
-The hierarchical and exhaustive backends both search a lattice: they evaluate a
-grid, keep the best point, and refine around it. That is the right shape for a
-surrogate whose output is a stored surface, and it is the only shape available
-when the objective cannot be differentiated. The wrapped-normal mixture changes
-that -- its density, moments and signed-arc asymmetry are closed forms, and the
-production CCC loss is a smooth function of them -- so the whole path from
-parameters to loss has a gradient.
+The wrapped-normal mixture's density, moments and signed-arc asymmetry are
+closed forms, so the path from parameters to loss has a gradient.
 
 The validated WNM production search uses 64 deterministic
 starts evaluated with the pinned batched JAX L-BFGS-B port as two sequential
-batches of 32. The surface backend retains its hierarchical lattice search.
+batches of 32.
 
 Design notes that are not free choices:
 

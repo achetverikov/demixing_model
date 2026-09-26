@@ -48,8 +48,7 @@ import jax.numpy as jnp  # noqa: E402
 import fit_model_to_data as F  # noqa: E402
 from fitting_targets import (build_fitting_targets, resolve_density_bandwidths)  # noqa: E402
 from density_objective import degenerate_targets  # noqa: E402
-from grid_based_multi_condition_optimizer_jax_loops import (  # noqa: E402
-    compute_bwcrps_condition_targets, compute_target_bias_curve_core)
+from empirical_targets import compute_bwcrps_condition_targets, compute_target_bias_curve_core  # noqa: E402
 from shared.config import config  # noqa: E402
 
 #: Recorded array -> attribute on the extracted result.
@@ -167,7 +166,7 @@ def test_no_surrogate_is_needed_to_build_targets(golden):
     before = set(sys.modules)
     _build(_inputs(golden, "sparse_180"))
     leaked = [name for name in set(sys.modules) - before
-              if "mirror_aware" in name or "wrapped_mixture" in name]
+              if "wrapped_mixture" in name]
     assert not leaked, f"target construction pulled in a surrogate: {leaked}"
 
 
@@ -218,42 +217,3 @@ def test_matched_operator_preserves_surface_clamp_for_dummy_feature_rows():
     operator = np.asarray(targets.feature_operator[0])
     np.testing.assert_allclose(operator[:, 0], 1.0, atol=1e-7)
     np.testing.assert_allclose(operator[:, 1:], 0.0, atol=1e-7)
-
-
-# ---------------------------------------------------------------------------
-# The call site, not just the helper
-# ---------------------------------------------------------------------------
-
-CHECKPOINT = ROOT / "pretrained" / "surface_legacy_epoch1425_10ktrain_20samples.pkl"
-
-
-@pytest.mark.skipif(not CHECKPOINT.exists(), reason="no pretrained surface checkpoint")
-@pytest.mark.parametrize("case", ["unequal_180", "sparse_360", "narrow_180", "reversal_360"])
-def test_the_optimizer_still_produces_the_pre_extraction_targets(golden, case):
-    """A test that pins the helper while the driver calls it differently proves
-    nothing. This goes through the optimizer that production actually runs and
-    reads the attributes the JIT objectives actually consume.
-    """
-    from grid_based_multi_condition_optimizer_jax_loops import (
-        GridBasedMultiConditionOptimizer)
-
-    optimizer = GridBasedMultiConditionOptimizer(
-        checkpoint_path=str(CHECKPOINT),
-        condition_datasets={name: jnp.asarray(values)
-                            for name, values in _inputs(golden, case).items()},
-        emp_density_weights_sd=F.DENSITY_CURVE_SPEC["emp_density_weights_sd"],
-        density_smoothing_sigma=F.DENSITY_CURVE_SPEC["density_smoothing_sigma"],
-        density_bandwidth_rule=F.DENSITY_CURVE_SPEC["density_bandwidth_rule"],
-        density_bandwidth_mode=F.DENSITY_CURVE_SPEC["density_bandwidth_mode"],
-    )
-
-    for recorded in UNCHANGED_FIELDS:
-        np.testing.assert_allclose(
-            np.asarray(getattr(optimizer, recorded)), golden[f"{case}/{recorded}"],
-            **REFERENCE_TOLERANCE,
-            err_msg=f"{case}: optimizer.{recorded} differs from the pre-extraction reference")
-
-    targets = _build(_inputs(golden, case))
-    np.testing.assert_array_equal(
-        np.asarray(optimizer.unified_bias_fd_weights),
-        np.asarray(targets.bias_fd_weights))

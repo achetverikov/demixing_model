@@ -1,14 +1,7 @@
 """Fit one subject's conditions by bounded gradient search over the WNM.
 
-This is the production WNM search backend. The hierarchical zoom and exhaustive
-lattice scan remain only for explicit historical surface-NN reproduction. The
-result uses the same downstream fit-result contract as those legacy backends.
-
-It is a superset, not an identical shape: like the exhaustive backend it adds
-``search_backend``, which the hierarchical backend does not emit at all. Any
-consumer reading that key must use ``.get`` with a default rather than indexing
-it, or a hierarchical result raises. The extra continuous-only fields are listed
-at the bottom of the returned dict.
+This is the production WNM search backend. The result records its search
+settings and outcome so fits can be resumed and compared reliably.
 
 It is the only backend that searches continuous parameters rather than a
 lattice, so its result carries the extra facts that only it can report: how many
@@ -52,7 +45,7 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
                    seed: int = 0,
                    verbosity: int = 1, solver_cache=None,
                    sub_support_summary=None) -> Dict:
-    """Bounded multistart gradient fit, in the shape the other backends return.
+    """Bounded multistart gradient fit.
 
     Args:
         predictor: a ``WrappedMixturePredictor``. Motor noise is applied here
@@ -66,8 +59,7 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
         n_starts: deterministic multistart count; production uses 64.
 
     Returns:
-        The ``fit_hierarchical_grid`` shape, plus ``loss_spread``, ``at_bound``,
-        ``n_starts`` and ``start_losses``.
+        Fitted parameters, losses, and multistart diagnostics.
     """
     if objective not in SUPPORTED_METHODS:
         raise ValueError(f"unknown objective {objective!r}; expected one of {SUPPORTED_METHODS}")

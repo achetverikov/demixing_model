@@ -46,5 +46,3 @@ Load checkpoints through `shared.surrogate.load_surrogate`. Use `production_chec
 The declared domain rounds the measured training hull outward to the design limits. `meta["corpus_hull"]` records the sampled bounds and `meta["declared_domain_overhang"]` records extrapolation at each edge. The packager allows up to 5° of outward rounding and checks predictions after reloading the packaged file.
 
 The corpus labels are `continuous_density_4.1p` for 20 samples and `continuous_density_4.1o` for 100 samples; independent validation uses `continuous_density_4.1q`. These generated corpora and results live under `$DEMIXING_ARTIFACT_ROOT`. They are not shipped and are not expected in a normal checkout.
-
-`surface_legacy_epoch1425_10ktrain_20samples.pkl` is also included for the surface-network tools. It uses a 128-row periodic decoder, a 128-column training grid, and the `circular_trajectory` objective on 10k-simulation KDE surfaces. Its three noise axes span 5–200 model degrees. See the [surface-network training guide](../neural_network_optimization/Neural_Network_Optimization_Pipeline_Documentation.md).
