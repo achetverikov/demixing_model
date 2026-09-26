@@ -63,3 +63,7 @@ MODEL_PIPELINE_FOR_AGENTS.md
 # Test reference data is version-controlled: a golden record that silently
 # vanishes turns its test into a skip, which reads as coverage.
 !tests/data/*.npz
+
+# Local Python package builds
+build/
+*.egg-info/

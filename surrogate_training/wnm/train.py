@@ -230,6 +230,9 @@ def main():
     store, source_meta = data_mod.load_source(
         args.source, corpus_files=args.corpus_files, corpus_sims=args.corpus_sims,
         seed=args.seed, progress=True)
+    n_samples = source_meta.get("n_samples")
+    if n_samples not in (20, 100):
+        raise ValueError("Training source must declare n_samples=20 or 100")
     source_strata = source_meta.pop('strata', None)
     if source_strata:
         source_meta['n_trajectory_labels'] = len(set(source_strata))
@@ -300,6 +303,7 @@ def main():
 
     history = []
     best = (np.inf, variables)
+    selected_step = None
     t0 = time.time()
     for step in range(1, args.steps + 1):
         if args.grouped_outcomes == 1:
@@ -330,6 +334,7 @@ def main():
                       if trajectory_metrics else np.inf))
             if score < best[0]:
                 best = (score, jax.tree.map(np.array, variables))
+                selected_step = step
             detail = ''
             if trajectory_metrics:
                 detail = (f"  trajectory {trajectory_metrics['trajectory_nll']:.4f}"
@@ -339,7 +344,24 @@ def main():
             print(f"step {step:6d}  train {float(loss):8.4f}  val {val_nll:8.4f}"
                   f"{detail}  ({time.time() - t0:.0f}s)", flush=True)
 
-    meta = dict(vars(args) | {'out': str(args.out), 'source_meta': source_meta,
+    if selected_step is None:
+        raise ValueError("No finite checkpoint-selection score; refusing to save unselected weights")
+    # Record the actual training design, including mirror augmentation. This is
+    # a coverage box, not evidence of held-out predictive accuracy.
+    designs = [train_store.design, train_store.mirrored]
+    if augmentation_train is not None and args.augmentation_fraction > 0:
+        designs.extend([augmentation_train.design, augmentation_train.mirrored])
+    if augmentation_train is not None and args.augmentation_fraction == 1:
+        designs = [augmentation_train.design, augmentation_train.mirrored]
+    design = np.concatenate(designs)
+    domain = {name: [float(design[:, i].min()), float(design[:, i].max())]
+              for i, name in enumerate(("sd_feat1", "sd_feat2", "sd_spat", "feat_diff"))}
+    meta = dict(vars(args) | {'training_schema': 'wnm-training/1',
+                              'selected_step': selected_step, 'n_samples': n_samples,
+                              'supported_domain': domain,
+                              'checkpoint_selection': ('held_out_parameter_groups'
+                                  if args.checkpoint_metric == 'val-nll' else 'selection_reference'),
+                              'out': str(args.out), 'source_meta': source_meta,
                               'augmentation_meta': augmentation_meta,
                               'selection_meta': selection_meta,
                               'best_checkpoint_score': best[0], 'history': history,

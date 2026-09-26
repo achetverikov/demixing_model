@@ -37,7 +37,8 @@ from shared.hashing import file_sha256 as _shared_file_sha256
 #: when the density objective moved to CCC.
 #: A bump invalidates every existing sidecar, which is the point: an unbumped
 #: schema change would let differently-computed runs share a digest.
-SCHEMA_VERSION = 3
+# v4 counts usable CSV trials before eligibility and stores scored counts.
+SCHEMA_VERSION = 4
 
 FINGERPRINT_FILENAME = "extended_run_fingerprint.json"
 
@@ -263,10 +264,8 @@ def compute_run_fingerprint(
         "degenerate_eps": None if degenerate_eps is None else float(degenerate_eps),
     }
 
-    # The historical payload is left byte-identical for a surface-backed lattice
-    # run. New fields appear only for configurations that did not exist under
-    # schema 2, so every in-progress run keeps resuming instead of being told its
-    # fingerprint no longer matches by a change that did not affect its numbers.
+    # Surface runs retain their field layout; schema v4 still invalidates old
+    # CSV populations whose minimum-trial threshold preceded cleaning.
     if str(surrogate_family) != "surface_nn":
         payload["surrogate_family"] = str(surrogate_family)
 

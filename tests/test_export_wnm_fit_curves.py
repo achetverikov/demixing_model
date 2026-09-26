@@ -16,7 +16,7 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
     operator = np.array([[1.0, 0.0], [0.25, 0.75]], dtype=np.float32)
     results = {
         "condition one": {
-            "n_trials": 2,
+            "n_trials": 4,  # Historical CSV count included two discarded rows.
             "data_df": np.array([[2.0, -1.0], [4.0, 3.0]], dtype=np.float32),
             "ordered_row_ids": np.array(["row-1", "row-2"]),
             "fit_group_id": "fit-one",
@@ -98,6 +98,7 @@ def test_direct_export_uses_stored_matched_operator_and_writes_plot(tmp_path, mo
     assert (output_dir / "fitted_curves.csv").exists()
     assert (output_dir / "trial_loglik_split" / "likelihood.parquet").exists()
     parameters = export_module.pd.read_csv(output_dir / "fitted_parameters.csv")
+    assert parameters.loc[0, "n_trials"] == 2
     assert parameters.loc[0, "fit_group_id"] == "fit-one"
     assert parameters.loc[0, "density_loss"] == 0.5
     assert parameters.loc[0, "eval_likelihood_loss"] == 2.0

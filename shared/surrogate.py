@@ -337,6 +337,8 @@ def detect_family(path, blob=None) -> str:
     blob = _read_blob(path) if blob is None else blob
     if not isinstance(blob, dict):
         raise ValueError(f"{path}: not a checkpoint (expected a dict, got {type(blob).__name__})")
+    if blob.get("meta", {}).get("training_schema") and not blob.get("meta", {}).get("artifact_schema"):
+        raise ValueError(f"{path} is a WNM training checkpoint; package it before production use")
     if "model_config" in blob and "variables" in blob:
         return FAMILY_WNM
     if "apply_fn" in blob and "params" in blob:

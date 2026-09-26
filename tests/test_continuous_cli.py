@@ -44,7 +44,9 @@ def dataset(tmp_path_factory):
             "abs_td_dist": feat, "bias_to_distr_corr": ((bias + 180) % 360) - 180,
             "is_outlier": False}))
     path = tmp_path_factory.mktemp("data") / "two_conditions.csv"
-    pd.concat(rows).to_csv(path, index=False)
+    invalid = rows[0].iloc[:20].copy()
+    invalid["bias_to_distr_corr"] = np.nan
+    pd.concat([*rows, invalid]).to_csv(path, index=False)
     return path
 
 
@@ -87,6 +89,7 @@ def test_a_continuous_run_completes_and_writes_results(baseline_run):
     assert results, "no conditions were written"
     for entry in results.values():
         params = np.asarray(entry["density_fitted_params"])
+        assert entry["n_trials"] == len(entry["data_df"]) == 60
         assert params.shape[-1] >= 3
         assert np.all(np.isfinite(params))
         # The shared spatial SD and the search bounds it came from.
@@ -249,3 +252,12 @@ def test_cli_allows_wnm_on_csv_and_explains_when_bundles_are_preferred(dataset, 
     combined = completed.stdout + completed.stderr
     assert "ordinary single-model analyses" in combined
     assert (tmp_path / "run" / "extended_fit_results.pkl").exists()
+
+
+def test_min_trials_counts_only_scored_rows(dataset, tmp_path, monkeypatch):
+    """CLI contract: invalid CSV rows cannot make a condition eligible."""
+    import fit_model_to_data as F
+    def unexpected_fit(*args, **kwargs):
+        raise AssertionError("No condition has 70 usable trials")
+    monkeypatch.setattr(F, "process_subject", unexpected_fit)
+    _run(dataset, tmp_path / "below_threshold", min_trials=70)

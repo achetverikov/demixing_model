@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Package a selected WNM training checkpoint into a self-contained production artifact.
 
-The training scripts under ``results/wnm_4.1*/scripts`` write a
+Maintained trainer checkpoints carry their architecture and training-domain
+metadata and need only --fit, --n-samples, and --out.
+
+Historical training scripts under ``results/wnm_4.1*/scripts`` write a
 fit dictionary -- ``variables``, ``selected_step``, ``final_step``,
 ``validation_nll`` and the path of the run checkpoint it was selected from.  That
 is enough to continue training/evaluation but not enough to run in production: it records no
@@ -19,6 +22,7 @@ Usage (from the repo root)::
     python -m surrogate_training.wnm.package_artifact \\
         --fit /path/to/wnm_k12_full_n20_alldata-<digest>-best.pkl \\
         --corpus-stage /path/to/results/wnm_4.1p \\
+        --n-samples 20 \\
         --out pretrained/wnm_k12_20samples.pkl
 
 The packaged file is verified before it reaches its destination: it is written to
@@ -274,12 +278,55 @@ def predictions(model, variables, panel):
     return {key: np.asarray(value) for key, value in dist.items()}
 
 
+def package_training_checkpoint(fit, fit_path, out, n_samples):
+    """Package the maintained trainer's self-contained, provenance-bearing output."""
+    training = fit.get("meta", {})
+    if training.get("training_schema") != "wnm-training/1":
+        raise SystemExit("Checkpoint lacks maintained training provenance; retrain with the current trainer")
+    if training.get("n_samples") != n_samples:
+        raise SystemExit("Requested n_samples does not match the training checkpoint")
+    if not training.get("selected_step"):
+        raise SystemExit("Checkpoint has no selected training step")
+    domain = training["supported_domain"]
+    low = np.array([domain[key][0] for key in ("sd_feat1", "sd_feat2", "sd_spat", "feat_diff")])
+    high = np.array([domain[key][1] for key in ("sd_feat1", "sd_feat2", "sd_spat", "feat_diff")])
+    if (not np.all(np.isfinite([low, high])) or np.any(low <= 0)
+            or np.any(high <= low) or high[3] > 180):
+        raise SystemExit("Training domain must have finite positive, nonzero-width axes and feat_diff <= 180")
+    panel = np.asarray([low, (low + high) / 2, high], dtype=np.float32)
+    model = wm.ConditionalWrappedMixture(**fit["model_config"])
+    meta = dict(training, artifact_schema=ARTIFACT_SCHEMA, family="wnm",
+                source_fit=fit_path.name, source_checkpoint_digest=file_digest(fit_path),
+                period_degrees=wm.PERIOD, density_units="per model degree",
+                parameter_order=["sd_feat1", "sd_feat2", "sd_spat", "feat_diff"],
+                bias_sign_convention="positive = attraction toward the other item",
+                spatial_separation_degrees=42.0, dprime_relation="dprime = 42 / sd_spat",
+                component_convention="predicts component 1; component 2 by swapping sd_feat1/sd_feat2",
+                supported_domain_source="training parameter hull including mirrored rows",
+                supported_domain_note="Coverage box only; does not certify prediction accuracy throughout the box")
+    reference = predictions(model, fit["variables"], panel)
+    if not all(np.all(np.isfinite(value)) for value in reference.values()):
+        raise SystemExit("Checkpoint produces non-finite predictions")
+    staged = out.with_name(out.name + ".packaging")
+    try:
+        wm.save_model(staged, fit["variables"], model, meta)
+        loaded, variables, loaded_meta = wm.load_model(staged)
+        packaged = predictions(loaded, variables, panel)
+        for key in reference:
+            np.testing.assert_array_equal(packaged[key], reference[key])
+        validate_params(panel, domain=domain_from_meta(loaded_meta))
+        staged.replace(out)
+    finally:
+        staged.unlink(missing_ok=True)
+    print(f"wrote {out}; verified n_samples={n_samples}, step={training['selected_step']}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--fit", type=Path, required=True,
-                        help="Research fit pickle (variables + selected_step).")
-    parser.add_argument("--corpus-stage", type=Path, required=True,
+                        help="Maintained training checkpoint or historical selected-fit pickle.")
+    parser.add_argument("--corpus-stage", type=Path,
                         help="Stage directory whose corpus trained the fit, e.g. "
                              "results/wnm_4.1p.")
     parser.add_argument("--n-samples", type=int, required=True, choices=[20, 100],
@@ -298,6 +345,13 @@ def main():
 
     with open(args.fit, "rb") as handle:
         fit = pickle.load(handle)
+    if "model_config" in fit:
+        if args.corpus_stage is not None or args.held_out:
+            parser.error("Maintained training checkpoints carry their own domain and selection provenance; omit --corpus-stage and --held-out")
+        package_training_checkpoint(fit, args.fit, args.out, args.n_samples)
+        return
+    if args.corpus_stage is None:
+        parser.error("Historical selected-fit checkpoints require --corpus-stage")
     for key in ("variables", "selected_step"):
         if key not in fit:
             raise SystemExit(f"{args.fit} is missing {key!r}; this is not a WNM training checkpoint")
