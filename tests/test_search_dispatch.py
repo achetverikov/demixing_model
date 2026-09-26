@@ -151,7 +151,7 @@ def test_exhaustive_requires_a_cache_path(tmp_path):
 def test_the_backend_is_recorded_in_the_run_fingerprint(cache_root, tmp_path):
     """Two runs that searched differently must not resume onto each other: their
     results are not interchangeable."""
-    import run_fingerprint as rf
+    from model_fit_to_data import run_fingerprint as rf
     root, key = cache_root
 
     out = tmp_path / "fp"

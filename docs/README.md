@@ -17,15 +17,13 @@ The remainder of this file documents README figure generation and the historical
 
 ## README figure sources
 
-`generate_pipeline_figure.py` creates an experimental pipeline figure that is not currently embedded in the main README. Its construction panels are illustrations grounded in the model code rather than a literal depiction of one simulation or the exact neural-network architecture. The likelihood surface, prediction curves, behavioral observations, and fitted curve are read from project outputs.
-
-The committed figure uses a broad surface from the full simulation outputs and the 100-sample predictions prepared for CSH2026. Its defaults match the local outputs used for rendering:
+`generate_pipeline_figure.py` creates a current WNM pipeline illustration that is not embedded in the main README. Its construction panels are explanatory; the response-density panel uses a small run of the current WNM simulator, the network tile uses the packaged 20-sample predictor, and the prediction and fitting panels use the outputs described below. After preparing those outputs, run:
 
 ```bash
 python docs/generate_pipeline_figure.py
 ```
 
-Because averaged surfaces are not currently shipped, regenerating the figure requires a local `averaged_sf1_*.pkl` surface supplied with `--surface`. The CSH2026 curves default to `../results/csh2026_100samples_circular/sim_model_preds_raw_nn.csv` and can be replaced with `--csh-predictions`. The fitting inputs can likewise be changed with `--trials` and `--fit-curves`.
+Use `--predictions`, `--trials`, and `--fit-curves` to select other WNM outputs.
 
 `generate_readme_figures.py` creates the two data-derived figures embedded in the main README. It does not reuse the repository's older diagnostic images. The prediction figure reads the output of the documented prediction example:
 
@@ -37,7 +35,7 @@ python surface_simulator_for_predictions/surface_simulator.py \
   --skip-motor-noise
 ```
 
-The fitting figure reads the prepared <a href="https://doi.org/10.1038/nn.3689" title="Fischer, J., &amp; Whitney, D. (2014). Serial dependence in visual perception. Nature Neuroscience, 17(5), 738–743. https://doi.org/10.1038/nn.3689">Fischer and Whitney (2014)</a> trials and fitted curves written by `export_wnm_fit_curves.py` under `csv_exports/fitted_curves.csv`. The generator defaults to the maintained `smoothed_exp` mean-bias objective. Pass `--fit-objective expectation` only when intentionally reproducing an older hard-binned expectation fit. After running `demo_fischer_whitney.py`, regenerate both assets with:
+The fitting figure reads the prepared <a href="https://doi.org/10.1038/nn.3689" title="Fischer, J., &amp; Whitney, D. (2014). Serial dependence in visual perception. Nature Neuroscience, 17(5), 738–743. https://doi.org/10.1038/nn.3689">Fischer and Whitney (2014)</a> trials and fitted curves written by `export_wnm_fit_curves.py` under `csv_exports/fitted_curves.csv`. It excludes the pooled `combined` pseudo-subject from both the observations and fitted curve, then averages the four real subjects. The generator defaults to the maintained `smoothed_exp` mean-bias objective. Pass `--fit-objective expectation` only when intentionally reproducing an older hard-binned expectation fit. After running `demo_fischer_whitney.py`, regenerate both assets with:
 
 ```bash
 python docs/generate_readme_figures.py

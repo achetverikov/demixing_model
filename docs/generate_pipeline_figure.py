@@ -1,29 +1,34 @@
 #!/usr/bin/env python3
-"""Generate a model-grounded illustration of the Demixing Model pipeline.
+"""Generate a model-grounded illustration of the current WNM pipeline.
 
-The construction panels illustrate the operations performed by the code rather
-than one exact training run. The likelihood surface, CSH2026 predictions,
-behavioral observations, and fitted curve come from project outputs.
+The construction panels illustrate the operations rather than one training run.
+The response density comes from the WNM simulator; the network tile and curves
+use packaged-WNM predictions and current fit exports.
 """
 
 import argparse
-import pickle
 import sys
 from pathlib import Path
 
+import jax
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
 import numpy as np
 import pandas as pd
+from scipy.ndimage import gaussian_filter
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "neural_network_optimization"))
 
-from docs.generate_readme_figures import prepare_fitting_data  # noqa: E402
-from shared.utils import AveragedSurface  # noqa: E402
+from docs.generate_readme_figures import _first_list, prepare_fitting_data  # noqa: E402
+from shared.mu1_axis import bin_indices_np, mu1_grid_np  # noqa: E402
+from shared.prediction import predictor_from_surrogate  # noqa: E402
+from shared.surrogate import load_surrogate  # noqa: E402
+from surface_computation.wnm_simulation import simulate  # noqa: E402
+
+plt.style.use("default")
 
 
 NAVY = "#101f5b"
@@ -42,15 +47,6 @@ def _require(path: Path, label: str) -> Path:
     if not path.is_file():
         raise FileNotFoundError(f"{label} not found: {path}")
     return path
-
-
-class _SurfaceUnpickler(pickle.Unpickler):
-    """Read surfaces saved before AveragedSurface moved out of __main__."""
-
-    def find_class(self, module, name):
-        if module == "__main__" and name == "AveragedSurface":
-            return AveragedSurface
-        return super().find_class(module, name)
 
 
 def _rounded_box(fig, bounds, edge, face="white", linewidth=1.5, radius=0.018):
@@ -83,12 +79,31 @@ def _polyline(fig, points, color=NAVY, linewidth=2.2):
     fig.lines.append(line)
 
 
-def _load_surface(path: Path):
-    with _require(path, "Averaged surface").open("rb") as stream:
-        record = _SurfaceUnpickler(stream).load()
-    if "parameters" not in record or "surface" not in record:
-        raise ValueError(f"Unexpected averaged-surface structure: {path}")
-    return record
+def _response_surfaces(predictions):
+    """Simulated training responses and a matching packaged-WNM prediction."""
+    row = predictions.iloc[len(predictions) // 2]
+    feature_grid = _first_list(predictions["feat_diff_grid"])
+    params = {name: float(row[name]) for name in ("sd_feat1", "sd_feat2", "sd_spat")}
+    n_samples = int(predictions["n_samples"].dropna().iloc[0])
+    design = np.column_stack((
+        *(np.full_like(feature_grid, params[name]) for name in params), feature_grid,
+    ))
+    predictor = predictor_from_surrogate(load_surrogate(n_samples=n_samples))
+    mass = np.asarray(predictor.cell_probabilities(design))
+    bias_grid = mu1_grid_np()
+    responses = np.asarray(simulate(jax.random.PRNGKey(7), design,
+                                    n_simulations=200, n_samples=n_samples,
+                                    block_rows=4))[:, :, 0]
+    counts = np.stack([np.bincount(bin_indices_np(row), minlength=len(bias_grid))
+                       for row in responses])
+    simulated = gaussian_filter(counts.astype(float), sigma=(1.5, 1.5),
+                                mode=("nearest", "wrap"))
+    simulated /= simulated.sum(axis=1, keepdims=True)
+    return {"parameters": {**params, "n_samples": n_samples,
+                           "random_seed": 7},
+            "surface": simulated.T, "predicted_surface": mass.T,
+            "feat_diff_grid": feature_grid,
+            "mu1_bias_grid": bias_grid}
 
 
 def _generate_evidence(surface_params, feature_difference=40.0, ident_difference=25.0):
@@ -125,16 +140,13 @@ def _plot_simulation(ax, surface_params):
     ax.grid(color=GRID, linewidth=0.4, alpha=0.5)
 
 
-def _surface_density(record):
-    surface = record["surface"]
-    log_density = np.asarray(surface.mu1_comp1_surface, dtype=float)
-    feature_grid = np.asarray(surface.feat_diff_grid, dtype=float)
-    bias_grid = np.asarray(surface.mu1_bias_grid, dtype=float)
+def _surface_density(record, field="surface"):
+    density = np.asarray(record[field], dtype=float)
+    feature_grid = np.asarray(record["feat_diff_grid"], dtype=float)
+    bias_grid = np.asarray(record["mu1_bias_grid"], dtype=float)
     mask_bias = (bias_grid >= -60) & (bias_grid <= 60)
     mask_feature = feature_grid <= 140
-    log_density = log_density[np.ix_(mask_bias, mask_feature)]
-    relative = np.exp(log_density - np.nanmax(log_density, axis=0, keepdims=True))
-    relative /= np.maximum(relative.sum(axis=0, keepdims=True), np.finfo(float).tiny)
+    relative = density[np.ix_(mask_bias, mask_feature)]
     relative /= relative.max()
     return feature_grid[mask_feature], bias_grid[mask_bias], relative
 
@@ -174,7 +186,7 @@ def _plot_network(ax, record):
         color = ("#91b7e9", "#9a76dd", "#80c96b")[index]
         ax.scatter(np.full_like(ys, x), ys, s=52, color=color, edgecolor=NAVY,
                    linewidth=0.65, zorder=2)
-    _, _, tile = _surface_density(record)
+    _, _, tile = _surface_density(record, "predicted_surface")
     ax.imshow(tile, extent=(0.79, 0.98, 0.33, 0.67), origin="lower",
               cmap="viridis", aspect="auto", interpolation="bilinear", zorder=2)
     for y in layer_y[-1]:
@@ -186,35 +198,23 @@ def _plot_network(ax, record):
 
 
 def _plot_predictions(ax, predictions):
-    required = {"sd_feat1", "sd_feat2", "sd_spat", "feat_diff", "mu1_density_asymmetry"}
+    required = {"sd_feat1", "sd_feat2", "sd_spat", "mu1_expectation_curve", "feat_diff_grid"}
     missing = required.difference(predictions.columns)
     if missing:
-        raise ValueError(f"CSH2026 prediction export lacks columns: {sorted(missing)}")
-    selected = predictions[
-        (predictions["sd_feat1"] == 40)
-        & predictions["sd_feat2"].isin((20, 40, 60))
-        & (predictions["sd_spat"] == 20)
-    ]
-    styles = (
-        (20, "Higher", "#d55e00"),
-        (40, "Same", "#009e73"),
-        (60, "Lower", "#0072b2"),
-    )
-    for non_target_noise, label, color in styles:
-        curve = selected[selected["sd_feat2"] == non_target_noise].sort_values("feat_diff")
-        if curve.empty:
-            raise ValueError(f"CSH2026 predictions are missing the '{label}' curve")
-        ax.plot(curve["feat_diff"], 100 * curve["mu1_density_asymmetry"],
-                color=color, linewidth=1.8, label=label)
+        raise ValueError(f"WNM prediction export lacks columns: {sorted(missing)}")
+    feature_grid = _first_list(predictions["feat_diff_grid"])
+    for (_, row), color in zip(predictions.iterrows(), ("#2c7bb6", "#f28e2b", "#b2182b")):
+        ax.plot(feature_grid, np.asarray(row["mu1_expectation_curve"]),
+                color=color, linewidth=1.8, label=f"{row['sd_spat']:g}°")
     ax.axhline(0, color="#7b8794", linewidth=0.8, linestyle=(0, (4, 3)))
-    ax.set_xlim(4, 180)
-    ax.set_xticks((4, 45, 90, 135, 180))
+    ax.set_xlim(feature_grid[0], feature_grid[-1])
+    ax.set_xticks((2, 45, 90, 135, 180))
     ax.set_xlabel("item dissimilarity (°)", fontsize=7, labelpad=1)
-    ax.set_ylabel("bias (%)", fontsize=7.3, labelpad=2)
+    ax.set_ylabel("predicted bias (°)", fontsize=7.3, labelpad=2)
     ax.tick_params(labelsize=6.5, length=2)
     ax.spines[["top", "right"]].set_visible(False)
     ax.grid(color=GRID, linewidth=0.45, alpha=0.65)
-    ax.legend(title="Target noise relative\nto non-target", frameon=False,
+    ax.legend(title="Identifiability noise", frameon=False,
               fontsize=6, title_fontsize=6, loc="lower right", handlelength=2.3)
 
 
@@ -242,8 +242,8 @@ def _plot_fit(ax, trials_path, curves_path, objective):
 
 
 def create_pipeline_figure(args):
-    surface_record = _load_surface(args.surface)
-    predictions = pd.read_csv(_require(args.csh_predictions, "CSH2026 prediction export"))
+    predictions = pd.read_parquet(_require(args.predictions, "WNM prediction export"))
+    surface_record = _response_surfaces(predictions)
     _require(args.trials, "Prepared behavioral trials")
     _require(args.fit_curves, "Fitted-curve export")
 
@@ -251,7 +251,7 @@ def create_pipeline_figure(args):
     fig.text(0.5, 0.963, "Demixing Model pipeline", ha="center", va="top",
              fontsize=29, weight="bold", color=NAVY)
     fig.text(0.5, 0.912,
-             "From simulated evidence to theoretical predictions and fits of behavioral data",
+             "From simulated responses to predictions and fits of behavioral data",
              ha="center", va="top", fontsize=14, style="italic", color="#49619c")
 
     _rounded_box(fig, (0.018, 0.055, 0.445, 0.80), CONSTRUCTION, CONSTRUCTION_BG)
@@ -273,8 +273,8 @@ def create_pipeline_figure(args):
     for bounds in construction_boxes:
         _rounded_box(fig, bounds, CONSTRUCTION, "white", linewidth=1.1, radius=0.012)
     fig.text(0.091, 0.704, "1. Simulations", ha="center", fontsize=12, weight="bold", color=INK)
-    fig.text(0.229, 0.704, "2. Surface creation", ha="center", fontsize=12, weight="bold", color=INK)
-    fig.text(0.378, 0.704, "3. Neural-network training", ha="center", fontsize=10.5,
+    fig.text(0.229, 0.704, "2. Response density", ha="center", fontsize=12, weight="bold", color=INK)
+    fig.text(0.378, 0.704, "3. Surrogate training", ha="center", fontsize=10.5,
              weight="bold", color=INK)
 
     sim_ax = fig.add_axes((0.041, 0.365, 0.100, 0.24))
@@ -288,15 +288,15 @@ def create_pipeline_figure(args):
              "simulate noisy evidence\nfrom two items",
              ha="center", va="center", fontsize=8.5, color=INK)
     fig.text(0.229, 0.245,
-             "combine simulations into\nlikelihood surfaces",
+             "learn how response bias\nchanges with dissimilarity",
              ha="center", va="center", fontsize=8.5, color=INK)
     fig.text(0.378, 0.245,
-             "train a fast approximation\nof those surfaces",
+             "train a wrapped-mixture\ndensity predictor",
              ha="center", va="center", fontsize=8.5, color=INK)
 
     checkpoint_bounds = (0.472, 0.31, 0.098, 0.27)
     _rounded_box(fig, checkpoint_bounds, NAVY, "white", linewidth=1.4, radius=0.014)
-    fig.text(0.521, 0.505, "PRETRAINED", ha="center", fontsize=8.5, color=NAVY, weight="bold")
+    fig.text(0.521, 0.505, "PRETRAINED WNM", ha="center", fontsize=8.5, color=NAVY, weight="bold")
     fig.text(0.521, 0.445, "Demixing\nModel", ha="center", va="center",
              fontsize=14, color=INK, weight="bold")
     fig.text(0.521, 0.370,
@@ -338,7 +338,7 @@ def create_pipeline_figure(args):
     _arrow(fig, (0.580, 0.326), (0.608, 0.326), linewidth=2.2)
 
     fig.text(0.5, 0.022,
-             "The surface and curves come from model outputs; the construction diagrams are explanatory illustrations.",
+             "Response density comes from WNM simulations; network output and curves use the packaged predictor.",
              ha="center", fontsize=8, color=MUTED)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(args.output, dpi=args.dpi, bbox_inches="tight", facecolor="white")
@@ -347,25 +347,14 @@ def create_pipeline_figure(args):
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--surface", type=Path,
-        default=Path(
-            "../results/averaged_surfaces_10k_100samples_circular/"
-            "averaged_sf1_40.0_sf2_60.0_sp_40.0.pkl"
-        ),
-        help="A saved averaged_sf1_*.pkl surface (generated locally; not shipped).",
-    )
-    parser.add_argument(
-        "--csh-predictions", type=Path,
-        default=Path("../results/csh2026_100samples_circular/sim_model_preds_raw_nn.csv"),
-        help="Raw CSH2026 predictions generated with the 100-sample pretrained model.",
-    )
+    parser.add_argument("--predictions", type=Path,
+                        default=Path("results/prediction_example.parquet"))
     parser.add_argument("--trials", type=Path, default=Path("example_data/fischer_whitney_prepared.csv"))
     parser.add_argument(
         "--fit-curves", type=Path,
         default=Path("results/fischer_whitney_20samples_circular/csv_exports/fitted_curves.csv"),
     )
-    parser.add_argument("--fit-objective", default="expectation")
+    parser.add_argument("--fit-objective", default="smoothed_exp")
     parser.add_argument("--output", type=Path, default=Path("docs/images/model_pipeline.png"))
     parser.add_argument("--dpi", type=int, default=180)
     return parser.parse_args()

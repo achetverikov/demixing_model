@@ -37,7 +37,8 @@ def prepare_fitting_data(trials_path: Path, curves_path: Path, objective: str):
     )
 
     curves = pd.read_csv(curves_path)
-    curves = curves[curves["optimizer"] == objective]
+    curves = curves[(curves["optimizer"] == objective)
+                    & (curves["subject"] != "combined")]
     if curves.empty:
         raise ValueError(f"No {objective!r} curves found in {curves_path}")
     fitted = curves.groupby("feat_diff", as_index=False).agg(
