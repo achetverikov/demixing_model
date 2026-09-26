@@ -27,3 +27,8 @@ python docs/generate_readme_figures.py
 ```
 
 Alternative or isolated fit outputs can be selected with `--fit-curves`; use `--predictions` for an alternative prediction export. Commit the rendered PNG files together with any generator change so GitHub does not need to run the model to display the README.
+
+
+## Historical transition archive
+
+`history/wnm_transition/` contains the quantitative findings and decision record from the 2026 WNM transition. Those files are archival evidence, not current run instructions. Paths and commands inside individual archived findings may reflect the transition-era repository layout; use the root README and the current package READMEs for executable workflows.
