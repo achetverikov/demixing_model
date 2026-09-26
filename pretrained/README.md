@@ -8,6 +8,8 @@ mixtures:
 | `wnm_k12_20samples.pkl` | 12 | (128, 256, 256) | 0.25 | 20 | 90000 | continuous_density_4.1p | 3.9785 |
 | `wnm_k12_100samples.pkl` | 12 | (128, 256, 256) | 0.25 | 100 | 89000 | continuous_density_4.1o | 3.1657 |
 
+The `continuous_density_4.1*` values are immutable historical corpus-stage labels, not current source-code paths.
+
 Fresh fitting and prediction calls select these by `n_samples`. The older
 `model_epoch*.pkl` surface-network checkpoints are retained only for historical
 reproduction and must be requested explicitly.
@@ -78,11 +80,11 @@ WNM fit searches `sd_feat` from 2.5 while the surface backend keeps its trained
 [5, 200] on every axis. That applies to the public command too, under
 `--search continuous`; a surface-backed run is unaffected.
 
-**Regenerating one**: `continuous_density/package_wnm_artifact.py` packages a research fit
-from a training stage's `run_cache/`. It copies weights, writes to a temporary
-path, checks that the reloaded artifact reproduces the research checkpoint
-exactly and accepts its own advertised domain, and only then renames it into
-place.
+**Regenerating one**: `python -m surrogate_training.wnm.package_artifact` packages a
+selected training checkpoint from a training stage's `run_cache/`. It copies
+weights, writes to a temporary path, checks that the reloaded artifact reproduces
+the selected checkpoint exactly and accepts its own advertised domain, and only
+then renames it into place.
 
 ## How consumers pick a checkpoint
 
