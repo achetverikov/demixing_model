@@ -1,3 +1,5 @@
+> **Archived transition record.** This file preserves the evidence and terminology used during the 2026 WNM cutover. Commands, paths, and module names may reflect the transition-era repository layout and are not current run instructions. See the root README and current package READMEs for executable workflows.
+
 # Parameter recovery — closed-loop panel (2026-09-07)
 
 This is the first, diagnostic panel from transition step 5. Responses are drawn
