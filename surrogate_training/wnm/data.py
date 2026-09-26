@@ -118,7 +118,7 @@ def split_by_params(store: SampleStore, val_fraction: float = 0.1, seed: int = 0
 
 
 def load_npz(path) -> Tuple[SampleStore, dict]:
-    """Load a file written by ``generate_training_data.py``."""
+    """Load an NPZ written by :mod:`surface_computation.generate_wnm_training_data`."""
     blob = np.load(Path(path), allow_pickle=True)
     meta = json.loads(str(blob['meta']))
     if 'strata' in blob and blob['strata'].size:
