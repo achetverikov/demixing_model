@@ -10,11 +10,11 @@ Usage (from the repo root)::
     PYTHONPATH=. python -m surrogate_training.wnm.train \
         --source sim_samples_10k_100samples_circular_em_fullcov_free_weights \
         --corpus-files 800 --corpus-sims 400 --components 8 \
-        --out $DEMIXING_ARTIFACT_ROOT/wnm/wnmix_k8.pkl
+        --out $DEMIXING_ARTIFACT_ROOT/wnm/run_checkpoint.pkl
 
 ``--source`` accepts either a corpus directory name under
 ``$DEMIXING_ARTIFACT_ROOT`` (grid parameters, free of new simulation cost) or an
-``.npz`` written by ``python -m surface_computation.generate_wnm_training_data`` (continuous parameters).
+``.npz`` written by ``python -m surface_computation.generate_wnm_training_data`` (continuous parameters). The output of this trainer is a training checkpoint; use ``python -m surrogate_training.wnm.package_artifact`` to create a self-contained production artifact.
 """
 
 from __future__ import annotations

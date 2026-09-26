@@ -183,7 +183,7 @@ if __name__ == "__main__":
                 "--data-path",       str(csv_path),
                 "--n-samples",       str(n_samples),
                 "--output-dir",      out_dir,
-                "--include-methods", "density", "expectation", "balanced_crps",
+                "--include-methods", "density", "smoothed_exp", "balanced_crps",
                                      "bias_weighted_crps", "likelihood",
                 "--circ-space",      "180",
             ], cwd=REPO_ROOT, env=ENV, log=log)
@@ -193,7 +193,7 @@ if __name__ == "__main__":
                 PYTHON, "model_fit_to_data/export_wnm_fit_curves.py",
                 "--results-dir",     out_dir,
                 "--output-dir",      f"{out_dir}/csv_exports",
-                "--methods",         "density", "expectation", "balanced_crps",
+                "--methods",         "density", "smoothed_exp", "balanced_crps",
                                      "bias_weighted_crps", "likelihood",
             ], cwd=REPO_ROOT, env=ENV, log=log)
 

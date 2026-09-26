@@ -251,19 +251,32 @@ The pipeline accepts environment overrides such as `DEMIXING_MODEL`, `RESULTS`, 
 
 ## Where to find things
 
+### Production package layout
+
+The current WNM architecture is organized by function:
+
+- `shared/wnm.py` contains the maintained wrapped-normal-mixture runtime and artifact format.
+- `shared/prediction.py` is the family-aware prediction API used by fitting, plotting, exports, and public prediction tools.
+- `model_fit_to_data/` owns fitting objectives, target construction, optimization, result identity, likelihood replay, exports, and plotting.
+- `surrogate_training/wnm/` owns WNM training and packaging.
+- `surface_computation/` owns simulation, WNM design/training-data generation, and the retained historical surface-generation path.
+
+The former `continuous_density/` transition namespace has been removed. Historical transition evidence is preserved under `docs/history/wnm_transition/` and in git history.
+
+
 - `demo_fischer_whitney.py` — end-to-end fitting demonstration.
 - `example_data/` — small fitting and prediction inputs.
 - `pretrained/` — the included 20- and 100-sample trained models.
-- `model_fit_to_data/` — fitting, postprocessing, and plotting.
-- `surface_simulator_for_predictions/` — Python and R prediction interfaces.
-- `surface_computation/` — simulation, WNM design, training-data generation, and historical likelihood-surface generation.
-- `surrogate_training/wnm/` — WNM training and artifact packaging.
+- `model_fit_to_data/` — fitting, postprocessing, and plotting. See [Batch Fit Analysis Pipeline](model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md).
+- `surface_simulator_for_predictions/` — Python and R prediction interfaces. See its [README](surface_simulator_for_predictions/README.md).
+- `surface_computation/` — simulation, WNM design, training-data generation, and historical likelihood-surface generation. See its [README](surface_computation/README.md).
+- `surrogate_training/wnm/` — WNM training and artifact packaging. See its [README](surrogate_training/wnm/README.md).
 - `neural_network_optimization/` — historical surface-NN averaging/training code retained for reproduction.
-- `surface_browser/` — Streamlit browser for locally available surfaces.
-- `shared/` — internal functions used by several parts of the model.
+- `surface_browser/` — WNM-first Streamlit prediction browser plus optional historical stored-surface views. See its [README](surface_browser/README.md).
+- `shared/` — maintained runtime, prediction, identity, circular-geometry, and common data helpers. See its [README](shared/README.md).
 - `cloud/` — distributed Vast.ai/object-store tooling and benchmarks.
 - `tests/` — focused tests, a WNM end-to-end smoke, and historical surface-generation smokes.
-- `docs/` — README figure assets and their generator.
+- `docs/` — README figure assets/generators plus archived transition findings under `docs/history/wnm_transition/`.
 
 ## Check that the installation works
 

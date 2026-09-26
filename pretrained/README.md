@@ -18,9 +18,9 @@ reproduction and must be requested explicitly.
 
 **Circular geometry**: the first feature dimension is wrapped (360° model space), matching how the surfaces are computed in `surface_computation/jax_fit_functions.py` (`wrap_1st = True`).
 
-**Training surfaces**: "10k" means 10,000 simulations per surface, not grid points. The parameter grid is the combined Level-1+2 grid: sd_feat1, sd_feat2, sd_spat each on a **5° step over [5, 200]** (40 values per axis). The folder stores the canonical half (sd_feat1 ≤ sd_feat2); mirror augmentation produces 64,005 stored training rows because five diagonal cases are duplicated in the source bundles. This negligible duplication does not change batch geometry or training speed.
+**Historical surface-NN training surfaces**: "10k" means 10,000 simulations per surface, not grid points. The parameter grid is the combined Level-1+2 grid: sd_feat1, sd_feat2, sd_spat each on a **5° step over [5, 200]** (40 values per axis). The folder stores the canonical half (sd_feat1 ≤ sd_feat2); mirror augmentation produces 64,005 stored training rows because five diagonal cases are duplicated in the source bundles. This negligible duplication does not change batch geometry or training speed.
 
-**Parameter range**: sd_feat1, sd_feat2, sd_spat all swept over [5, 200] degrees (model space). Fitting-time queries down to sd_spat = 5 are therefore inside training coverage.
+**Historical surface-NN parameter range**: sd_feat1, sd_feat2, sd_spat were swept over [5, 200] degrees (model space). This paragraph describes the retained surface checkpoints, not the WNM corpus/domain below.
 
 ## Conditional wrapped-normal mixture (WNM)
 
@@ -88,7 +88,7 @@ then renames it into place.
 
 ## How consumers pick a checkpoint
 
-Three defects here were found by audit on 2026-09-06 and are fixed; the rules
+Several checkpoint-identity defects were found during the 2026 transition review and are fixed; the rules
 that replaced them are worth knowing, because each was a way to use one model's
 predictions with another model's parameters and say nothing about it.
 

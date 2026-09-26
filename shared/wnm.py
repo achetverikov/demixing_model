@@ -1,13 +1,12 @@
 """Conditional wrapped-normal mixture density for Demixing Model bias.
 
-Represents ``p(b | sd_feat1, sd_feat2, sd_ident, feat_diff)`` directly as
+Represents ``p(b | sd_feat1, sd_feat2, sd_spat, feat_diff)`` directly as
 
     q(b|x) = sum_k pi_k(x) * WN(b; mu_k(x), sigma_k(x))
 
 with (pi, mu, sigma) produced by a small MLP.  ``b`` is the ``mu1_bias`` value
 returned by ``jax_fit_main.simulate_dual_component_bias_distribution``; the
-circle is 360 degrees wide and densities are **per degree**, the same
-convention the production surface network uses
+circle is 360 degrees wide and densities are **per degree**, the same per-degree convention used by the retained historical surface network
 (``mirror_aware_model.normalize_to_density_flexible``).
 
 There is no bias grid, no feat_diff grid and no KDE anywhere in this module.
@@ -24,8 +23,9 @@ import jax.numpy as jnp
 PERIOD = 360.0
 
 # Fixed featurisation constants so a checkpoint is self-contained and does not
-# depend on the training set's empirical moments.  They bracket the simulated
-# design domain (sd 5-200, feat_diff 2-180) from `design.py`.
+# depend on the training set's empirical moments.  These are fixed input-scaling
+# anchors, not supported-domain bounds: packaged artifacts advertise their actual
+# supported domain separately (feature SD currently extends below 5 degrees).
 SD_LOG_LO = float(jnp.log(5.0))
 SD_LOG_HI = float(jnp.log(200.0))
 FEAT_DIFF_LO = 0.0
@@ -41,7 +41,7 @@ def featurise(params):
     """Map raw parameters to normalised network inputs.
 
     Args:
-        params: ``(..., 4)`` array of ``[sd_feat1, sd_feat2, sd_ident, feat_diff]``.
+        params: ``(..., 4)`` array of ``[sd_feat1, sd_feat2, sd_spat, feat_diff]``.
 
     Returns:
         ``(..., 6)`` array.  The three SDs enter as log values rescaled to
@@ -262,7 +262,7 @@ def _spread_mean_init(n_components: int):
 
 
 class ConditionalWrappedMixture(nn.Module):
-    """MLP mapping ``[sd_feat1, sd_feat2, sd_ident, feat_diff]`` to mixture parameters.
+    """MLP mapping ``[sd_feat1, sd_feat2, sd_spat, feat_diff]`` to mixture parameters.
 
     Attributes:
         n_components: number of wrapped-normal components ``K``.

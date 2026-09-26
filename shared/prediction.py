@@ -20,8 +20,9 @@ Motor noise is applied inside this layer, by
 :meth:`BiasPredictor.with_motor_noise`, so no consumer convolves a surface or
 widens a variance itself.
 
-Two concrete implementations, and deliberately no plugin system.  There are two
-families and one of them is being retired.
+Two concrete implementations, and deliberately no plugin system. WNM is the
+production family; the surface implementation is retained only for explicit
+historical reproduction and raw-surface workflows.
 
 **Grid densities are for display; probabilities are for scoring.**  A WNM
 component can be far narrower than the 2-degree reporting cell, so sampling its

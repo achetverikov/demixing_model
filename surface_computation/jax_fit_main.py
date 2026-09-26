@@ -1,9 +1,10 @@
 """
-Dual-Component Bias Analysis for Gaussian Mixture Models
+Dual-component Demixing Model simulator and historical surface-analysis helpers.
 
-This module provides functions for simulating and analyzing bias in dual-component
-Gaussian mixture models, computing empirical likelihood surfaces, and estimating
-bias probabilities for parameter fitting.
+``simulate_dual_component_bias_distribution`` is the maintained simulator core
+used by current WNM training-data generation as well as by the retained
+historical surface pipeline. The likelihood-surface and probability-analysis
+helpers in this module belong to the historical/raw-surface workflow.
 
 Key Functions:
 - simulate_dual_component_bias_distribution: Core simulation function

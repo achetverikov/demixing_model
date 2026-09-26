@@ -1,4 +1,21 @@
-# README figure sources
+# Documentation index
+
+For current executable workflows, start with:
+
+- [root README](../README.md) - installation overview, prediction, fitting, and repository map;
+- [installation guide](../INSTALL.md) - environments, GPU/CPU setup, verification, and troubleshooting;
+- [fitting pipeline](../model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md) - WNM fitting, objectives, outputs, exports, plotting, and historical surface replay;
+- [prediction interface](../surface_simulator_for_predictions/README.md) - Python/R prediction generation;
+- [simulation and training-data generation](../surface_computation/README.md) - current WNM simulation path and historical surface generation;
+- [WNM training and packaging](../surrogate_training/wnm/README.md) - training checkpoints and production artifacts;
+- [shared runtime layer](../shared/README.md) - WNM runtime, surrogate identity, prediction operations, and common helpers;
+- [prediction/surface browser](../surface_browser/README.md) - WNM on-demand browsing and optional stored-surface views;
+- [pretrained artifacts](../pretrained/README.md) - production checkpoint identity, provenance, and supported domains;
+- [tests](../tests/README.md) - maintained pytest baseline and smoke pipelines.
+
+The remainder of this file documents README figure generation and the historical transition archive.
+
+## README figure sources
 
 `generate_pipeline_figure.py` creates an experimental pipeline figure that is not currently embedded in the main README. Its construction panels are illustrations grounded in the model code rather than a literal depiction of one simulation or the exact neural-network architecture. The likelihood surface, prediction curves, behavioral observations, and fitted curve are read from project outputs.
 
@@ -20,10 +37,15 @@ python surface_simulator_for_predictions/surface_simulator.py \
   --skip-motor-noise
 ```
 
-The fitting figure reads the prepared <a href="https://doi.org/10.1038/nn.3689" title="Fischer, J., &amp; Whitney, D. (2014). Serial dependence in visual perception. Nature Neuroscience, 17(5), 738–743. https://doi.org/10.1038/nn.3689">Fischer and Whitney (2014)</a> trials and fitted curves written by `export_wnm_fit_curves.py` under `csv_exports/fitted_curves.csv`. The current generator default still selects the historical `expectation` fit for continuity of the committed figure; change `--fit-objective` to `smoothed_exp` for the maintained mean-bias objective. After running `demo_fischer_whitney.py`, regenerate both assets with:
+The fitting figure reads the prepared <a href="https://doi.org/10.1038/nn.3689" title="Fischer, J., &amp; Whitney, D. (2014). Serial dependence in visual perception. Nature Neuroscience, 17(5), 738–743. https://doi.org/10.1038/nn.3689">Fischer and Whitney (2014)</a> trials and fitted curves written by `export_wnm_fit_curves.py` under `csv_exports/fitted_curves.csv`. The generator defaults to the maintained `smoothed_exp` mean-bias objective. Pass `--fit-objective expectation` only when intentionally reproducing an older hard-binned expectation fit. After running `demo_fischer_whitney.py`, regenerate both assets with:
 
 ```bash
 python docs/generate_readme_figures.py
 ```
 
 Alternative or isolated fit outputs can be selected with `--fit-curves`; use `--predictions` for an alternative prediction export. Commit the rendered PNG files together with any generator change so GitHub does not need to run the model to display the README.
+
+
+## Historical transition archive
+
+`history/wnm_transition/` contains the quantitative findings and decision record from the 2026 WNM transition. Those files are archival evidence, not current run instructions. Paths and commands inside individual archived findings may reflect the transition-era repository layout; use the root README and the current package READMEs for executable workflows.

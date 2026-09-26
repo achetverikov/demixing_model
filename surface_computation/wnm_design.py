@@ -3,6 +3,10 @@
 These designs are deliberately not restricted to the historical 5/10-degree
 surface grid because the WNM surrogate is trained to accept continuous parameter
 values.
+
+The training/design metadata keeps the historical name ``sd_ident`` for the
+third SD coordinate. It is the same quantity exposed as ``sd_spat`` by the
+runtime/fitting API.
 """
 
 from __future__ import annotations
@@ -154,8 +158,8 @@ def phase_a_trajectory_design(n_curves: int = 10, points_per_curve: int = 90,
 def low_dprime_augmentation_design(n_points: int, seed: int = 0):
     """Off-grid training design emphasizing poorly separated items.
 
-    With the experiment's 40-degree spatial separation, ``sd_ident=50..140``
-    corresponds to spatial d-prime about ``0.8..0.29``. Half the rows target
+    With the simulator's 42-degree spatial separation, ``sd_ident=50..140``
+    corresponds to spatial d-prime about ``0.84..0.30``. Half the rows target
     unequal feature noise (ratio ``1.5..8``), one quarter target similar noise
     over the full SD domain, and one quarter use independent full-domain SDs.
     The ordinary component mirror augmentation supplies both input orderings.

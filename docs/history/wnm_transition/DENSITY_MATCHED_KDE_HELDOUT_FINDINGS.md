@@ -1,3 +1,5 @@
+> **Archived transition record.** This file preserves the evidence and terminology used during the 2026 WNM cutover. Commands, paths, and module names may reflect the transition-era repository layout and are not current run instructions. See the root README and current package READMEs for executable workflows.
+
 # Held-out matched-KDE density recovery
 
 Date: 2026-09-09; intermediate-curve update 2026-09-10

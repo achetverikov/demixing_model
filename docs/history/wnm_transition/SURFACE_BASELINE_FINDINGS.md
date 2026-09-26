@@ -1,3 +1,5 @@
+> **Archived transition record.** This file preserves the evidence and terminology used during the 2026 WNM cutover. Commands, paths, and module names may reflect the transition-era repository layout and are not current run instructions. See the root README and current package READMEs for executable workflows.
+
 # Surface-model baseline: development results
 
 Artifact paths and analysis scripts named below are relative to

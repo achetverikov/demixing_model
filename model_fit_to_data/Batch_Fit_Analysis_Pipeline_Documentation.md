@@ -128,6 +128,10 @@ prints which fields differ, rather than appending fits computed one way onto fit
 computed another. `--force-refit` discards those results and refits; it is not
 needed to add a method to a run whose fingerprint matches.
 
+## Objective status
+
+The maintained WNM objectives are `density` (default), `smoothed_exp`, `likelihood`, `crps`, `balanced_crps`, and `bias_weighted_crps`. The hard-binned `expectation` and `density_legacy` objectives remain available only for historical reproduction and should not be used for new analyses.
+
 ## Dissimilarity smoothing in the fitting objectives
 
 The legacy surface NN predicts simulation surfaces that already contain a nominal
@@ -139,10 +143,10 @@ follows:
 | Objective | Empirical side | Predicted side |
 |---|---|---|
 | `likelihood`, `crps` | Raw trials | Family-specific direct distribution evaluation; WNM uses the analytic conditional density/cell probabilities, surface replay uses the matching NN column |
-| `expectation` | Circular means in 4° bins | Surrogate circular mean at the matching coordinates |
+| `expectation` *(historical)* | Circular means in 4° bins | Surrogate circular mean at the matching coordinates |
 | `smoothed_exp` | Rolling circular moments, nominal 20° Gaussian SD | Surrogate complex moments pooled through the same observed-design operator |
 | `density` | Exact wrapped signed mass after a pooled-SJ bias KDE and nominal 20° Gaussian trial weights | Surrogate density convolved by the same bias KDE, then pooled through the same observed-design operator |
-| `density_legacy` | Legacy sampled-KDE density-asymmetry curve | Legacy surface asymmetry curve with a nominal 20° Gaussian convolution |
+| `density_legacy` *(historical)* | Legacy sampled-KDE density-asymmetry curve | Legacy surface asymmetry curve with a nominal 20° Gaussian convolution |
 | `balanced_crps`, `bias_weighted_crps` | Conditional empirical distributions, nominal 20° Gaussian trial weights | Family-specific predicted response distribution |
 
 Thus the current `density` and `smoothed_exp` objectives apply the identical
