@@ -5,7 +5,7 @@ Surface Browser - Main Entry Point
 
 Streamlit app for interactive likelihood surface exploration.
 
-Usage: streamlit run main.py
+Usage: streamlit run surface_browser/main_app.py
 """
 
 import streamlit as st
