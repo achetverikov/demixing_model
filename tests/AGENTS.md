@@ -8,17 +8,16 @@ Before adding a test, ask:
 
 ## Classify the test first
 
-State which layer owns the behavior: unit, contract, maintained integration, cross-repository integration, or legacy surface. Put primitive mathematics at the lowest authoritative layer and let higher layers test routing, persistence, and user-facing contracts rather than re-proving the same equations.
+State which layer owns the behavior: unit, contract, maintained integration, cross-repository integration. Put primitive mathematics at the lowest authoritative layer and let higher layers test routing, persistence, and user-facing contracts rather than re-proving the same equations.
 
 Use the repository markers consistently:
 
 - unmarked/default: maintained WNM/product behavior;
 - `integration`: sibling-repository or compiled-product integration;
-- `legacy_surface`: historical surface-NN behavior;
 - `slow`: intentionally expensive maintained checks;
 - `gpu`: GPU-specific tests.
 
-New historical-surface or CDB/cross-repository tests must not silently enter the maintained default suite. Development-only experiments belong on a development branch, not in the production suite.
+CDB/cross-repository tests must not silently enter the maintained default suite. Raw-surface checks belong to the maintained baseline. Development-only experiments belong on a development branch, not in the production suite.
 
 ## Cost discipline
 

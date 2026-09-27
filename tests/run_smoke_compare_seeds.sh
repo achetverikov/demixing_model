@@ -18,7 +18,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
-export PYTHONPATH="${PYTHONPATH:-}:$ROOT:$ROOT/neural_network_optimization"
+export PYTHONPATH="${PYTHONPATH:-}:$ROOT"
 
 SEED=123
 
@@ -49,7 +49,7 @@ $PYTHON_BIN surface_computation/simulated_samples_grid.py \
   --random-seed "$SEED" \
   --results-dir "$STD_RESULTS"
 
-$PYTHON_BIN neural_network_optimization/create_averaged_surfaces_from_samples.py \
+$PYTHON_BIN -m surface_computation.create_averaged_surfaces_from_samples \
   --input-folder "$STD_RESULTS/sim_samples_100_50samples_circular_em_diagcov_free_weights" \
   --output-folder "$STD_RESULTS/$STD_AVG" \
   --workers 1 \

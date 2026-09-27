@@ -1,8 +1,7 @@
 # Demixing Model — TODO
 
 This is the sole live work plan for this repository. Completed and superseded
-work is recorded in `HISTORY.md`; result-specific transition evidence is archived under
-`docs/history/wnm_transition/`.
+work is recorded in `HISTORY.md`.
 
 ## 1. Finish retained WNM validation follow-ups
 
@@ -44,10 +43,8 @@ operational security task, independent of the legacy surface pipeline.
 ## Explicitly not planned
 
 - Further surface-NN retraining, circular-axis migration, search refinement,
-  browser integration, parity work, or promotion analysis. WNM is the default
-  backend; the surface NN remains only for explicit historical reproduction.
+  browser integration, parity work, or promotion analysis. WNM is the supported
+  fitting backend; surface-NN training, fitting, and reproduction are retired.
 - Revival of the retired hard-binned `expectation` objective.
-- Cleanup of the surface-NN motor-noise density floor unless needed solely to
-  reproduce a historical artifact.
 - Joint `(mu1, mu2)` modelling. This remains unscheduled research, not migration
   work.

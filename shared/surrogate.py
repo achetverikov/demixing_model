@@ -195,13 +195,9 @@ def load_production(n_samples: int) -> "LoadedSurrogate":
 def search_bounds(domain) -> dict:
     """Fitting bounds for the two searched axes, from a surrogate's domain.
 
-    A search must not propose parameters its own surrogate was never trained on,
-    and the two families differ: the surface network stops at 5 degrees on every
-    axis, while the mixture reaches 2.5 on the feature SDs but still stops at 5
-    on the spatial one, because ``sd_spat`` is ``42/d'`` and d-prime was capped.
-    Bounds therefore travel with the loaded surrogate rather than living in a
-    module-level constant that is right for whichever family was current when it
-    was written.
+    Bounds travel with the loaded artifact so a search stays inside its training
+    domain. Production WNM reaches 2.5 degrees on the feature SDs and 5 degrees
+    on spatial SD, because ``sd_spat`` is ``42/d'`` and d-prime was capped.
 
     The two feature SDs share one interval: they are exchangeable, and a search
     that could reach a value for one but not the other would break that symmetry.

@@ -12,7 +12,7 @@ backends without them would be comparing a single number from each.
 The validated production policy for all retained WNM objectives is 64
 deterministic starts through the batched JAX L-BFGS-B port, evaluated as two
 sequential batches of 32 in float32 with ``highest`` matmul precision. The
-evidence behind this choice is archived under ``docs/history/wnm_transition/``.
+evidence behind this choice is archived with generated results (see HISTORY.md).
 """
 from __future__ import annotations
 

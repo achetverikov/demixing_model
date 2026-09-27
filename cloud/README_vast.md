@@ -139,7 +139,7 @@ docker run --rm --gpus all `
   --env-file .env.docker `
   -v "${PWD}:/workspace" `
   -w /workspace `
-  -e PYTHONPATH=/workspace:/workspace/neural_network_optimization:/workspace/surface_computation `
+  -e PYTHONPATH=/workspace:/workspace/surface_computation `
   -e S3_PREFIX=demixing/docker_smoke `
   -e AVERAGED_SURFACES_DIR=results/averaged_surfaces_docker_smoke `
   -e BUNDLE_DIR=results/averaged_surfaces_docker_smoke_bundles `
@@ -166,7 +166,7 @@ docker run --rm `
   --env-file .env.docker `
   -v "${PWD}:/workspace" `
   -w /workspace `
-  -e PYTHONPATH=/workspace:/workspace/neural_network_optimization:/workspace/surface_computation `
+  -e PYTHONPATH=/workspace:/workspace/surface_computation `
   -e S3_PREFIX=demixing/docker_smoke `
   -e COMPLETION_REGISTRY=averaged_surfaces_docker_smoke `
   demixing-vast-nv:latest `

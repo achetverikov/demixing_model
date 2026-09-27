@@ -1,7 +1,6 @@
 """Contracts for the shared surrogate resolver and the packaged WNM artifacts.
 
-Two families now answer the same question, and the ways that can go wrong are
-silent rather than loud: a run scored with the 100-observation model but recorded
+Model identity errors can be silent: a run scored with the 100-observation model but recorded
 as the 20-observation one, a research fit loaded as though it were production, a
 family inferred from a filename that happens to contain the right substring.  All
 of those produce plausible numbers.  These tests pin the refusals.

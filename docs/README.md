@@ -16,7 +16,7 @@
 
 - [Simulation and training-data generation](../surface_computation/README.md)
 - [Predictor training and packaging](../surrogate_training/wnm/README.md)
-- [Surface averaging and network training](../neural_network_optimization/Neural_Network_Optimization_Pipeline_Documentation.md)
+- [Raw surface generation and averaging](../surface_computation/README.md#generate-averaged-surfaces)
 - [Shared model utilities](../shared/README.md)
 - [Tests](../tests/README.md)
 
@@ -52,4 +52,4 @@ Alternative or isolated fit outputs can be selected with `--fit-curves`; use `--
 
 ### Development records
 
-[HISTORY.md](../HISTORY.md) summarizes completed work. [history/wnm_transition/](history/wnm_transition/README.md) preserves model-selection findings and the transition record. Use the guides above for runnable workflows.
+[HISTORY.md](../HISTORY.md) summarizes completed work. [Transition archive notes](history/wnm_transition/README.md) locate the external model-selection findings and decision record. Use the guides above for runnable workflows.

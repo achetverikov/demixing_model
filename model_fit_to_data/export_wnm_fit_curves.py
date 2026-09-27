@@ -270,7 +270,7 @@ def export_curves(results_dir: Path, checkpoint: Path | None, output_dir: Path,
         "source_results": str(results_dir), "checkpoint": str(checkpoint),
         "run_fingerprint_digest": sidecar["digest"], "methods": list(methods),
         **identity,
-        "prediction": "direct analytic WNM; no reconstructed NN surface",
+        "prediction": "direct analytic WNM",
         "density_curve": "subject-experiment pooled-SJ KDE plus observed-design feature operator",
         "bias_curve": "observed-design pooled complex first moment",
         "angular_units": {

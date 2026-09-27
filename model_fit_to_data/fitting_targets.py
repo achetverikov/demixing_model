@@ -6,15 +6,7 @@ binned circular means for ``expectation``, the rolling-mean curve for
 ``smoothed_exp``, the wrapped-KDE signed-mass curve for ``density``, and the
 empirical bias distributions the CRPS variants score against.
 
-It used to live inside the surface optimizer's ``_precompute_target_curves``,
-which meant a second search engine could only reach it by constructing that
-optimizer -- and constructing it means loading a surface checkpoint. Targets do
-not depend on any surrogate, so they live outside both the production WNM
-engine and the historical surface optimizer. Nothing here loads a model.
-
-The extracted legacy fields remain unchanged and are pinned by
-``tests/test_fitting_targets.py``. The matched density target and observed-design
-operator were added separately for the current WNM and surface objectives.
+Targets do not depend on a predictor or checkpoint.
 """
 from __future__ import annotations
 

@@ -10,9 +10,6 @@ route exists, and pin the properties that would let a plotted curve be silently
 wrong -- a motor SD paired with the wrong row, a curve that ignores its
 parameters, an asymmetry that skipped the density target's smoother.
 
-The surface path is deliberately untouched by the code under test here, so no
-number on that side can move; its own behaviour is pinned in
-``test_plot_estimators.py``.
 """
 import sys
 from pathlib import Path

@@ -1,9 +1,8 @@
 # Demixing Model — planning history
 
 This log records completed decisions and superseded work. `TODO.md` is the only
-live work plan. Detailed numerical evidence remains in
-`docs/history/wnm_transition/` and git history rather than being repeated as
-future work here.
+live work plan. Detailed numerical evidence is archived with generated results;
+see Notes for developers below.
 
 ## 2026-09 — WNM production transition
 
@@ -67,7 +66,7 @@ future work here.
   normalized maintained `model_fit_to_data.*` package imports.
 - Consolidated WNM artifact loading so `shared.surrogate` delegates reconstruction
   to the maintained WNM loader instead of maintaining an independent parser.
-- Moved transition findings to `docs/history/wnm_transition/`. Development-only
+- Archived transition findings with the generated results. Development-only
   transition validation, recovery, optimizer-comparison, and representation
   experiments were kept off the production branch rather than becoming part of
   the maintained runtime contract.
@@ -170,3 +169,17 @@ plans. They remain with those artifacts and do not compete with `TODO.md`.
 - Connected maintained WNM training checkpoints to artifact packaging with sample
   identity, selected-step, and measured training-domain metadata. Historical
   stage-based packaging remains explicit. Included pretrained weights are unchanged.
+
+## 2026-09-27 — surface-NN cleanup
+
+- Removed NN compatibility arguments, stale training references, and the unused
+  historical-NN test marker. Raw-surface averaging utilities now live in
+  `surface_computation/`; stored-surface pickle aliases remain supported.
+- Moved detailed transition findings beside generated results.
+
+## Notes for developers
+
+Transition findings and pre-cleanup documentation are archived under
+`$DEMIXING_ARTIFACT_ROOT/surface_nn_archive/cleanup_20260927/` with checksums and
+source commits. These records are not shipped and are not expected in a normal
+checkout.

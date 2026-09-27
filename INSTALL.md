@@ -99,7 +99,7 @@ Run the automated checks:
 PYTHONPATH=. python -m pytest
 ```
 
-The default suite checks the standalone package. See the [test guide](tests/README.md) for additional cross-repository and surface-network checks.
+The default suite checks the standalone package. See the [test guide](tests/README.md) for cross-repository checks and raw-surface smoke workflows.
 
 For a small end-to-end check that fits data, exports results, generates plots, and makes predictions:
 

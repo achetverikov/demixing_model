@@ -6,7 +6,7 @@ ROOT="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT"
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
-export PYTHONPATH="${PYTHONPATH:-}:$ROOT:$ROOT/neural_network_optimization:$ROOT/surface_computation"
+export PYTHONPATH="${PYTHONPATH:-}:$ROOT:$ROOT/surface_computation"
 
 if [[ "${INSTALL_DEPS:-0}" == "1" ]]; then
   "$PYTHON_BIN" -m pip install --upgrade pip

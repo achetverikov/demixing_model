@@ -25,7 +25,6 @@ library(data.table)
 #'                  (sd_motor optional - will be set to 0 if skip_motor_noise=TRUE)
 #' @param n_samples Number of samples used for training (determines which model to use)
 #' @param skip_motor_noise Whether to skip motor noise computation (default: FALSE)
-#' @param use_nn_surfaces Deprecated compatibility alias. TRUE uses the current packaged model; FALSE uses raw averaged surfaces.
 #' @param averaged_surfaces_dir Path to averaged surfaces (required with surface_source="raw").
 #' @param surface_source Prediction source: "model" (packaged WNM) or "raw" (averaged surfaces with mu2).
 #' @param cleanup Whether to clean up temporary files (default: TRUE)
@@ -38,7 +37,6 @@ library(data.table)
 simulate_surfaces <- function(parameters,
                               n_samples,
                               skip_motor_noise      = FALSE,
-                              use_nn_surfaces       = NULL,
                               averaged_surfaces_dir = NULL,
                               checkpoint_path       = NULL,
                               cleanup               = TRUE,
@@ -51,15 +49,6 @@ simulate_surfaces <- function(parameters,
 
   cat("work_dir:", work_dir, "\n")
 
-  # Validate inputs. Keep the old boolean as a compatibility alias, but do not
-  # let its historical NN name force the retired surface model.
-  if (!is.null(use_nn_surfaces)) {
-    compatibility_source <- if (isTRUE(use_nn_surfaces)) "model" else "raw"
-    if (!identical(surface_source, "model") && !identical(surface_source, compatibility_source)) {
-      stop("use_nn_surfaces and surface_source request different prediction sources")
-    }
-    surface_source <- compatibility_source
-  }
   if (!surface_source %in% c("model", "raw")) {
     stop("surface_source must be one of: model, raw")
   }
@@ -97,7 +86,6 @@ simulate_surfaces <- function(parameters,
   # "results/" and other relative paths in surface_simulator.py resolve correctly.
   pythonpath_parts <- c(
     .sim_repo_root,
-    file.path(.sim_repo_root, "neural_network_optimization"),
     Sys.getenv("PYTHONPATH", unset = "")
   )
   pythonpath <- paste(pythonpath_parts[nzchar(pythonpath_parts)], collapse = ":")
@@ -261,7 +249,6 @@ simulate_surfaces <- function(parameters,
 simulate_unequal_noise2 <- function(sd_feat_range         = seq(10, 60, 10),
                                     sd_spat               = 42,
                                     n_samples             = 20,
-                                    use_nn_surfaces       = NULL,
                                     averaged_surfaces_dir = NULL,
                                     checkpoint_path       = NULL,
                                     work_dir              = getwd(),
@@ -270,7 +257,6 @@ simulate_unequal_noise2 <- function(sd_feat_range         = seq(10, 60, 10),
   res <- simulate_surfaces(par_grid,
                            n_samples             = n_samples,
                            skip_motor_noise      = TRUE,
-                           use_nn_surfaces       = use_nn_surfaces,
                            averaged_surfaces_dir = averaged_surfaces_dir,
                            checkpoint_path       = checkpoint_path,
                            work_dir              = work_dir,
@@ -288,7 +274,6 @@ simulate_unequal_noise2 <- function(sd_feat_range         = seq(10, 60, 10),
 simulate_equal_noise <- function(sd_feat_range         = seq(10, 60, 10),
                                  sd_spat               = 42,
                                  n_samples             = 20,
-                                 use_nn_surfaces       = NULL,
                                  averaged_surfaces_dir = NULL,
                                  work_dir              = getwd(),
                                  surface_source        = "model") {
@@ -297,7 +282,6 @@ simulate_equal_noise <- function(sd_feat_range         = seq(10, 60, 10),
   res <- simulate_surfaces(par_grid,
                            n_samples             = n_samples,
                            skip_motor_noise      = TRUE,
-                           use_nn_surfaces       = use_nn_surfaces,
                            averaged_surfaces_dir = averaged_surfaces_dir,
                            work_dir              = work_dir,
                            surface_source        = surface_source)

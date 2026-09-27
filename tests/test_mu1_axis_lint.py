@@ -20,7 +20,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 
 SEARCH_DIRS = [
-    "shared", "model_fit_to_data", "neural_network_optimization",
+    "shared", "model_fit_to_data",
     "surface_computation", "surface_simulator_for_predictions",
     "surface_browser", "scripts", "cloud",
 ]

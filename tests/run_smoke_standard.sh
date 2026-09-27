@@ -38,7 +38,7 @@ AVG_DIR="averaged_surfaces_smoke_standard"
 rm -rf "results/$AVG_DIR"
 
 # Create averaged surfaces from samples.
-$PYTHON_BIN neural_network_optimization/create_averaged_surfaces_from_samples.py \
+$PYTHON_BIN -m surface_computation.create_averaged_surfaces_from_samples \
   --input-folder "$SAMPLES_DIR" \
   --output-folder "$AVG_DIR" \
   --workers 1 \

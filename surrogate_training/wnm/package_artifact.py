@@ -248,8 +248,7 @@ def build_meta(fit: dict, fit_path: Path, stage: Path, n_samples: int,
         "validation_nll": fit.get("validation_nll"),
 
         # How the stopping step was chosen.  The production-parity variant trains
-        # on every trajectory and selects on an in-sample slice, mirroring the
-        # surface NN, which has no validation split at all.  Recorded because the
+        # on every trajectory and selects on an in-sample slice. Recorded because the
         # recorded NLL is then an in-sample number and must never be reported as
         # a held-out score.
         "checkpoint_selection": "in_sample_slice" if all_data else "held_out_trajectories",

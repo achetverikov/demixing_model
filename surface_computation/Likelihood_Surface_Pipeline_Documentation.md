@@ -1,6 +1,6 @@
 # Simulated Samples Grid Pipeline
 
-Use this pipeline to generate a grid of simulated response distributions for surface inspection, identifiability-dimension predictions, or surface-network training. For conditional-mixture training data, see the [simulation guide](README.md).
+Use this pipeline to generate a grid of simulated response distributions for surface inspection or identifiability-dimension predictions. For conditional-mixture training data, see the [simulation guide](README.md).
 
 ## Overview
 

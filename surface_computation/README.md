@@ -24,12 +24,21 @@ The generator saves simulation chunks beside the output so interrupted runs can 
 
 ## Generate averaged surfaces
 
-For direct inspection of simulated distributions, surface-network training, or identifiability-dimension (`mu2`) predictions, use `simulated_samples_grid.py`. It generates samples on a parameter grid; averaging tools then turn them into density surfaces.
+For direct inspection of simulated distributions or identifiability-dimension (`mu2`) predictions, use `simulated_samples_grid.py`. It generates samples on a parameter grid; averaging tools then turn them into density surfaces.
 
 - [Grid simulation guide](Likelihood_Surface_Pipeline_Documentation.md)
-- [Surface averaging and network training](../neural_network_optimization/Neural_Network_Optimization_Pipeline_Documentation.md)
 - [Distributed generation on Vast.ai](../cloud/README_vast.md)
 
+To average previously generated sample files, run from the repository root:
+
+```bash
+python -m surface_computation.create_averaged_surfaces_from_samples \
+  --input-folder /path/to/simulated_samples \
+  --output-folder /path/to/averaged_surfaces
+```
+
+`combine_mirrored_surfaces.py` supports old, uncombined raw-surface folders;
+the current averaging command already combines mirrored samples.
 A complete grid requires substantial GPU time and storage.
 
 ## Notes for developers

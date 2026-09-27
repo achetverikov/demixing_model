@@ -15,7 +15,7 @@ The `shared/` package provides model evaluation, checkpoint loading, circular ge
 | `behavioral_data.py` | Behavioral-trial filtering |
 | `paths.py` | Input and output path resolution |
 | `hashing.py` | File hashes for artifact and run identity |
-| `utils.py` | Surface-network and averaged-surface helpers |
+| `utils.py` | Stored-surface data classes and loading helpers |
 
 For usage examples, see the [fitting guide](../model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md) and [prediction guide](../surface_simulator_for_predictions/README.md).
 

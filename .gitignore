@@ -51,7 +51,6 @@ MODEL_PIPELINE_FOR_REVIEWERS.md
 !cloud/vast_cost_performance/*.png
 !cloud/vast_cost_performance/*.csv
 
-neural_network_optimization/mirror_aware_training_v2.py
 AGENT_AUDIT_GUIDE.md
 MODEL_PIPELINE_FOR_AGENTS.md
 

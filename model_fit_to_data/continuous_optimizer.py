@@ -317,9 +317,8 @@ def build_bounds(n_conditions: int, sd_feat_bounds: tuple, sd_spat_bounds: tuple
     """Bounds matching :func:`condition_parameter_layout`.
 
     ``sd_feat_bounds`` and ``sd_spat_bounds`` come from the surrogate, via
-    ``shared.surrogate.search_bounds``: the two families were trained on
-    different domains, and a search must not propose parameters its own
-    surrogate never saw.
+    ``shared.surrogate.search_bounds``, so the search stays inside the loaded
+    artifact's domain.
     """
     bounds = []
     for _ in range(n_conditions):

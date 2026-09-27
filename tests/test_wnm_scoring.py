@@ -1,16 +1,8 @@
-"""Every objective must score against the mixture, through the shared definitions.
+"""Every objective scores the mixture through the shared loss definitions.
 
-The public fitting command writes every objective's score at each fitted method's
-parameters, not just the one it was asked to fit. So a surrogate that can be fit
-under ``density`` but not scored under ``crps`` would produce a results table
-mixing two families column by column, with nothing in the file saying so. These
-tests exist to keep that from being possible.
-
-What they check is mostly *wiring*, deliberately: that each method reads its own
-target, from the right condition, through the same loss helper the surface branch
-calls. The numerical content of those losses is already pinned by the surface
-suites, and re-asserting it here against a second implementation would defeat the
-point of there being only one.
+The public fitter reports every objective at each fitted parameter set. These
+checks cover target selection, condition routing, and score dispatch; primitive
+loss mathematics is tested in the lower-level suites.
 """
 import sys
 from pathlib import Path

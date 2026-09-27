@@ -46,10 +46,7 @@ OBSERVER_MODELS = [
     ("100samples_circular", 100),
 ]
 
-PYTHONPATH = ":".join([
-    str(REPO_ROOT),
-    str(REPO_ROOT / "neural_network_optimization"),
-])
+PYTHONPATH = str(REPO_ROOT)
 ENV = {**os.environ, "PYTHONPATH": PYTHONPATH, "PYTHONUNBUFFERED": "1"}
 PYTHON = sys.executable  # use whichever interpreter launched this script
 

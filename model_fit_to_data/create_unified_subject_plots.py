@@ -257,10 +257,8 @@ def compute_predicted_sd_curves_batch_pooled(log_surfaces_batch, bin_weights_bat
     degenerate correctly: a bin whose trials all sit at one feature difference
     mixes exactly one column and the pooled value equals the unpooled one.
 
-    The computation itself lives in ``shared.prediction.SurfacePredictor`` so the
-    two surrogate families share one definition of this estimator rather than
-    two that can drift. Pinned unchanged against a pre-routing reference in
-    ``tests/test_plot_estimators.py``.
+    The stored-surface computation lives in ``shared.prediction.SurfacePredictor``
+    and is covered by ``tests/test_prediction_contract.py``.
 
     Args:
         log_surfaces_batch: (n_surfaces, n_mu1_bias, n_feat_diff) log densities.

@@ -97,6 +97,4 @@ surface_simulator.py INPUT N_SAMPLES OUTPUT      # positional form
 
 The prediction interface uses `shared.surrogate` for model identity and `shared.prediction` for evaluation. Output rows carry `surrogate_family` and `surrogate_artifact`.
 
-The R argument `use_nn_surfaces` is a deprecated compatibility alias; use `surface_source` in new code.
-
 Averaged surfaces are generated artifacts under `$DEMIXING_ARTIFACT_ROOT`. They are not shipped and are not expected in a normal checkout.

@@ -233,7 +233,6 @@ def load_averaged_surface(sd_feat1: float, sd_feat2: float, sd_spat: float, n_sa
 
 def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: str,
                               skip_motor_noise: bool = False,
-                              use_nn_surfaces: Optional[bool] = None,
                               averaged_surfaces_dir: Optional[str] = None,
                               explicit_checkpoint_path: Optional[str] = None,
                               surface_source: str = "model"):
@@ -241,15 +240,7 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
 
     surface_source="model" uses the current WNM surrogate. "raw" loads averaged
     simulation surfaces, retaining the separate mu2 outputs.
-    use_nn_surfaces is accepted only as a compatibility alias: True means the
-    current packaged model, False means raw surfaces.
     """
-    if use_nn_surfaces is not None:
-        compatibility_source = "model" if use_nn_surfaces else "raw"
-        if surface_source != "model" and surface_source != compatibility_source:
-            raise ValueError(
-                "use_nn_surfaces and surface_source request different prediction sources")
-        surface_source = compatibility_source
     if surface_source not in {"model", "raw"}:
         raise ValueError(f"unknown surface_source {surface_source!r}")
 
