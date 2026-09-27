@@ -120,7 +120,7 @@ def resolve_density_bandwidths(bias_by_condition, rule: str, mode: str):
 
 
 def build_fitting_targets(condition_datasets, feat_diff_grid, d_circ_matrix,
-                          n_mu1_bias: int, emp_density_weights_sd: float,
+                          n_mu_feat_bias: int, emp_density_weights_sd: float,
                           density_bandwidth_rule: str, density_bandwidth_mode: str,
                           degenerate_targets=None, bwcrps_condition_targets=None,
                           target_bias_curve_core=None, *,
@@ -133,7 +133,7 @@ def build_fitting_targets(condition_datasets, feat_diff_grid, d_circ_matrix,
             of ``[feat_diff, bias]`` in model degrees. Unpadded and real.
         feat_diff_grid: the feature-difference grid targets are defined on.
         d_circ_matrix: circular distance matrix over the bias grid, for CRPS.
-        n_mu1_bias: number of bias bins.
+        n_mu_feat_bias: number of bias bins.
         emp_density_weights_sd: Gaussian feature-weight SD, in model degrees.
         density_bandwidth_rule: ``'sj'`` or ``'silverman'``.
         density_bandwidth_mode: ``'pooled'``, ``'average'`` or ``'per_condition'``.
@@ -314,8 +314,8 @@ def build_fitting_targets(condition_datasets, feat_diff_grid, d_circ_matrix,
         dataset_np = np.asarray(condition_datasets[name])
         target_d, support_mask, weights = bwcrps_condition_targets(
             dataset_np[:, 0], dataset_np[:, 1], fd_grid_np, d_np,
-            emp_density_weights_sd, config.mu1_bias_range[0], config.mu1_bias_step,
-            n_mu1_bias)
+            emp_density_weights_sd, config.mu_feat_bias_range[0], config.mu_feat_bias_step,
+            n_mu_feat_bias)
         target_d_list.append(target_d)
         fd_weights_list.append(support_mask)
         fd_bias_weights_list.append(weights)

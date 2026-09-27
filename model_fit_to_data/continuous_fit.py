@@ -93,7 +93,7 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
     bounds_by_axis = surrogate_module.search_bounds(predictor.domain)
     n_conditions = len(condition_names)
     names = condition_parameter_layout(n_conditions, fit_motor=fit_motor)
-    bounds = build_bounds(n_conditions, bounds_by_axis["sd_feat"], bounds_by_axis["sd_spat"],
+    bounds = build_bounds(n_conditions, bounds_by_axis["sd_feat"], bounds_by_axis["sd_idf"],
                           motor_bounds=tuple(sd_motor_bounds) if fit_motor else None)
 
     packed = (targets.feature_coordinate_mode == "exact"
@@ -161,7 +161,7 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
     total_time = time.time() - started
 
     parameters = np.asarray(fit.parameters)
-    sd_spat = float(parameters[2 * n_conditions])
+    sd_idf = float(parameters[2 * n_conditions])
     fitted_motor = float(parameters[2 * n_conditions + 1]) if fit_motor else float(sd_motor)
 
     # Per-condition losses at the joint solution. The fit minimises their sum, so
@@ -196,7 +196,7 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
             prediction_capacity=targets.prediction_capacity,
             feature_coordinate_mode=targets.feature_coordinate_mode,
         )
-        one_params = [parameters[2 * index], parameters[2 * index + 1], sd_spat]
+        one_params = [parameters[2 * index], parameters[2 * index + 1], sd_idf]
         if fit_motor:
             one_params.append(fitted_motor)
         with jax.default_matmul_precision(DEFAULT_MATMUL_PRECISION):
@@ -229,7 +229,7 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
 
     return {
         'best_loss': float(fit.loss),
-        'shared_params': {'sd_spat': sd_spat, 'sd_motor': fitted_motor},
+        'shared_params': {'sd_idf': sd_idf, 'sd_motor': fitted_motor},
         'condition_results': condition_results,
         'total_time': total_time,
         # A gradient search has no stages; present so callers that record
@@ -310,8 +310,8 @@ class ContinuousEngine:
         self._energy_score = energy_score
 
         self.feat_diff_grid = config.create_grid('feat_diff')
-        bias_grid = config.create_grid('mu1_bias')
-        self.n_mu1_bias = len(bias_grid)
+        bias_grid = config.create_grid('mu_feat_bias')
+        self.n_mu_feat_bias = len(bias_grid)
         difference = _jnp.abs(bias_grid[:, None] - bias_grid[None, :])
         self.D_circ_matrix = _jnp.minimum(difference, 360.0 - difference)
 
@@ -335,7 +335,7 @@ class ContinuousEngine:
         self.n_conditions = len(self.condition_names)
         self.targets = self._build_targets(
             condition_datasets, feat_diff_grid=self.feat_diff_grid,
-            d_circ_matrix=self.D_circ_matrix, n_mu1_bias=self.n_mu1_bias,
+            d_circ_matrix=self.D_circ_matrix, n_mu_feat_bias=self.n_mu_feat_bias,
             emp_density_weights_sd=self.emp_density_weights_sd,
             density_bandwidth_rule=self.density_bandwidth_rule,
             density_bandwidth_mode=self.density_bandwidth_mode,
@@ -492,7 +492,7 @@ class ContinuousEngine:
             "n_starts": int(self.n_starts),
             "seed": int(self.seed),
             "sd_feat_bounds": [float(v) for v in bounds["sd_feat"]],
-            "sd_spat_bounds": [float(v) for v in bounds["sd_spat"]],
+            "sd_idf_bounds": [float(v) for v in bounds["sd_idf"]],
             "max_iterations": int(defaults["max_iterations"].default),
             "tolerance": float(defaults["tolerance"].default),
             "gradient_tolerance": float(defaults["gradient_tolerance"].default),

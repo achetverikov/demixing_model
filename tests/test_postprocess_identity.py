@@ -109,7 +109,7 @@ def test_wnm_fit_rows_export_both_likelihood_conventions(monkeypatch):
     fit = pd.Series({
         "subject": "S10", "experiment": "color_2", "condition": "low - low",
         "optimizer": "likelihood", "sd_feat1": 20.0, "sd_feat2": 30.0,
-        "sd_spat": 10.0, "sd_motor": 0.0, "eval_likelihood_loss": 3.0,
+        "sd_idf": 10.0, "sd_motor": 0.0, "eval_likelihood_loss": 3.0,
     })
     def fake_likelihood(*_args, **_kwargs):
         return {

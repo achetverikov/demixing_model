@@ -3,10 +3,10 @@
 The theoretical model is untouched: this module only calls
 ``jax_fit_main.simulate_dual_component_bias_distribution`` at *continuous*
 parameter values instead of on the 5/10-degree grid, and returns the raw
-per-simulation ``mu1_bias`` outcomes. No KDE, no surface, no averaging.
+per-simulation ``mu_feat_bias`` outcomes. No KDE, no surface, no averaging.
 
-Design arrays use the historical training-field name ``sd_ident`` for the
-third SD coordinate; it is the runtime/fitting parameter ``sd_spat``.
+Design arrays and the runtime fitting API call the third SD coordinate
+``sd_idf``.
 """
 
 from __future__ import annotations
@@ -19,12 +19,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from surface_computation.wnm_design import SIM_SPAT_DIFF
+from surface_computation.wnm_design import SIM_IDF_DIFF
 
 from surface_computation import jax_fit_main as jfm
 
-#: Spatial separation used by the maintained Demixing Model simulator.
-SPAT_DIFF = SIM_SPAT_DIFF
+#: Identifiability separation used by the maintained Demixing Model simulator.
+IDF_DIFF = SIM_IDF_DIFF
 
 
 def simulation_keys(key, n_rows: int, common_random_numbers: bool = False,
@@ -61,21 +61,21 @@ def _simulate_block(keys, design, n_simulations: int, n_samples: int,
     Args:
         keys: ``(M,)`` PRNG keys, one per design row.  Passing the *same* key in
             every row implements common random numbers (see ``simulate``).
-        design: ``(M, 4)`` rows of ``[sd_feat1, sd_feat2, sd_ident, feat_diff]``.
+        design: ``(M, 4)`` rows of ``[sd_feat1, sd_feat2, sd_idf, feat_diff]``.
 
     Returns:
-        ``(M, n_simulations, 2)`` mu1_bias, component 1 then component 2.
+        ``(M, n_simulations, 2)`` mu_feat_bias, component 1 then component 2.
     """
 
     def step(carry, inputs):
         key, row = inputs
-        mu1_bias, _ = jfm.simulate_dual_component_bias_distribution(
-            key, row[0], row[1], row[2], row[3], SPAT_DIFF,
+        mu_feat_bias, _ = jfm.simulate_dual_component_bias_distribution(
+            key, row[0], row[1], row[2], row[3], IDF_DIFF,
             n_simulations=n_simulations, n_samples=n_samples,
             return_full_results=False, fix_weights=fix_weights,
             algorithm='EM', diagonal_covariance=True,
         )
-        return carry, mu1_bias
+        return carry, mu_feat_bias
 
     _, out = jax.lax.scan(step, None, (keys, design))
     return out
@@ -89,7 +89,7 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
     """Simulate raw EM bias outcomes for a continuous parameter design.
 
     Args:
-        design: ``(M, 4)`` array ``[sd_feat1, sd_feat2, sd_ident, feat_diff]``.
+        design: ``(M, 4)`` array ``[sd_feat1, sd_feat2, sd_idf, feat_diff]``.
         n_simulations: EM runs per design row.
         n_samples: internal evidence samples per EM run (the observer model).
         common_random_numbers: reuse one key across all design rows, so
@@ -104,7 +104,7 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
             to give independently generated, reproducible simulation chunks.
 
     Returns:
-        ``(M, n_simulations, 2)`` float32 array of mu1_bias in degrees.
+        ``(M, n_simulations, 2)`` float32 array of mu_feat_bias in degrees.
     """
     design = jnp.asarray(design, dtype=jnp.float32)
     n_rows = design.shape[0]

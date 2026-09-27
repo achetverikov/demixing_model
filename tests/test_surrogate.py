@@ -106,9 +106,9 @@ def test_installed_artifact_declares_its_own_identity(n_samples, path):
 
     meta = loaded.meta
     assert meta["artifact_schema"] == "wnm/2"
-    assert meta["parameter_order"] == ["sd_feat1", "sd_feat2", "sd_spat", "feat_diff"]
+    assert meta["parameter_order"] == ["sd_feat1", "sd_feat2", "sd_idf", "feat_diff"]
     assert meta["period_degrees"] == 360.0
-    assert meta["spatial_separation_degrees"] == 42.0
+    assert meta["idf_separation_degrees"] == 42.0
     # The alldata artifacts select their step in sample; a consumer that reports
     # validation_nll as held-out would be wrong, so the flag must be present.
     assert meta["validation_nll_is_in_sample"] is True
@@ -196,9 +196,9 @@ def test_production_loading_does_not_need_the_corpus_or_training_scripts():
 def test_wnm_search_bounds_open_the_narrow_feature_region():
     """The coverage that motivates the replacement has to reach the search.
 
-    The mixture was trained down to sd_feat 2.5 but only to sd_spat 5, because
-    sd_spat is 42/d' with d-prime capped at 8.4. Bounds that ignored that
-    difference would either refuse trained feature noise or invite spatial
+    The mixture was trained down to sd_feat 2.5 but only to sd_idf 5, because
+    sd_idf is 42/d' with d-prime capped at 8.4. Bounds that ignored that
+    difference would either refuse trained feature noise or invite identifiability
     extrapolation.
     """
     from shared.prediction import domain_from_meta
@@ -207,15 +207,15 @@ def test_wnm_search_bounds_open_the_narrow_feature_region():
     bounds = surrogate.search_bounds(domain_from_meta(surrogate.load_surrogate(
         checkpoint_path=path).meta))
     assert bounds["sd_feat"] == (2.5, 200.0)
-    assert bounds["sd_spat"] == (5.0, 200.0)
-    assert bounds["sd_feat"][0] < bounds["sd_spat"][0]
+    assert bounds["sd_idf"] == (5.0, 200.0)
+    assert bounds["sd_feat"][0] < bounds["sd_idf"][0]
 
 
 def test_the_two_feature_sds_share_one_interval():
     """They are exchangeable; a bound reachable for one but not the other would
     break the symmetry that component 2 is derived from."""
     lopsided = {"sd_feat1": (2.5, 198.0), "sd_feat2": (3.0, 200.0),
-                "sd_spat": (5.0, 200.0), "feat_diff": (0.5, 180.0)}
+                "sd_idf": (5.0, 200.0), "feat_diff": (0.5, 180.0)}
     bounds = surrogate.search_bounds(lopsided)
     assert bounds["sd_feat"] == (3.0, 198.0)  # the intersection, not the union
 

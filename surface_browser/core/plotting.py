@@ -17,7 +17,7 @@ parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from shared.mu1_axis import sign_masks
+from shared.mu_feat_axis import sign_masks
 
 
 class Plot:
@@ -78,9 +78,9 @@ class Plot:
         for i in range(len(feat_diff_values)):
             prob_profile = likelihood_surface[:, i] / np.sum(likelihood_surface[:, i])
             
-            # Simple asymmetry: (sum(p>0)-sum(p<0))*100.  On the circular mu1
+            # Simple asymmetry: (sum(p>0)-sum(p<0))*100.  On the circular mu_feat
             # axis both 0 and the antipode (-180) are sign-ambiguous and are
-            # excluded from both sides; mu2 is a linear axis and only 0 is.
+            # excluded from both sides; mu_idf is a linear axis and only 0 is.
             if dimension == 1:
                 pos_mask, neg_mask = (np.asarray(m) for m in sign_masks(bias_values))
             else:
@@ -95,8 +95,8 @@ class Plot:
     def multi_component_heatmap(self, title="", show_expectation=True, use_log=True, auto_zoom=False, prob_threshold=0.0001):
         """Create 2x2 grid showing all 4 component surfaces."""
         subplot_titles = [
-            'Mu1 Component 1', 'Mu1 Component 2',
-            'Mu2 Component 1', 'Mu2 Component 2'
+            'MuFeat Component 1', 'MuFeat Component 2',
+            'MuIdf Component 1', 'MuIdf Component 2'
         ]
         
         if use_log:
@@ -177,7 +177,7 @@ class Plot:
     
     def _add_expectation_line(self, dimension, component, row, col):
         """Add expectation line to specific subplot."""
-        # Use circular statistics for mu1 (dimension 1), linear for mu2 (dimension 2)
+        # Use circular statistics for mu_feat (dimension 1), linear for mu_idf (dimension 2)
         circular = (dimension == 1)
         feat_diff_exp, bias_exp = self.compute_expectation(self.surface, dimension, component, circular=circular)
         
@@ -299,7 +299,7 @@ class MultiPlot:
             
             # Add expectation line
             if show_expectation:
-                # Use circular statistics for mu1 (dimension 1), linear for mu2 (dimension 2)
+                # Use circular statistics for mu_feat (dimension 1), linear for mu_idf (dimension 2)
                 circular = (dimension == 1)
                 feat_diff_exp, bias_exp = Plot.compute_expectation(surface, dimension, component, circular=circular)
                 fig.add_trace(go.Scatter(
@@ -321,11 +321,11 @@ class MultiPlot:
     def expectation_curves(surfaces, titles, surface_rows, show_asymmetry=False):
         """Create expectation or asymmetry comparison plot for all dimensions and components."""
         if show_asymmetry:
-            subplot_titles = ['Mu1 Component 1', 'Mu1 Component 2', 'Mu2 Component 1', 'Mu2 Component 2']
+            subplot_titles = ['MuFeat Component 1', 'MuFeat Component 2', 'MuIdf Component 1', 'MuIdf Component 2']
             plot_title = "Asymmetry Curves: Skewness vs feat_diff"
             y_label_prefix = "Asymmetry[mu"
         else:
-            subplot_titles = ['Mu1 Component 1', 'Mu1 Component 2', 'Mu2 Component 1', 'Mu2 Component 2']
+            subplot_titles = ['MuFeat Component 1', 'MuFeat Component 2', 'MuIdf Component 1', 'MuIdf Component 2']
             plot_title = "Expectation Curves: E[bias] vs feat_diff"
             y_label_prefix = "E[mu"
         
@@ -345,7 +345,7 @@ class MultiPlot:
                         feat_diff_values, y_values = Plot.compute_asymmetry(surface, dim, comp)
                         hover_y_label = f"Asymmetry[mu{dim}_bias]"
                     else:
-                        # Use circular statistics for mu1 (dimension 1), linear for mu2 (dimension 2)
+                        # Use circular statistics for mu_feat (dimension 1), linear for mu_idf (dimension 2)
                         circular = (dim == 1)
                         feat_diff_values, y_values = Plot.compute_expectation(surface, dim, comp, circular=circular)
                         hover_y_label = f"E[mu{dim}_bias]"
@@ -360,7 +360,7 @@ class MultiPlot:
                         hovertemplate=f'{title}<br>feat_diff: %{{x:.1f}}<br>{hover_y_label}: %{{y:.3f}}<br>' +
                                      f'sd_feat1: {surface_row["sd_feat1"]:.1f}<br>' +
                                      f'sd_feat2: {surface_row["sd_feat2"]:.1f}<br>' +
-                                     f'sd_spat: {surface_row["sd_spat"]:.1f}<extra></extra>'
+                                     f'sd_idf: {surface_row["sd_idf"]:.1f}<extra></extra>'
                     ), row=row, col=col)
                 
                 fig.add_hline(y=0, line_dash="dash", line_color="gray", row=row, col=col)

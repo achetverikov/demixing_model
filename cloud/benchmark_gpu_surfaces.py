@@ -111,11 +111,11 @@ def _percentile(values: List[float], pct: float) -> float:
 
 
 def _group_params(group: List[Tuple]) -> Dict[str, float]:
-    _, _, _, sf1, sf2, sp, _ = group[0]
+    _, _, _, sf1, sf2, idf, _ = group[0]
     return {
         "sd_feat1": float(min(sf1, sf2)),
         "sd_feat2": float(max(sf1, sf2)),
-        "sd_spat": float(sp),
+        "sd_idf": float(idf),
     }
 
 
@@ -197,11 +197,11 @@ def run_condition(args, n_samples: int) -> Tuple[Dict, List[Dict], List[Path]]:
 
     samples_params = {
         "feat_diff_step": 2,
-        "mu1_bias_step": 2,
-        "mu2_bias_step": 6,
+        "mu_feat_bias_step": 2,
+        "mu_idf_bias_step": 6,
         "feat_diff_range": (4, 180),
-        "mu1_bias_range": (-180, 180),
-        "mu2_bias_range": (-498, 498),
+        "mu_feat_bias_range": (-180, 180),
+        "mu_idf_bias_range": (-498, 498),
         "n_simulations": args.n_simulations,
         "n_samples": n_samples,
         "random_seed": args.random_seed,

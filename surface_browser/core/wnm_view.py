@@ -13,7 +13,7 @@ import numpy as np
 
 from shared import surrogate
 from shared.config import config
-from shared.mu1_axis import mu1_grid_np
+from shared.mu_feat_axis import mu_feat_grid_np
 from shared.prediction import mirror_params, predictor_from_surrogate
 
 
@@ -40,11 +40,11 @@ def evaluate_predictor(predictor, parameters, feat_diff=None, bias_grid=None) ->
     """Evaluate both components continuously at one SD triple."""
     parameters = tuple(float(value) for value in parameters)
     if len(parameters) != 3:
-        raise ValueError("parameters must be (sd_feat1, sd_feat2, sd_spat)")
+        raise ValueError("parameters must be (sd_feat1, sd_feat2, sd_idf)")
     feat_diff = np.asarray(
         config.create_grid("feat_diff") if feat_diff is None else feat_diff,
         dtype=np.float32)
-    bias_grid = np.asarray(mu1_grid_np() if bias_grid is None else bias_grid,
+    bias_grid = np.asarray(mu_feat_grid_np() if bias_grid is None else bias_grid,
                            dtype=np.float32)
     if feat_diff.ndim != 1 or bias_grid.ndim != 1:
         raise ValueError("feature-difference and bias grids must be one-dimensional")

@@ -62,7 +62,7 @@ AUXILIARY_ORDER = ("feat_diff", "sd_feat1", "sd_feat2", "dprime")
 
 #: The domain the artifact declares as usable, as opposed to the exact hull the
 #: corpus happens to reach.  The two differ by a fraction of a degree at three
-#: corners -- the corpus stops at sd_feat1 198.11 and sd_spat 5.0018 -- and the
+#: corners -- the corpus stops at sd_feat1 198.11 and sd_idf 5.0018 -- and the
 #: declared bounds round outward to the design's round numbers, accepting that
 #: sliver of extrapolation deliberately (user decision, 2026-09-06).  Rounding
 #: outward is safe here only because it is a sliver: the overhang is recorded per
@@ -70,7 +70,7 @@ AUXILIARY_ORDER = ("feat_diff", "sd_feat1", "sd_feat2", "dprime")
 DECLARED_DOMAIN = {
     "sd_feat1": (2.5, 200.0),
     "sd_feat2": (2.5, 200.0),
-    "sd_spat": (5.0, 200.0),
+    "sd_idf": (5.0, 200.0),
     "feat_diff": (0.5, 180.0),
 }
 
@@ -126,13 +126,13 @@ def corpus_domain(stage: Path) -> dict:
 
     hull = {name: [float(low[i]), float(high[i])]
             for i, name in enumerate(AUXILIARY_ORDER)}
-    # The model takes sd_spat, not d-prime, and the map inverts the interval.
-    hull["sd_spat"] = [42.0 / hull["dprime"][1], 42.0 / hull["dprime"][0]]
+    # The model takes sd_idf, not d-prime, and the map inverts the interval.
+    hull["sd_idf"] = [42.0 / hull["dprime"][1], 42.0 / hull["dprime"][0]]
     hull.pop("dprime")
 
     # Declared bounds must not meaningfully understate the hull: that would
     # refuse trained parameters, which is how this was wrong in the first place.
-    # The tolerance is for representation noise only -- sd_spat's hull top is
+    # The tolerance is for representation noise only -- sd_idf's hull top is
     # 42/0.21 = 200.0000062, so declaring 200.0 "loses" six microdegrees.
     UNDERSTATEMENT_TOLERANCE = 1e-3
     # A declared box may round outward past the corpus, but only by a sliver.
@@ -258,9 +258,9 @@ def build_meta(fit: dict, fit_path: Path, stage: Path, n_samples: int,
         "period_degrees": wm.PERIOD,
         "density_units": "per model degree",
         "bias_sign_convention": "positive = attraction toward the other item",
-        "parameter_order": ["sd_feat1", "sd_feat2", "sd_spat", "feat_diff"],
-        "spatial_separation_degrees": 42.0,
-        "dprime_relation": "dprime = 42 / sd_spat",
+        "parameter_order": ["sd_feat1", "sd_feat2", "sd_idf", "feat_diff"],
+        "idf_separation_degrees": 42.0,
+        "dprime_relation": "dprime = 42 / sd_idf",
         "component_convention": "predicts component 1; component 2 by swapping sd_feat1/sd_feat2",
         # The supported domain is measured from the corpus by corpus_domain()
         # and merged in below. It is deliberately not derived from the
@@ -287,8 +287,8 @@ def package_training_checkpoint(fit, fit_path, out, n_samples):
     if not training.get("selected_step"):
         raise SystemExit("Checkpoint has no selected training step")
     domain = training["supported_domain"]
-    low = np.array([domain[key][0] for key in ("sd_feat1", "sd_feat2", "sd_spat", "feat_diff")])
-    high = np.array([domain[key][1] for key in ("sd_feat1", "sd_feat2", "sd_spat", "feat_diff")])
+    low = np.array([domain[key][0] for key in ("sd_feat1", "sd_feat2", "sd_idf", "feat_diff")])
+    high = np.array([domain[key][1] for key in ("sd_feat1", "sd_feat2", "sd_idf", "feat_diff")])
     if (not np.all(np.isfinite([low, high])) or np.any(low <= 0)
             or np.any(high <= low) or high[3] > 180):
         raise SystemExit("Training domain must have finite positive, nonzero-width axes and feat_diff <= 180")
@@ -297,9 +297,9 @@ def package_training_checkpoint(fit, fit_path, out, n_samples):
     meta = dict(training, artifact_schema=ARTIFACT_SCHEMA, family="wnm",
                 source_fit=fit_path.name, source_checkpoint_digest=file_digest(fit_path),
                 period_degrees=wm.PERIOD, density_units="per model degree",
-                parameter_order=["sd_feat1", "sd_feat2", "sd_spat", "feat_diff"],
+                parameter_order=["sd_feat1", "sd_feat2", "sd_idf", "feat_diff"],
                 bias_sign_convention="positive = attraction toward the other item",
-                spatial_separation_degrees=42.0, dprime_relation="dprime = 42 / sd_spat",
+                idf_separation_degrees=42.0, dprime_relation="dprime = 42 / sd_idf",
                 component_convention="predicts component 1; component 2 by swapping sd_feat1/sd_feat2",
                 supported_domain_source="training parameter hull including mirrored rows",
                 supported_domain_note="Coverage box only; does not certify prediction accuracy throughout the box")

@@ -11,13 +11,13 @@ The sample count sets how much internal evidence the observer has in each simula
 
 ## Parameters and units
 
-The predictor takes `[sd_feat1, sd_feat2, sd_spat, feat_diff]` in 360° model units. It predicts the target item's circular response-error distribution; swap `sd_feat1` and `sd_feat2` to obtain the other item's prediction. Positive bias means attraction toward the competing item, and density is measured per model degree.
+The predictor takes `[sd_feat1, sd_feat2, sd_idf, feat_diff]` in 360° model units. It predicts the target item's circular response-error distribution; swap `sd_feat1` and `sd_feat2` to obtain the other item's prediction. Positive bias means attraction toward the competing item, and density is measured per model degree.
 
 | Input | Supported range in model degrees |
 |---|---|
 | Target feature noise, `sd_feat1` | 2.5–200 |
 | Non-target feature noise, `sd_feat2` | 2.5–200 |
-| Identifiability noise, `sd_spat` | 5–200 |
+| Identifiability noise, `sd_idf` | 5–200 |
 | Stimulus difference, `feat_diff` | 0.5–180 |
 
 The fitter reads parameter bounds from the checkpoint. For 180° data, it converts behavioral angles into model units; exports include columns in both model and study-scale degrees.

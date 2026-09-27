@@ -84,9 +84,9 @@ def plot_prediction_example(predictions_path: Path, output: Path):
     fig, ax = plt.subplots(figsize=(8.7, 5.2))
     colors = ["#2c7bb6", "#f28e2b", "#b2182b"]
     for (_, row), color in zip(predictions.iterrows(), colors):
-        curve = np.asarray(row["mu1_expectation_curve"], dtype=float)
+        curve = np.asarray(row["mu_feat_expectation_curve"], dtype=float)
         ax.plot(feat_diff, curve, linewidth=2.7, color=color,
-                label=f"Identifiability noise = {row['sd_spat']:g}°")
+                label=f"Identifiability noise = {row['sd_idf']:g}°")
 
     ax.axhline(0, color="#7b8794", linewidth=1, zorder=0)
     ax.set(xlim=(feat_diff.min(), feat_diff.max()),

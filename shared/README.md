@@ -9,7 +9,7 @@ The `shared/` package provides model evaluation, checkpoint loading, circular ge
 | `wnm.py` | Conditional wrapped-normal mixture, circular densities, motor noise, and artifact serialization |
 | `surrogate.py` | Checkpoint selection, saved-run model identity, and supported-domain lookup |
 | `prediction.py` | Common prediction operations |
-| `mu1_axis.py` | Periodic bias grid, wrapping, integration, sign masks, and bin indexing |
+| `mu_feat_axis.py` | Periodic bias grid, wrapping, integration, sign masks, and bin indexing |
 | `circular.py` | Circular curve smoothing |
 | `empirical.py` | Empirical density estimation, bandwidths, and bias curves |
 | `behavioral_data.py` | Behavioral-trial filtering |

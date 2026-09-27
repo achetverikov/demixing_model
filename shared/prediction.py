@@ -37,17 +37,17 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from shared.mu1_axis import (mu1_cell_width, mu1_grid, mu1_grid_np,
+from shared.mu_feat_axis import (mu_feat_cell_width, mu_feat_grid, mu_feat_grid_np,
                              periodic_integral, sign_masks)
 from shared.circular import gaussian_curve_smoother
 
-#: Component separation on the spatial axis, in model degrees.  Hardcoded at
+#: Component separation on the identifiability axis, in model degrees.  Hardcoded at
 #: every production call site of the simulator, and the reason d-prime and
-#: ``sd_spat`` are two views of one number.
-SPATIAL_SEPARATION = 42.0
+#: ``sd_idf`` are two views of one number.
+IDF_SEPARATION = 42.0
 
 #: The order every surrogate takes its parameters in.
-PARAM_ORDER = ("sd_feat1", "sd_feat2", "sd_spat", "feat_diff")
+PARAM_ORDER = ("sd_feat1", "sd_feat2", "sd_idf", "feat_diff")
 
 
 def validate_motor_sd(sd_motor, *, name="sd_motor", scalar=False):
@@ -74,19 +74,19 @@ def validate_motor_sd(sd_motor, *, name="sd_motor", scalar=False):
     return float(values) if values.ndim == 0 else sd_motor
 
 
-def dprime_from_sd_spat(sd_spat):
-    """``d' = 42 / sd_spat``.
+def dprime_from_sd_idf(sd_idf):
+    """``d' = 42 / sd_idf``.
 
     Only interfaces that speak d-prime should call this.  The surrogates, the
-    fitter and the stored parameters all use ``sd_spat``; converting anywhere
+    fitter and the stored parameters all use ``sd_idf``; converting anywhere
     else invites two conventions in one pipeline.
     """
-    return SPATIAL_SEPARATION / jnp.asarray(sd_spat)
+    return IDF_SEPARATION / jnp.asarray(sd_idf)
 
 
-def sd_spat_from_dprime(dprime):
-    """Inverse of :func:`dprime_from_sd_spat`."""
-    return SPATIAL_SEPARATION / jnp.asarray(dprime)
+def sd_idf_from_dprime(dprime):
+    """Inverse of :func:`dprime_from_sd_idf`."""
+    return IDF_SEPARATION / jnp.asarray(dprime)
 
 
 def mirror_params(params):
@@ -109,7 +109,7 @@ def mirror_params(params):
 #: artifact that does not say what it was trained on, the safe assumption is the
 #: interval the fitter already searches, not a guess at the corpus.
 LEGACY_DOMAIN = {"sd_feat1": (5.0, 200.0), "sd_feat2": (5.0, 200.0),
-                 "sd_spat": (5.0, 200.0), "feat_diff": (0.0, 180.0)}
+                 "sd_idf": (5.0, 200.0), "feat_diff": (0.0, 180.0)}
 
 
 def validate_params(params, *, domain, name="parameters"):
@@ -122,9 +122,9 @@ def validate_params(params, *, domain, name="parameters"):
     prediction.
 
     The domain is per parameter, because the corpus's is: ``sd_feat`` reaches
-    down to 2.5 degrees while ``sd_spat`` stops at 5.0, since the latter is
+    down to 2.5 degrees while ``sd_idf`` stops at 5.0, since the latter is
     ``42/d'`` and d-prime was bounded at 8.4.  One shared interval had to be
-    either the union -- claiming ``sd_spat`` coverage that does not exist -- or
+    either the union -- claiming ``sd_idf`` coverage that does not exist -- or
     the intersection, which is what it was, and which refused roughly a fifth of
     the feature-noise region the network was actually trained on.
 
@@ -175,7 +175,7 @@ def domain_from_meta(meta) -> dict:
         # given: it is what that artifact claims, and widening it here would
         # invent coverage on the artifact's behalf.
         return {"sd_feat1": tuple(sd_range), "sd_feat2": tuple(sd_range),
-                "sd_spat": tuple(sd_range), "feat_diff": tuple(feat_range)}
+                "sd_idf": tuple(sd_range), "feat_diff": tuple(feat_range)}
     return dict(LEGACY_DOMAIN)
 
 
@@ -199,7 +199,7 @@ def legal_warmup_params(n_rows: int, sd_range, feat_diff_range) -> jnp.ndarray:
 def check_curve_layout(params):
     """Check that a parameter batch really is one curve along the feature axis.
 
-    All rows must share ``(sd_feat1, sd_feat2, sd_spat)`` and their ``feat_diff``
+    All rows must share ``(sd_feat1, sd_feat2, sd_idf)`` and their ``feat_diff``
     must be strictly increasing and evenly spaced: the smoother's width is
     expressed in grid steps and its kernel is symmetric about each point, so a
     shuffled or unevenly sampled batch still yields a smooth-looking curve -- one
@@ -219,7 +219,7 @@ def check_curve_layout(params):
     triples = params[:, :3]
     if not np.allclose(triples, triples[:1]):
         raise ValueError(
-            "expected one curve: all rows must share (sd_feat1, sd_feat2, sd_spat) and vary "
+            "expected one curve: all rows must share (sd_feat1, sd_feat2, sd_idf) and vary "
             "only in feat_diff. Smoothing runs along the feature axis, so a mixed batch "
             "would average unrelated points.")
 
@@ -283,8 +283,8 @@ def pooled_bias_weighted_crps(probabilities, datasets, feat_grid, distance_matri
             "distributions; the two are paired positionally, so a mismatch scores one "
             "order's model against another's trials.")
 
-    bias_low = config.mu1_bias_range[0]
-    bias_step = config.mu1_bias_step
+    bias_low = config.mu_feat_bias_range[0]
+    bias_step = config.mu_feat_bias_step
     n_bias = probabilities.shape[1]
 
     supports, weighted_empirical, weighted_sin, weighted_cos = [], [], [], []
@@ -293,7 +293,7 @@ def pooled_bias_weighted_crps(probabilities, datasets, feat_grid, distance_matri
         feat_diff, bias = values[:, 0], values[:, 1]
         kernel = np.exp(-0.5 * ((feat_grid[:, None] - feat_diff[None, :]) / weights_sd) ** 2)
         support = kernel.sum(axis=1)
-        # Circular binning: wrap, never clip (the mu1_bias axis is a circle).
+        # Circular binning: wrap, never clip (the mu_feat_bias axis is a circle).
         bias_bin = np.mod(np.round((bias - bias_low) / bias_step).astype(int), n_bias)
         one_hot = np.zeros((len(bias), n_bias), dtype=float)
         one_hot[np.arange(len(bias)), bias_bin] = 1.0
@@ -391,8 +391,8 @@ class WrappedMixturePredictor(BiasPredictor):
         self.domain = domain_from_meta(self.meta)
         # Kept for callers that only need a coarse box; the authority is
         # ``self.domain``, which is per parameter.
-        self.sd_range = (min(self.domain[k][0] for k in ("sd_feat1", "sd_feat2", "sd_spat")),
-                         max(self.domain[k][1] for k in ("sd_feat1", "sd_feat2", "sd_spat")))
+        self.sd_range = (min(self.domain[k][0] for k in ("sd_feat1", "sd_feat2", "sd_idf")),
+                         max(self.domain[k][1] for k in ("sd_feat1", "sd_feat2", "sd_idf")))
         self.feat_diff_range = self.domain["feat_diff"]
 
     # -- identity -----------------------------------------------------------
@@ -467,7 +467,7 @@ class WrappedMixturePredictor(BiasPredictor):
 
     def grid_log_density(self, params, grid=None, validate: bool = True, sd_motor=None):
         """Log density on a shared grid -- for display, not for scoring."""
-        grid = mu1_grid() if grid is None else jnp.asarray(grid)
+        grid = mu_feat_grid() if grid is None else jnp.asarray(grid)
         dist = self.distribution(params, validate, sd_motor)
         return self._wm.mixture_logpdf_grid(grid, dist, self.n_wraps)
 
@@ -587,8 +587,8 @@ class WrappedMixturePredictor(BiasPredictor):
     @staticmethod
     def _default_edges():
         """Cell edges of the production reporting grid, from its centres."""
-        centres = mu1_grid_np()
-        half = mu1_cell_width() / 2.0
+        centres = mu_feat_grid_np()
+        half = mu_feat_cell_width() / 2.0
         return jnp.asarray(np.concatenate([centres - half, [centres[-1] + half]]))
 
 
@@ -597,7 +597,7 @@ class SurfacePredictor(BiasPredictor):
 
     Its outputs are 180-row log-density surfaces, so every quantity here is a
     grid operation: densities are read at cell centres, moments and asymmetry are
-    discrete sums over the mu1 axis, and cell probability is density times cell
+    discrete sums over the mu_feat axis, and cell probability is density times cell
     width. These conventions are retained for raw stored-surface inspection.
     Surfaces are supplied by the caller; this class does not load a model.
     """
@@ -612,7 +612,7 @@ class SurfacePredictor(BiasPredictor):
         self.sd_motor = float(sd_motor)
         if self.log_surfaces.ndim != 3:
             raise ValueError(
-                f"expected (n_rows, n_mu1_bias, n_feat_diff) surfaces, got "
+                f"expected (n_rows, n_mu_feat_bias, n_feat_diff) surfaces, got "
                 f"{tuple(self.log_surfaces.shape)}")
 
     def identity(self) -> PredictorIdentity:
@@ -624,18 +624,18 @@ class SurfacePredictor(BiasPredictor):
             "Apply motor noise to stored surfaces before constructing SurfacePredictor.")
 
     def grid_log_density(self, feat_index):
-        """Log density down the mu1 axis at one feature-grid column."""
+        """Log density down the mu_feat axis at one feature-grid column."""
         return self.log_surfaces[:, :, feat_index]
 
     def cell_probabilities(self, feat_index):
         """Density times cell width -- the historical mass convention."""
-        return jnp.exp(self.grid_log_density(feat_index)) * mu1_cell_width()
+        return jnp.exp(self.grid_log_density(feat_index)) * mu_feat_cell_width()
 
     def signed_arc_asymmetry(self, feat_indices):
         """Discrete sign-mass difference, excluding 0 and the antipode."""
         probs = jnp.exp(self.log_surfaces)[:, :, feat_indices]
         positive, negative = sign_masks()
-        dx = mu1_cell_width()
+        dx = mu_feat_cell_width()
         p_pos = jnp.sum(jnp.where(positive[None, :, None], probs, 0.0), axis=1) * dx
         p_neg = jnp.sum(jnp.where(negative[None, :, None], probs, 0.0), axis=1) * dx
         return p_pos - p_neg
@@ -663,7 +663,7 @@ class SurfacePredictor(BiasPredictor):
                 f"bin weights span {weights.shape[-1]} feature columns but the surfaces have "
                 f"{self.log_surfaces.shape[2]}")
 
-        grid = mu1_grid()
+        grid = mu_feat_grid()
         probabilities = jnp.exp(self.log_surfaces)
         mixtures = jnp.einsum('smf,sbf->smb', probabilities, weights)
 
@@ -696,7 +696,7 @@ def mixture_plot_curves(predictor, params_by_row, feat_grid, bin_weights=None,
 
     Args:
         predictor: a ``WrappedMixturePredictor``.
-        params_by_row: ``(n_rows, 3)`` of ``[sd_feat1, sd_feat2, sd_spat]`` --
+        params_by_row: ``(n_rows, 3)`` of ``[sd_feat1, sd_feat2, sd_idf]`` --
             one row per fitted condition-and-optimizer the plot will draw.
         feat_grid: feature differences to evaluate, in model degrees.
         bin_weights: ``(n_rows, n_bins, n_feat)`` for the pooled SD panel, or
@@ -764,11 +764,11 @@ def mixture_plot_curves(predictor, params_by_row, feat_grid, bin_weights=None,
 
     bias, asymmetry, circular_sd, pooled = [], [], [], []
     for index in range(n_rows):
-        sd_feat1, sd_feat2, sd_spat = params_by_row[index]
+        sd_feat1, sd_feat2, sd_idf = params_by_row[index]
         rows = jnp.stack([
             jnp.full(feat_grid.shape, float(sd_feat1), jnp.float32),
             jnp.full(feat_grid.shape, float(sd_feat2), jnp.float32),
-            jnp.full(feat_grid.shape, float(sd_spat), jnp.float32),
+            jnp.full(feat_grid.shape, float(sd_idf), jnp.float32),
             feat_grid], axis=-1)
         motor = float(motors[index])
 
@@ -788,7 +788,7 @@ def mixture_plot_curves(predictor, params_by_row, feat_grid, bin_weights=None,
             operator_rows = jnp.stack([
                 jnp.full(operator_grid.shape, float(sd_feat1), jnp.float32),
                 jnp.full(operator_grid.shape, float(sd_feat2), jnp.float32),
-                jnp.full(operator_grid.shape, float(sd_spat), jnp.float32),
+                jnp.full(operator_grid.shape, float(sd_idf), jnp.float32),
                 operator_grid], axis=-1)
             operator_mean, operator_resultant = predictor.mean_and_resultant(
                 operator_rows, validate=False, sd_motor=motor)

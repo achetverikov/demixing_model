@@ -4,9 +4,8 @@ Keeps the compact ``(design, bias)`` layout — ``(M, 4)`` parameters and
 ``(M, S, 2)`` per-simulation biases — and materialises training rows only per
 batch, so the mirror augmentation costs no memory.
 
-Raw training designs use the historical field name ``sd_ident`` for their
-third SD coordinate. Production artifacts and the fitting API expose the same
-quantity as ``sd_spat``.
+Raw training designs and production artifacts call the third SD coordinate
+``sd_idf``.
 """
 
 from __future__ import annotations
@@ -22,7 +21,7 @@ class SampleStore:
     """Raw EM outcomes with on-the-fly mirror augmentation.
 
     Each simulation supplies two observations: the component-1 bias at
-    ``(sd_feat1, sd_feat2, sd_ident, feat_diff)`` and the component-2 bias, which
+    ``(sd_feat1, sd_feat2, sd_idf, feat_diff)`` and the component-2 bias, which
     by the exchangeability of the two components is a draw from the same
     conditional density at the mirrored parameter vector.
     """
@@ -45,15 +44,15 @@ class SampleStore:
         return int(self.finite.sum())
 
     def param_key(self) -> np.ndarray:
-        """Row-wise ``(sd_feat1, sd_feat2, sd_ident)`` triple, for reporting."""
+        """Row-wise ``(sd_feat1, sd_feat2, sd_idf)`` triple, for reporting."""
         return self.design[:, :3]
 
     def canonical_param_key(self) -> np.ndarray:
-        """Mirror-invariant ``(min(sd_feat1, sd_feat2), max(...), sd_ident)`` triple.
+        """Mirror-invariant ``(min(sd_feat1, sd_feat2), max(...), sd_idf)`` triple.
 
-        The mirror augmentation turns a row at ``(sd1, sd2, sp)`` into a training
-        observation at ``(sd2, sd1, sp)`` as well, so ``(sd1, sd2, sp)`` and
-        ``(sd2, sd1, sp)`` are the *same* group as far as leakage is concerned.
+        The mirror augmentation turns a row at ``(sd1, sd2, idf)`` into a training
+        observation at ``(sd2, sd1, idf)`` as well, so ``(sd1, sd2, idf)`` and
+        ``(sd2, sd1, idf)`` are the *same* group as far as leakage is concerned.
         Splitting on this canonical key is what keeps a mirrored twin from landing
         in validation while its original trains (see :func:`split_by_params`).
         """

@@ -67,16 +67,16 @@ class WNMTab(BaseTab):
                 "Reference surface", range(len(rows)),
                 format_func=lambda i: (
                     f"sf1={rows.iloc[i].sd_feat1:.1f}, "
-                    f"sf2={rows.iloc[i].sd_feat2:.1f}, sp={rows.iloc[i].sd_spat:.1f}"
+                    f"sf2={rows.iloc[i].sd_feat2:.1f}, idf={rows.iloc[i].sd_idf:.1f}"
                 ), key="wnm_reference_surface")
             row = rows.iloc[selected]
-            parameters = (row.sd_feat1, row.sd_feat2, row.sd_spat)
+            parameters = (row.sd_feat1, row.sd_feat2, row.sd_idf)
             reference = self.data_manager.load_surface(row)
             feat_diff = reference.feat_diff_grid if reference is not None else None
         else:
             columns = st.columns(3)
             parameters = []
-            for column, name in zip(columns, ("sd_feat1", "sd_feat2", "sd_spat")):
+            for column, name in zip(columns, ("sd_feat1", "sd_feat2", "sd_idf")):
                 low, high = predictor.domain[name]
                 with column:
                     parameters.append(st.number_input(
@@ -89,7 +89,7 @@ class WNMTab(BaseTab):
         view = evaluate_predictor(predictor, parameters, feat_diff=feat_diff)
         st.caption(
             f"{view.identity['dm_version']} · n={view.identity['surrogate_n_samples']} · "
-            f"sf1={parameters[0]:.2f}, sf2={parameters[1]:.2f}, sp={parameters[2]:.2f}")
+            f"sf1={parameters[0]:.2f}, sf2={parameters[1]:.2f}, idf={parameters[2]:.2f}")
         st.plotly_chart(plot_wnm_density(view, reference), use_container_width=True)
         st.plotly_chart(plot_wnm_curves(view), use_container_width=True)
 
@@ -116,7 +116,7 @@ class SingleTab(BaseTab):
         params = {
             'sd_feat1': selected_surface['sd_feat1'],
             'sd_feat2': selected_surface['sd_feat2'],
-            'sd_spat': selected_surface['sd_spat']
+            'sd_idf': selected_surface['sd_idf']
         }
 
         # Display options
@@ -218,7 +218,7 @@ class SingleTab(BaseTab):
             st.text(surface.summary())
 
         # Create and show plot
-        title = f"sd_feat1={params['sd_feat1']:.1f}, sd_feat2={params['sd_feat2']:.1f}, sd_spat={params['sd_spat']:.1f}"
+        title = f"sd_feat1={params['sd_feat1']:.1f}, sd_feat2={params['sd_feat2']:.1f}, sd_idf={params['sd_idf']:.1f}"
 
         if plot_type == "2D Heatmaps":
             fig = plot_surface(surface, title, show_expectation, use_log, auto_zoom, prob_threshold)
@@ -357,7 +357,7 @@ class ExpectationTab(BaseTab):
                         _, values = Plot.compute_asymmetry(surface, dim, comp)
                         value_label = "Asymmetry"
                     else:
-                        # Use circular statistics for mu1 (dimension 1), linear for mu2 (dimension 2)
+                        # Use circular statistics for mu_feat (dimension 1), linear for mu_idf (dimension 2)
                         circular = (dim == 1)
                         _, values = Plot.compute_expectation(surface, dim, comp, circular=circular)
                         value_label = "E[bias]"
@@ -368,7 +368,7 @@ class ExpectationTab(BaseTab):
                         'Component': comp,
                         'sd_feat1': surface_row['sd_feat1'],
                         'sd_feat2': surface_row['sd_feat2'],
-                        'sd_spat': surface_row['sd_spat'],
+                        'sd_idf': surface_row['sd_idf'],
                         f'{value_label} Mean': np.mean(values),
                         f'{value_label} Std': np.std(values),
                         f'{value_label} Range': np.max(values) - np.min(values),
@@ -395,7 +395,7 @@ class SpaceTab(BaseTab):
             self.filtered_df,
             x='sd_feat1',
             y='sd_feat2',
-            z='sd_spat',
+            z='sd_idf',
             title="Parameter Space Coverage",
             hover_data=['filename']
         )
@@ -406,7 +406,7 @@ class SpaceTab(BaseTab):
         st.subheader("Parameter Distributions")
         col1, col2, col3 = st.columns(3)
         
-        for i, param in enumerate(['sd_feat1', 'sd_feat2', 'sd_spat']):
+        for i, param in enumerate(['sd_feat1', 'sd_feat2', 'sd_idf']):
             with [col1, col2, col3][i]:
                 fig = px.histogram(self.filtered_df, x=param, title=f"{param} Distribution")
                 st.plotly_chart(fig, use_container_width=True)
@@ -443,7 +443,7 @@ class StatsTab(BaseTab):
                 stats_data.append({
                     'sd_feat1': surface_row['sd_feat1'],
                     'sd_feat2': surface_row['sd_feat2'],
-                    'sd_spat': surface_row['sd_spat'],
+                    'sd_idf': surface_row['sd_idf'],
                     'log_likelihood_min': float(np.min(combined_log_likelihood)),
                     'log_likelihood_max': float(np.max(combined_log_likelihood)),
                     'log_likelihood_mean': float(np.mean(combined_log_likelihood)),
@@ -467,7 +467,7 @@ class StatsTab(BaseTab):
                     stats_df,
                     x='sd_feat1',
                     y='log_likelihood_max',
-                    color='sd_spat',
+                    color='sd_idf',
                     title="Max Log-Likelihood vs sd_feat1"
                 )
                 st.plotly_chart(fig, use_container_width=True)

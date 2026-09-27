@@ -52,13 +52,13 @@ def setup():
                 for key in golden.files if key.startswith(prefix)}
 
     feat_diff_grid = config.create_grid('feat_diff')
-    bias_grid = config.create_grid('mu1_bias')
+    bias_grid = config.create_grid('mu_feat_bias')
     diff = jnp.abs(bias_grid[:, None] - bias_grid[None, :])
     d_circ = jnp.minimum(diff, 360.0 - diff)
 
     targets = build_fitting_targets(
         {k: jnp.asarray(v) for k, v in datasets.items()}, feat_diff_grid=feat_diff_grid,
-        d_circ_matrix=d_circ, n_mu1_bias=len(bias_grid), emp_density_weights_sd=20.0,
+        d_circ_matrix=d_circ, n_mu_feat_bias=len(bias_grid), emp_density_weights_sd=20.0,
         density_bandwidth_rule="sj", density_bandwidth_mode="pooled",
         degenerate_targets=degenerate_targets,
         bwcrps_condition_targets=compute_bwcrps_condition_targets,
@@ -92,7 +92,7 @@ def test_the_result_shape_matches_the_other_backends(setup, density_fit):
     assert result["search_backend"] == "continuous"
     assert result["n_conditions"] == len(setup["datasets"])
     assert result["condition_names"] == list(setup["datasets"])
-    assert set(result["shared_params"]) == {"sd_spat", "sd_motor"}
+    assert set(result["shared_params"]) == {"sd_idf", "sd_motor"}
     assert len(result["stage_times"]) >= 1
 
 
@@ -222,4 +222,4 @@ def test_the_search_box_is_recorded_with_the_result(setup, density_fit):
     assert "bounds" in settings and "bound_names" in settings
     assert len(settings["bounds"]) == len(settings["bound_names"])
     assert settings["bounds"][0] == [2.5, 200.0]     # sd_feat, from the WNM domain
-    assert settings["bounds"][-1] == [5.0, 200.0]    # sd_spat
+    assert settings["bounds"][-1] == [5.0, 200.0]    # sd_idf

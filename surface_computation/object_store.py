@@ -39,7 +39,7 @@ class SurfaceObjectStore:
     """Upload/list averaged surface pickles in an S3-compatible bucket."""
 
     _SURFACE_RE = re.compile(
-        r"averaged_sf1_(?P<sf1>[\d.]+)_sf2_(?P<sf2>[\d.]+)_sp_(?P<sp>[\d.]+)\.pkl$"
+        r"averaged_sf1_(?P<sf1>[\d.]+)_sf2_(?P<sf2>[\d.]+)_idf_(?P<idf>[\d.]+)\.pkl$"
     )
     _BUNDLE_MANIFEST_RE = re.compile(r"surface_bundle_.*\.manifest\.json$")
 
@@ -140,6 +140,6 @@ class SurfaceObjectStore:
                     continue
                 sf1 = float(match["sf1"])
                 sf2 = float(match["sf2"])
-                sp = float(match["sp"])
-                completed.add(f"{min(sf1, sf2):.1f}|{max(sf1, sf2):.1f}|{sp:.1f}")
+                idf = float(match["idf"])
+                completed.add(f"{min(sf1, sf2):.1f}|{max(sf1, sf2):.1f}|{idf:.1f}")
         return completed

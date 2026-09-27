@@ -39,7 +39,7 @@ TRIAL_METHODS = ("likelihood", "crps")
 
 @pytest.fixture(scope="module")
 def d_circ():
-    grid = config.create_grid('mu1_bias')
+    grid = config.create_grid('mu_feat_bias')
     diff = jnp.abs(grid[:, None] - grid[None, :])
     return jnp.minimum(diff, 360.0 - diff)
 
@@ -56,7 +56,7 @@ def _targets(datasets, d_circ):
     return build_fitting_targets(
         {name: jnp.asarray(values) for name, values in datasets.items()},
         feat_diff_grid=config.create_grid('feat_diff'), d_circ_matrix=d_circ,
-        n_mu1_bias=len(config.create_grid('mu1_bias')), emp_density_weights_sd=20.0,
+        n_mu_feat_bias=len(config.create_grid('mu_feat_bias')), emp_density_weights_sd=20.0,
         density_bandwidth_rule="sj", density_bandwidth_mode="pooled",
         degenerate_targets=degenerate_targets,
         bwcrps_condition_targets=compute_bwcrps_condition_targets,
@@ -231,7 +231,7 @@ def test_packed_exact_loss_matches_condition_loop_without_padding(
     exact = build_fitting_targets(
         {name: jnp.asarray(values) for name, values in datasets.items()},
         feat_diff_grid=config.create_grid('feat_diff'), d_circ_matrix=d_circ,
-        n_mu1_bias=len(config.create_grid('mu1_bias')), emp_density_weights_sd=20.0,
+        n_mu_feat_bias=len(config.create_grid('mu_feat_bias')), emp_density_weights_sd=20.0,
         density_bandwidth_rule="sj", density_bandwidth_mode="pooled",
         degenerate_targets=degenerate_targets,
         bwcrps_condition_targets=compute_bwcrps_condition_targets,
@@ -252,7 +252,7 @@ def test_exact_padding_has_zero_effect(predictor, datasets, d_circ):
     kwargs = dict(
         condition_datasets={name: jnp.asarray(values) for name, values in datasets.items()},
         feat_diff_grid=config.create_grid('feat_diff'), d_circ_matrix=d_circ,
-        n_mu1_bias=len(config.create_grid('mu1_bias')), emp_density_weights_sd=20.0,
+        n_mu_feat_bias=len(config.create_grid('mu_feat_bias')), emp_density_weights_sd=20.0,
         density_bandwidth_rule="sj", density_bandwidth_mode="pooled",
         degenerate_targets=degenerate_targets,
         bwcrps_condition_targets=compute_bwcrps_condition_targets,
@@ -280,7 +280,7 @@ def test_exact_wnm_evaluates_nonzero_coordinates_below_artifact_support(
     values[:5, 0] = 0.25
     exact = build_fitting_targets(
         {name: jnp.asarray(values)}, feat_diff_grid=config.create_grid('feat_diff'),
-        d_circ_matrix=d_circ, n_mu1_bias=len(config.create_grid('mu1_bias')),
+        d_circ_matrix=d_circ, n_mu_feat_bias=len(config.create_grid('mu_feat_bias')),
         emp_density_weights_sd=20.0, density_bandwidth_rule="sj",
         density_bandwidth_mode="pooled", degenerate_targets=degenerate_targets,
         bwcrps_condition_targets=compute_bwcrps_condition_targets,

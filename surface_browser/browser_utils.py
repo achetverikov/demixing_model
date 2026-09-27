@@ -28,12 +28,12 @@ def setup_page():
 
 def format_surface_title(params):
     """Create standardized surface title from parameters."""
-    return f"sd_feat1={params['sd_feat1']:.1f}, sd_feat2={params['sd_feat2']:.1f}, sd_spat={params['sd_spat']:.1f}"
+    return f"sd_feat1={params['sd_feat1']:.1f}, sd_feat2={params['sd_feat2']:.1f}, sd_idf={params['sd_idf']:.1f}"
 
 
 def format_short_title(params):
     """Create short surface title for plots."""
-    return f"sf1={params['sd_feat1']:.1f}, sf2={params['sd_feat2']:.1f}, sp={params['sd_spat']:.1f}"
+    return f"sf1={params['sd_feat1']:.1f}, sf2={params['sd_feat2']:.1f}, idf={params['sd_idf']:.1f}"
 
 
 def safe_divide(numerator, denominator, default=0.0):
@@ -65,7 +65,7 @@ def validate_surface_data(surface_data):
     if len(surface_data) != 4:
         return False, f"Expected 4 components, got {len(surface_data)}"
     
-    feat_diff_grid, mu1_error_grid, log_likelihood_surface, likelihood_surface = surface_data
+    feat_diff_grid, mu_feat_error_grid, log_likelihood_surface, likelihood_surface = surface_data
     
     # Check shapes match
     if not all(arr.shape == feat_diff_grid.shape for arr in surface_data):
@@ -74,7 +74,7 @@ def validate_surface_data(surface_data):
     # Check for NaN or infinite values
     for i, arr in enumerate(surface_data):
         if np.any(np.isnan(arr)) or np.any(np.isinf(arr)):
-            names = ['feat_diff_grid', 'mu1_error_grid', 'log_likelihood_surface', 'likelihood_surface']
+            names = ['feat_diff_grid', 'mu_feat_error_grid', 'log_likelihood_surface', 'likelihood_surface']
             return False, f"Found NaN or infinite values in {names[i]}"
     
     return True, "Valid"
@@ -134,7 +134,7 @@ def get_color_palette(n_colors):
 
 def cache_key(params):
     """Generate cache key from parameters."""
-    return f"{params['sd_feat1']:.1f}_{params['sd_feat2']:.1f}_{params['sd_spat']:.1f}"
+    return f"{params['sd_feat1']:.1f}_{params['sd_feat2']:.1f}_{params['sd_idf']:.1f}"
 
 
 def format_number(value, precision=2):

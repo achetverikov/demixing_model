@@ -353,7 +353,7 @@ def test_standard_pipeline_pools_report_orders_from_exact_wnm_cell_masses(
     probabilities = subject_plots._mixture_probability_surfaces(
         predictor, np.stack([first_params[:3], second_params[:3]]),
         [first_params[3], second_params[3]], feat_grid)
-    bias_grid = np.asarray(config.create_grid("mu1_bias"))
+    bias_grid = np.asarray(config.create_grid("mu_feat_bias"))
     difference = np.abs(bias_grid[:, None] - bias_grid[None, :])
     expected = pooled_bias_weighted_crps(
         probabilities, [first["data_df"], second["data_df"]], feat_grid,

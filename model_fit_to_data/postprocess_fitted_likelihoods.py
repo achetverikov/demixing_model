@@ -45,7 +45,7 @@ FIT_META_COLS = [
     "optimizer",
     "sd_feat1",
     "sd_feat2",
-    "sd_spat",
+    "sd_idf",
     "sd_motor",
     "bundle_id",
     "canonical_trial_sha256",
@@ -239,7 +239,7 @@ def load_fit_rows(path: Path, optimizers: Iterable[str] | None) -> pd.DataFrame:
     dt = pd.read_csv(path)
     required = {
         "subject", "experiment", "condition", "optimizer",
-        "sd_feat1", "sd_feat2", "sd_spat", "sd_motor", "eval_likelihood_loss",
+        "sd_feat1", "sd_feat2", "sd_idf", "sd_motor", "eval_likelihood_loss",
     }
     missing = sorted(required.difference(dt.columns))
     if missing:
@@ -264,7 +264,7 @@ def angle_scale_to_model(circ_space: int) -> float:
 
 
 def physical_bin_width_deg(circ_space: int) -> float:
-    return config.mu1_bias_step / angle_scale_to_model(circ_space)
+    return config.mu_feat_bias_step / angle_scale_to_model(circ_space)
 
 
 def model_grid_indices(
@@ -277,7 +277,7 @@ def model_grid_indices(
     """Match the fitter's JAX/float32 round-to-grid indexing path.
 
     ``circular=True`` wraps out-of-range indices instead of clipping them, which
-    is what the mu1_bias axis needs — it is a circle, so an angle just past the
+    is what the mu_feat_bias axis needs — it is a circle, so an angle just past the
     last grid point belongs in bin 0, not in the last bin.  feat_diff is a
     bounded interval and keeps the clip.
     """
@@ -343,9 +343,9 @@ def prepare_condition_rows(
 
     bias_idx = model_grid_indices(
         cleaned["bias_model_deg"].to_numpy(float),
-        grid_min=config.mu1_bias_range[0],
-        grid_step=config.mu1_bias_step,
-        grid_size=config.mu1_bias_grid_size,
+        grid_min=config.mu_feat_bias_range[0],
+        grid_step=config.mu_feat_bias_step,
+        grid_size=config.mu_feat_bias_grid_size,
         circular=True,
     )
 
@@ -399,7 +399,7 @@ def wnm_trial_log_density(predictor, fit_row: pd.Series, feat_diff_deg, bias_deg
     """Compatibility wrapper for the canonical WNM likelihood evaluator."""
     parameters = [
         float(fit_row["sd_feat1"]), float(fit_row["sd_feat2"]),
-        float(fit_row["sd_spat"]), float(fit_row.get("sd_motor", 0.0) or 0.0),
+        float(fit_row["sd_idf"]), float(fit_row.get("sd_motor", 0.0) or 0.0),
     ]
     return evaluate_trial_likelihoods(
         predictor, parameters, feat_diff_deg, bias_deg
@@ -409,7 +409,7 @@ def wnm_cell_log_probability(predictor, fit_row: pd.Series, feat_diff_deg, bias_
     """Compatibility wrapper for exact float64 WNM reporting-cell mass."""
     parameters = [
         float(fit_row["sd_feat1"]), float(fit_row["sd_feat2"]),
-        float(fit_row["sd_spat"]), float(fit_row.get("sd_motor", 0.0) or 0.0),
+        float(fit_row["sd_idf"]), float(fit_row.get("sd_motor", 0.0) or 0.0),
     ]
     return exact_cell_log_probability(
         predictor, parameters, feat_diff_deg, bias_deg)
@@ -420,9 +420,9 @@ def _score_fit_row_wnm(predictor, scored, data_source, fit_row, circ_space):
     bias = scored["bias_model_deg"].to_numpy(float)
     parameters = [
         float(fit_row["sd_feat1"]), float(fit_row["sd_feat2"]),
-        float(fit_row["sd_spat"]), float(fit_row.get("sd_motor", 0.0) or 0.0),
+        float(fit_row["sd_idf"]), float(fit_row.get("sd_motor", 0.0) or 0.0),
     ]
-    model_bin_width_deg = float(config.mu1_bias_step)
+    model_bin_width_deg = float(config.mu_feat_bias_step)
     bin_width_deg = physical_bin_width_deg(circ_space)
     likelihood = evaluate_trial_likelihoods(
         predictor, parameters, feat_diff, bias,
@@ -434,7 +434,7 @@ def _score_fit_row_wnm(predictor, scored, data_source, fit_row, circ_space):
         scored[column] = values
     for column in ("subject", "experiment", "condition", "optimizer"):
         scored[f"fit_{column}" if column != "optimizer" else "optimizer"] = fit_row[column]
-    for column in ("sd_feat1", "sd_feat2", "sd_spat", "sd_motor"):
+    for column in ("sd_feat1", "sd_feat2", "sd_idf", "sd_motor"):
         scored[column] = float(fit_row[column])
     scored["prepared_data_source"] = data_source
 

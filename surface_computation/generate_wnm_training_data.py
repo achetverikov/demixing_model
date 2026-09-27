@@ -144,7 +144,7 @@ def main():
     p.add_argument('--trajectory-points', type=int, default=24)
     p.add_argument('--uev-feature-step', type=float, default=2.0)
     p.add_argument('--uev-added-sd-feat', type=float, nargs='+', default=[90., 120.])
-    p.add_argument('--uev-spat-dprime', type=float, nargs='+', default=[2.])
+    p.add_argument('--uev-idf-dprime', type=float, nargs='+', default=[2.])
     p.add_argument('--sd-scale', choices=['log', 'linear'], default='log')
     p.add_argument('--fix-weights', action='store_true')
     p.add_argument('--crn', action='store_true',
@@ -199,7 +199,7 @@ def main():
             design, strata = design_mod.uev_design(args.uev_feature_step)
         else:
             design, strata = design_mod.uev_extension_design(
-                args.uev_added_sd_feat, args.uev_spat_dprime,
+                args.uev_added_sd_feat, args.uev_idf_dprime,
                 args.uev_feature_step)
     else:
         if args.training_design == 'sobol':
@@ -290,8 +290,8 @@ def main():
                               'simulation_elapsed_s': simulation_elapsed,
                               'n_nonfinite': n_bad,
                               'effective_design_seed': design_seed,
-                              'spat_diff': wnm_simulation.SPAT_DIFF,
-                              'dprime_definition': 'spat_diff / sd_ident',
+                              'idf_diff': wnm_simulation.IDF_DIFF,
+                              'dprime_definition': 'idf_diff / sd_idf',
                               'param_names': list(design_mod.PARAM_NAMES)})
     meta = {key: str(value) if isinstance(value, Path) else value
             for key, value in meta.items()}

@@ -15,13 +15,13 @@ from scipy.stats import norm
 
 from model_fit_to_data.wnm_scoring import trial_log_density
 from shared.config import config
-from shared.mu1_axis import bin_indices, mu1_cell_width, mu1_grid
+from shared.mu_feat_axis import bin_indices, mu_feat_cell_width, mu_feat_grid
 
 
 def _parameters(values):
     values = np.asarray(values, dtype=float).reshape(-1)
     if values.size < 3:
-        raise ValueError("WNM fit parameters need sd_feat1, sd_feat2, and sd_spat")
+        raise ValueError("WNM fit parameters need sd_feat1, sd_feat2, and sd_idf")
     if values.size == 3:
         values = np.concatenate([values, [0.0]])
     return values[:4]
@@ -29,7 +29,7 @@ def _parameters(values):
 
 def exact_cell_log_probability(predictor, parameters, feat_diff_deg, bias_deg):
     """Float64 log probability of each observation's reporting cell."""
-    sd_feat1, sd_feat2, sd_spat, sd_motor = _parameters(parameters)
+    sd_feat1, sd_feat2, sd_idf, sd_motor = _parameters(parameters)
     bias = np.asarray(bias_deg)
     feat = np.asarray(feat_diff_deg)
     indices = np.asarray(
@@ -38,7 +38,7 @@ def exact_cell_log_probability(predictor, parameters, feat_diff_deg, bias_deg):
     rows = jnp.stack([
         jnp.full(len(indices), sd_feat1, jnp.float32),
         jnp.full(len(indices), sd_feat2, jnp.float32),
-        jnp.full(len(indices), sd_spat, jnp.float32),
+        jnp.full(len(indices), sd_idf, jnp.float32),
         jnp.asarray(feat, dtype=jnp.float32),
     ], axis=-1)
     dist = predictor.distribution(
@@ -48,8 +48,8 @@ def exact_cell_log_probability(predictor, parameters, feat_diff_deg, bias_deg):
     sigma = np.asarray(dist["sigma"], dtype=np.float64)
     weights = np.asarray(jnp.exp(dist["log_pi"]), dtype=np.float64)
 
-    centres = np.asarray(mu1_grid())
-    half = mu1_cell_width() / 2.0
+    centres = np.asarray(mu_feat_grid())
+    half = mu_feat_cell_width() / 2.0
     lows = (centres[indices] - half)[:, None]
     highs = (centres[indices] + half)[:, None]
     shifts = np.arange(-8, 9, dtype=np.float64) * 360.0
@@ -76,14 +76,14 @@ def evaluate_trial_likelihoods(
         predictor, parameters, feat_diff_deg, bias_deg, *,
         physical_bin_width_deg=None, include_cell_probability=False):
     """Evaluate the canonical WNM likelihood columns for one fitted condition."""
-    sd_feat1, sd_feat2, sd_spat, sd_motor = _parameters(parameters)
+    sd_feat1, sd_feat2, sd_idf, sd_motor = _parameters(parameters)
     feat = jnp.asarray(np.asarray(feat_diff_deg), dtype=jnp.float32)
     bias = jnp.asarray(np.asarray(bias_deg), dtype=jnp.float32)
     log_density = np.asarray(trial_log_density(
-        predictor, sd_feat1, sd_feat2, sd_spat, feat, bias,
+        predictor, sd_feat1, sd_feat2, sd_idf, feat, bias,
         sd_motor=float(sd_motor)))
 
-    model_bin_width = float(config.mu1_bias_step)
+    model_bin_width = float(config.mu_feat_bias_step)
     if physical_bin_width_deg is None:
         physical_bin_width_deg = model_bin_width
     physical_bin_width_deg = float(physical_bin_width_deg)

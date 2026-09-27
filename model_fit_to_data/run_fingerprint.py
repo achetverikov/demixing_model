@@ -157,7 +157,7 @@ def compute_run_fingerprint(
         "search_backend": str(search_backend),
         "curve_cache_key": None,
         "motor": motor,
-        "mu1_grid_size": int(_cfg.mu1_bias_grid_size),
+        "mu_feat_grid_size": int(_cfg.mu_feat_bias_grid_size),
         "column_mapping": {
             "exp_col": exp_col,
             "subject_col": subject_col,
@@ -174,8 +174,8 @@ def compute_run_fingerprint(
         "model_grids": {
             "feat_diff_range": list(_cfg.feat_diff_range),
             "feat_diff_step": int(_cfg.feat_diff_step),
-            "mu1_bias_range": list(_cfg.mu1_bias_range),
-            "mu1_bias_step": int(_cfg.mu1_bias_step),
+            "mu_feat_bias_range": list(_cfg.mu_feat_bias_range),
+            "mu_feat_bias_step": int(_cfg.mu_feat_bias_step),
         },
         "density_curve_spec": dict(density_curve_spec),
         "degenerate_eps": None if degenerate_eps is None else float(degenerate_eps),

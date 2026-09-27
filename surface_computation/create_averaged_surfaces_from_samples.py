@@ -6,9 +6,9 @@ Create Averaged Surfaces from Samples
 This script creates averaged surfaces directly from samples using 2D normal weighted KDE.
 It combines mirrored samples to create higher-quality surfaces with smooth likelihood transitions.
 
-For each unique pair (sf1, sf2, sp):
-- Loads sample files for both (sf1, sf2, sp) and (sf2, sf1, sp) if available
-- Combines samples with appropriate mirroring for mu1_comp1 and mu1_comp2
+For each unique pair (sf1, sf2, idf):
+- Loads sample files for both (sf1, sf2, idf) and (sf2, sf1, idf) if available
+- Combines samples with appropriate mirroring for mu_feat_comp1 and mu_feat_comp2
 - Uses 2D normal weighted KDE to create smooth density surfaces
 - Saves the resulting averaged surfaces
 
@@ -32,7 +32,7 @@ config = Config()
 config.samples_folder = './sim_samples_10k_20samples'
 output_folder = "averaged_surfaces_10k_20samples" 
 
-def find_sample_file(folder: Path, sf1: float, sf2: float, sp: float) -> Optional[Path]:
+def find_sample_file(folder: Path, sf1: float, sf2: float, idf: float) -> Optional[Path]:
     """Find sample file matching the given parameters.
 
     For off-diagonal (sf1 != sf2) files this returns the first match.
@@ -40,22 +40,22 @@ def find_sample_file(folder: Path, sf1: float, sf2: float, sp: float) -> Optiona
     Excludes _r0/_r1 run-indexed files so diagonal runs don't accidentally
     satisfy an off-diagonal lookup.
     """
-    pattern = re.compile(rf"samples_sf1_{sf1:.1f}_sf2_{sf2:.1f}_sp_{sp:.1f}_[^r].*\.pkl\.gz")
-    for file in folder.glob("samples_sf1_*_sf2_*_sp_*.pkl.gz"):
+    pattern = re.compile(rf"samples_sf1_{sf1:.1f}_sf2_{sf2:.1f}_idf_{idf:.1f}_[^r].*\.pkl\.gz")
+    for file in folder.glob("samples_sf1_*_sf2_*_idf_*.pkl.gz"):
         if pattern.match(file.name):
             return file
     return None
 
 
-def find_diagonal_run_files(folder: Path, sf1: float, sp: float) -> List[Path]:
+def find_diagonal_run_files(folder: Path, sf1: float, idf: float) -> List[Path]:
     """Find the two independent-run sample files for a diagonal (sf1==sf2) combination.
 
     Returns a list of matching files ordered by run index (r0 before r1).
     Returns an empty list if neither run file exists.
     """
-    pattern = re.compile(rf"samples_sf1_{sf1:.1f}_sf2_{sf1:.1f}_sp_{sp:.1f}_r\d_.*\.pkl\.gz")
+    pattern = re.compile(rf"samples_sf1_{sf1:.1f}_sf2_{sf1:.1f}_idf_{idf:.1f}_r\d_.*\.pkl\.gz")
     files = sorted(
-        (f for f in folder.glob("samples_sf1_*_sf2_*_sp_*.pkl.gz") if pattern.match(f.name)),
+        (f for f in folder.glob("samples_sf1_*_sf2_*_idf_*.pkl.gz") if pattern.match(f.name)),
         key=lambda f: f.name
     )
     return files
@@ -72,7 +72,7 @@ def stub_sample_file(file_path: Path) -> None:
     The stub keeps the filename (and therefore the hash that simulated_samples_grid.py
     uses for progress tracking) but replaces the large sample arrays with empty ones,
     reducing file size from ~6 MB to ~1 KB.  simulated_samples_grid._samples_exist()
-    checks for 'parameters' and 'mu1_samples'/'mu2_samples' keys, so the stub still
+    checks for 'parameters' and 'mu_feat_samples'/'mu_idf_samples' keys, so the stub still
     passes that check and the combination will not be re-computed.
     """
     try:
@@ -80,8 +80,8 @@ def stub_sample_file(file_path: Path) -> None:
             original = pickle.load(f)
         stub = {
             'parameters': original.get('parameters', {}),
-            'mu1_samples': np.empty((0,), dtype=np.float16),
-            'mu2_samples': np.empty((0,), dtype=np.float16),
+            'mu_feat_samples': np.empty((0,), dtype=np.float16),
+            'mu_idf_samples': np.empty((0,), dtype=np.float16),
             'stub': True,
         }
         # Write atomically: temp file beside the target, then rename, so
@@ -93,7 +93,7 @@ def stub_sample_file(file_path: Path) -> None:
     except Exception as e:
         print(f"Warning: could not stub {file_path.name}: {e}")
 
-def is_l1_surface(sf1: float, sf2: float, sp: float) -> bool:
+def is_l1_surface(sf1: float, sf2: float, idf: float) -> bool:
     """Check if surface parameters correspond to L1 grid (coarse grid)."""
     step = config.param_step
     low = config.param_range_low
@@ -101,61 +101,61 @@ def is_l1_surface(sf1: float, sf2: float, sp: float) -> bool:
     def is_on_grid(val):
         return abs(val - round((val - low) / step) * step - low) < 1e-6
 
-    return is_on_grid(sf1) and is_on_grid(sf2) and is_on_grid(sp)
+    return is_on_grid(sf1) and is_on_grid(sf2) and is_on_grid(idf)
 
 
 def get_l1_parameter_combinations(folder: Path) -> List[Tuple[float, float, float]]:
     """Get all L1 parameter combinations from sample files."""
-    pattern = re.compile(r"samples_sf1_([\d.]+)_sf2_([\d.]+)_sp_([\d.]+)_.*\.pkl\.gz")
+    pattern = re.compile(r"samples_sf1_([\d.]+)_sf2_([\d.]+)_idf_([\d.]+)_.*\.pkl\.gz")
     combinations = set()
     
-    for file in folder.glob("samples_sf1_*_sf2_*_sp_*.pkl.gz"):
+    for file in folder.glob("samples_sf1_*_sf2_*_idf_*.pkl.gz"):
         match = pattern.match(file.name)
         if match:
-            sf1, sf2, sp = map(float, match.groups())
-            if is_l1_surface(sf1, sf2, sp):
-                combinations.add((sf1, sf2, sp))
+            sf1, sf2, idf = map(float, match.groups())
+            if is_l1_surface(sf1, sf2, idf):
+                combinations.add((sf1, sf2, idf))
     
     return sorted(list(combinations))
 
 
 def get_all_parameter_combinations(folder: Path) -> List[Tuple[float, float, float]]:
     """Get all parameter combinations from sample files (no grid filtering)."""
-    pattern = re.compile(r"samples_sf1_([\d.]+)_sf2_([\d.]+)_sp_([\d.]+)_.*\.pkl\.gz")
+    pattern = re.compile(r"samples_sf1_([\d.]+)_sf2_([\d.]+)_idf_([\d.]+)_.*\.pkl\.gz")
     combinations = set()
 
-    for file in folder.glob("samples_sf1_*_sf2_*_sp_*.pkl.gz"):
+    for file in folder.glob("samples_sf1_*_sf2_*_idf_*.pkl.gz"):
         match = pattern.match(file.name)
         if match:
             combinations.add(tuple(map(float, match.groups())))
 
     return sorted(list(combinations))
-def get_surface_filename(sf1: float, sf2: float, sp: float) -> str:
+def get_surface_filename(sf1: float, sf2: float, idf: float) -> str:
     """Get canonical filename for averaged surface."""
     canonical_sf1 = min(sf1, sf2)
     canonical_sf2 = max(sf1, sf2)
-    return f"averaged_sf1_{canonical_sf1:.1f}_sf2_{canonical_sf2:.1f}_sp_{sp:.1f}.pkl"
+    return f"averaged_sf1_{canonical_sf1:.1f}_sf2_{canonical_sf2:.1f}_idf_{idf:.1f}.pkl"
 
 def get_existing_surfaces(output_folder: Path) -> set:
     """Get set of existing surface parameter combinations."""
-    pattern = re.compile(r"averaged_sf1_([\d.]+)_sf2_([\d.]+)_sp_([\d.]+)\.pkl")
+    pattern = re.compile(r"averaged_sf1_([\d.]+)_sf2_([\d.]+)_idf_([\d.]+)\.pkl")
     existing = set()
     
     if not output_folder.exists():
         return existing
     
-    for file in output_folder.glob("averaged_sf1_*_sf2_*_sp_*.pkl"):
+    for file in output_folder.glob("averaged_sf1_*_sf2_*_idf_*.pkl"):
         match = pattern.match(file.name)
         if match:
-            sf1, sf2, sp = map(float, match.groups())
+            sf1, sf2, idf = map(float, match.groups())
             # Store in canonical form (sf1 <= sf2) and both permutations
             canonical_sf1, canonical_sf2 = min(sf1, sf2), max(sf1, sf2)
-            existing.add((canonical_sf1, canonical_sf2, sp))
-            existing.add((canonical_sf2, canonical_sf1, sp))  # Both permutations
+            existing.add((canonical_sf1, canonical_sf2, idf))
+            existing.add((canonical_sf2, canonical_sf1, idf))  # Both permutations
     
     return existing
 
-def save_averaged_surface(averaged_surface: AveragedSurface, sf1: float, sf2: float, sp: float,
+def save_averaged_surface(averaged_surface: AveragedSurface, sf1: float, sf2: float, idf: float,
                          output_folder: Path,
                          source_files_meta: List[Dict] = None) -> None:
     """Save averaged surface to output folder.
@@ -163,7 +163,7 @@ def save_averaged_surface(averaged_surface: AveragedSurface, sf1: float, sf2: fl
     Stores parameters, the surface object, creation timestamp, the git commit
     of the averaging script, and provenance metadata for each source sample file.
     """
-    filename = get_surface_filename(sf1, sf2, sp)
+    filename = get_surface_filename(sf1, sf2, idf)
     output_file = output_folder / filename
     print(f"Saving averaged surface to {output_file}")
 
@@ -175,7 +175,7 @@ def save_averaged_surface(averaged_surface: AveragedSurface, sf1: float, sf2: fl
         'parameters': {
             'sd_feat1': canonical_sf1,
             'sd_feat2': canonical_sf2,
-            'sd_spat': sp
+            'sd_idf': idf
         },
         'surface': averaged_surface,
         'creation_timestamp': np.datetime64('now').astype(str),
@@ -188,53 +188,53 @@ def save_averaged_surface(averaged_surface: AveragedSurface, sf1: float, sf2: fl
 
     print(f"Saved: {filename} (from {averaged_surface.n_sample_files_used} sample files)")
 
-def process_single_surface(params_tuple, input_path, output_path, compiled_vmap_circular, compiled_vmap_spatial,
-                          feat_diff_grid, mu1_bias_grid, mu2_bias_grid, feat_diff_steps,
+def process_single_surface(params_tuple, input_path, output_path, compiled_vmap_circular, compiled_vmap_idf,
+                          feat_diff_grid, mu_feat_bias_grid, mu_idf_bias_grid, feat_diff_steps,
                           bias_bandwidth, feat_bandwidth, ref_sum, stub_processed_samples=False,
                           dry_run=False):
-    """Load, combine, KDE-smooth, and save one averaged surface for (sf1, sf2, sp).
+    """Load, combine, KDE-smooth, and save one averaged surface for (sf1, sf2, idf).
 
-    Skips if the mirror file (sf2, sf1, sp) is absent for sf1 != sf2 cases so
+    Skips if the mirror file (sf2, sf1, idf) is absent for sf1 != sf2 cases so
     both files can be processed together on a later run.  With stub_processed_samples
     the raw sample files are replaced with tiny stubs after saving.  With dry_run
     nothing is written to disk.  Returns True on success, False if skipped/errored.
     """
-    sf1, sf2, sp = params_tuple
+    sf1, sf2, idf = params_tuple
     
     try:
         thread_id = threading.current_thread().ident
-        print(f"[Thread {thread_id}] Processing ({sf1}, {sf2}, {sp})...")
+        print(f"[Thread {thread_id}] Processing ({sf1}, {sf2}, {idf})...")
         
         n_expected = len(feat_diff_steps)
         mirror_samples = None
         mirror_file = None
 
         def _trim(data):
-            if data['mu1_samples'].shape[0] > n_expected:
+            if data['mu_feat_samples'].shape[0] > n_expected:
                 return {**data,
-                        'mu1_samples': data['mu1_samples'][1:],
-                        'mu2_samples': data['mu2_samples'][1:]}
+                        'mu_feat_samples': data['mu_feat_samples'][1:],
+                        'mu_idf_samples': data['mu_idf_samples'][1:]}
             return data
 
         if sf1 != sf2:
             # Off-diagonal: find canonical file + mirror file.
-            original_file = find_sample_file(input_path, sf1, sf2, sp)
+            original_file = find_sample_file(input_path, sf1, sf2, idf)
             if not original_file:
-                print(f"[Thread {thread_id}] Original samples not found for ({sf1}, {sf2}, {sp})")
+                print(f"[Thread {thread_id}] Original samples not found for ({sf1}, {sf2}, {idf})")
                 return False
             print(f"[Thread {thread_id}] Loading original samples from {original_file}")
             original_samples = _trim(load_sample_data(original_file))
 
-            mirror_file = find_sample_file(input_path, sf2, sf1, sp)
+            mirror_file = find_sample_file(input_path, sf2, sf1, idf)
             if not mirror_file:
-                print(f"[Thread {thread_id}] Mirror file not yet available for ({sf1}, {sf2}, {sp}) — skipping")
+                print(f"[Thread {thread_id}] Mirror file not yet available for ({sf1}, {sf2}, {idf}) — skipping")
                 return False
             print(f"[Thread {thread_id}] Loading mirror samples from {mirror_file}")
             mirror_samples = _trim(load_sample_data(mirror_file))
         else:
             # Diagonal: prefer the run-indexed pair (_r0/_r1); fall back to a
             # single plain file for older data that has no run index.
-            run_files = find_diagonal_run_files(input_path, sf1, sp)
+            run_files = find_diagonal_run_files(input_path, sf1, idf)
             if len(run_files) >= 2:
                 original_file = run_files[0]
                 print(f"[Thread {thread_id}] Loading original samples from {original_file}")
@@ -244,88 +244,88 @@ def process_single_surface(params_tuple, input_path, output_path, compiled_vmap_
                 mirror_samples = _trim(load_sample_data(mirror_file))
             else:
                 # Single plain file (old format).
-                original_file = find_sample_file(input_path, sf1, sf2, sp)
+                original_file = find_sample_file(input_path, sf1, sf2, idf)
                 if not original_file:
-                    print(f"[Thread {thread_id}] Original samples not found for ({sf1}, {sf2}, {sp})")
+                    print(f"[Thread {thread_id}] Original samples not found for ({sf1}, {sf2}, {idf})")
                     return False
                 print(f"[Thread {thread_id}] Loading original samples from {original_file}")
                 original_samples = _trim(load_sample_data(original_file))
         
         # Process samples and create surface directly
-        print(f"[Thread {thread_id}] Creating averaged surface for ({sf1}, {sf2}, {sp})")
+        print(f"[Thread {thread_id}] Creating averaged surface for ({sf1}, {sf2}, {idf})")
         
-        # Combine all mu1 samples along axis 2 (following surfaces_from_samples.py approach)
+        # Combine all mu_feat samples along axis 2 (following surfaces_from_samples.py approach)
         if mirror_samples is not None:
-            mu1_combined = jnp.concatenate([
-                original_samples['mu1_samples'], 
-                jnp.flip(mirror_samples['mu1_samples'], axis=2)
+            mu_feat_combined = jnp.concatenate([
+                original_samples['mu_feat_samples'],
+                jnp.flip(mirror_samples['mu_feat_samples'], axis=2)
             ], axis=1)
         else:
-            mu1_combined = original_samples['mu1_samples']
+            mu_feat_combined = original_samples['mu_feat_samples']
         
-        # Combine all mu2 samples (same approach as mu1)
+        # Combine all mu_idf samples (same approach as mu_feat)
         if mirror_samples is not None:
-            mu2_combined = jnp.concatenate([
-                original_samples['mu2_samples'], 
-                mirror_samples['mu2_samples']
+            mu_idf_combined = jnp.concatenate([
+                original_samples['mu_idf_samples'],
+                mirror_samples['mu_idf_samples']
             ], axis=1)
         else:
-            mu2_combined = original_samples['mu2_samples']
+            mu_idf_combined = original_samples['mu_idf_samples']
         
         # Apply prefiltering to remove isolated samples
         print(f"[Thread {thread_id}] Applying prefiltering to remove isolated samples...")
         
-        # For sf1 == sf2 case, combine both mu1 components before filtering
+        # For sf1 == sf2 case, combine both mu_feat components before filtering
         if sf1 == sf2:
-            print(f"[Thread {thread_id}] sf1 == sf2, combining mu1 components...")
+            print(f"[Thread {thread_id}] sf1 == sf2, combining mu_feat components...")
             # Combine both components into one dataset
-            mu1_all_samples = jnp.concatenate([mu1_combined[:, :, 0], mu1_combined[:, :, 1]], axis=1)
-            mu1_filtered, removed_mu1 = prefilter_isolated_samples(mu1_all_samples)
+            mu_feat_all_samples = jnp.concatenate([mu_feat_combined[:, :, 0], mu_feat_combined[:, :, 1]], axis=1)
+            mu_feat_filtered, removed_mu_feat = prefilter_isolated_samples(mu_feat_all_samples)
             
-            print(f"[Thread {thread_id}] Prefiltering removed: mu1_combined={removed_mu1}")
+            print(f"[Thread {thread_id}] Prefiltering removed: mu_feat_combined={removed_mu_feat}")
         else:
             # Filter components separately for sf1 != sf2
-            mu1_comp1_filtered, removed_mu1_comp1 = prefilter_isolated_samples(mu1_combined[:, :, 0])
-            mu1_comp2_filtered, removed_mu1_comp2 = prefilter_isolated_samples(mu1_combined[:, :, 1])
+            mu_feat_comp1_filtered, removed_mu_feat_comp1 = prefilter_isolated_samples(mu_feat_combined[:, :, 0])
+            mu_feat_comp2_filtered, removed_mu_feat_comp2 = prefilter_isolated_samples(mu_feat_combined[:, :, 1])
             
-            # Reconstruct mu1_combined with filtered samples
-            mu1_combined = jnp.stack([mu1_comp1_filtered, mu1_comp2_filtered], axis=2)
+            # Reconstruct mu_feat_combined with filtered samples
+            mu_feat_combined = jnp.stack([mu_feat_comp1_filtered, mu_feat_comp2_filtered], axis=2)
             
-            print(f"[Thread {thread_id}] Prefiltering removed: mu1_comp1={removed_mu1_comp1}, mu1_comp2={removed_mu1_comp2}")
+            print(f"[Thread {thread_id}] Prefiltering removed: mu_feat_comp1={removed_mu_feat_comp1}, mu_feat_comp2={removed_mu_feat_comp2}")
         
-        # Filter mu2 samples (both components together)
-        mu2_all_samples_orig = mu2_combined.reshape(mu2_combined.shape[0], -1)
-        mu2_filtered, removed_mu2 = prefilter_isolated_samples(mu2_all_samples_orig)
-        mu2_combined = mu2_filtered.reshape(mu2_combined.shape)
+        # Filter mu_idf samples (both components together)
+        mu_idf_all_samples_orig = mu_idf_combined.reshape(mu_idf_combined.shape[0], -1)
+        mu_idf_filtered, removed_mu_idf = prefilter_isolated_samples(mu_idf_all_samples_orig)
+        mu_idf_combined = mu_idf_filtered.reshape(mu_idf_combined.shape)
         
-        print(f"[Thread {thread_id}] Prefiltering removed: mu2={removed_mu2}")
+        print(f"[Thread {thread_id}] Prefiltering removed: mu_idf={removed_mu_idf}")
         
         # Create density surfaces using vmap functions
         if sf1 == sf2:
             # Create single surface for both components
-            print(f"[Thread {thread_id}] Computing combined mu1 surface (sf1 == sf2)...")
-            mu1_surface = compiled_vmap_circular(
-                jnp.arange(len(feat_diff_steps)), mu1_filtered
+            print(f"[Thread {thread_id}] Computing combined mu_feat surface (sf1 == sf2)...")
+            mu_feat_surface = compiled_vmap_circular(
+                jnp.arange(len(feat_diff_steps)), mu_feat_filtered
             ).T
-            mu1_comp1_surface = mu1_surface
-            mu1_comp2_surface = mu1_surface
+            mu_feat_comp1_surface = mu_feat_surface
+            mu_feat_comp2_surface = mu_feat_surface
         else:
             # Create separate surfaces for each component
-            print(f"[Thread {thread_id}] Computing mu1_comp1 surface...")
-            mu1_comp1_surface = compiled_vmap_circular(
-                jnp.arange(len(feat_diff_steps)), mu1_combined[:, :, 0]
+            print(f"[Thread {thread_id}] Computing mu_feat_comp1 surface...")
+            mu_feat_comp1_surface = compiled_vmap_circular(
+                jnp.arange(len(feat_diff_steps)), mu_feat_combined[:, :, 0]
             ).T
             
-            print(f"[Thread {thread_id}] Computing mu1_comp2 surface...")
-            mu1_comp2_surface = compiled_vmap_circular(
-                jnp.arange(len(feat_diff_steps)), mu1_combined[:, :, 1]
+            print(f"[Thread {thread_id}] Computing mu_feat_comp2 surface...")
+            mu_feat_comp2_surface = compiled_vmap_circular(
+                jnp.arange(len(feat_diff_steps)), mu_feat_combined[:, :, 1]
             ).T
         
-        print(f"[Thread {thread_id}] Computing mu2 surface...")
-        # For mu2, use all samples combined (both components have same spatial parameters)
-        mu2_all_samples = mu2_combined.reshape(mu2_combined.shape[0], -1)  # Flatten all samples
-        mu2_surface = compiled_vmap_spatial(
-            jnp.arange(len(feat_diff_steps)), mu2_all_samples
+        print(f"[Thread {thread_id}] Computing mu_idf surface...")
+        # For mu_idf, use all samples combined (both components have the same identifiability parameters)
+        mu_idf_all_samples = mu_idf_combined.reshape(mu_idf_combined.shape[0], -1)  # Flatten all samples
+        mu_idf_surface = compiled_vmap_idf(
+            jnp.arange(len(feat_diff_steps)), mu_idf_all_samples
         ).T
         
         # KDE already returns log probabilities, no conversion needed
@@ -334,12 +334,12 @@ def process_single_surface(params_tuple, input_path, output_path, compiled_vmap_
         
         averaged_surface = AveragedSurface(
             feat_diff_grid=feat_diff_grid,
-            mu1_bias_grid=mu1_bias_grid,
-            mu2_bias_grid=mu2_bias_grid,
-            mu1_comp1_surface=mu1_comp1_surface,
-            mu1_comp2_surface=mu1_comp2_surface,
-            mu2_comp1_surface=mu2_surface,
-            mu2_comp2_surface=mu2_surface,
+            mu_feat_bias_grid=mu_feat_bias_grid,
+            mu_idf_bias_grid=mu_idf_bias_grid,
+            mu_feat_comp1_surface=mu_feat_comp1_surface,
+            mu_feat_comp2_surface=mu_feat_comp2_surface,
+            mu_idf_comp1_surface=mu_idf_surface,
+            mu_idf_comp2_surface=mu_idf_surface,
             n_sample_files_used=n_files_used,
             kde_parameters={
                 'bias_bandwidth': bias_bandwidth,
@@ -348,10 +348,10 @@ def process_single_surface(params_tuple, input_path, output_path, compiled_vmap_
             }
         )
         
-        print(f"[Thread {thread_id}] Averaged surface created for ({sf1}, {sf2}, {sp})")
+        print(f"[Thread {thread_id}] Averaged surface created for ({sf1}, {sf2}, {idf})")
         if dry_run:
             mirror_note = f" + {mirror_file.name}" if mirror_file else ""
-            print(f"[Thread {thread_id}] DRY RUN: would save averaged surface for ({sf1}, {sf2}, {sp})"
+            print(f"[Thread {thread_id}] DRY RUN: would save averaged surface for ({sf1}, {sf2}, {idf})"
                   f" from {original_file.name}{mirror_note}"
                   + (" [would stub both]" if stub_processed_samples else ""))
             return True
@@ -368,9 +368,9 @@ def process_single_surface(params_tuple, input_path, output_path, compiled_vmap_
                                       'timestamp': mirror_samples.get('timestamp')})
 
         # Save averaged surface
-        save_averaged_surface(averaged_surface, sf1, sf2, sp, output_path,
+        save_averaged_surface(averaged_surface, sf1, sf2, idf, output_path,
                               source_files_meta=source_files_meta)
-        print(f"[Thread {thread_id}] Completed ({sf1}, {sf2}, {sp})")
+        print(f"[Thread {thread_id}] Completed ({sf1}, {sf2}, {idf})")
 
         # Optionally replace raw sample files with tiny stubs to free disk space.
         # We only reach here when both files exist (or sf1==sf2), so it is safe to stub both.
@@ -385,7 +385,7 @@ def process_single_surface(params_tuple, input_path, output_path, compiled_vmap_
 
     except Exception as e:
         thread_id = threading.current_thread().ident
-        print(f"[Thread {thread_id}] Error processing ({sf1}, {sf2}, {sp}): {e}")
+        print(f"[Thread {thread_id}] Error processing ({sf1}, {sf2}, {idf}): {e}")
         return False
 
 
@@ -429,11 +429,11 @@ def create_all_averaged_surfaces(input_folder: str = None, output_folder: str = 
     print("Compiling shared bounded-KDE functions...")
     avg_fns = make_averaging_functions(config, bias_bandwidth, feat_bandwidth)
     compiled_vmap_circular = avg_fns['vmap_circular']
-    compiled_vmap_spatial = avg_fns['vmap_spatial']
+    compiled_vmap_idf = avg_fns['vmap_idf']
     feat_diff_steps = avg_fns['feat_diff_steps']
     feat_diff_grid = avg_fns['feat_diff_grid']
-    mu1_bias_grid = avg_fns['mu1_bias_grid']
-    mu2_bias_grid = avg_fns['mu2_bias_grid']
+    mu_feat_bias_grid = avg_fns['mu_feat_bias_grid']
+    mu_idf_bias_grid = avg_fns['mu_idf_bias_grid']
     ref_sum = avg_fns['ref_sum']
     
     # Get parameter combinations (L1-only by default)
@@ -451,10 +451,10 @@ def create_all_averaged_surfaces(input_folder: str = None, output_folder: str = 
     # Filter to only sf1 <= sf2 combinations and exclude existing ones
     unique_combinations = []
     skipped_existing = 0
-    for sf1, sf2, sp in combinations:
+    for sf1, sf2, idf in combinations:
         if sf1 <= sf2:  # Only process canonical pairs
-            if (sf1, sf2, sp) not in existing_surfaces:
-                unique_combinations.append((sf1, sf2, sp))
+            if (sf1, sf2, idf) not in existing_surfaces:
+                unique_combinations.append((sf1, sf2, idf))
             else:
                 skipped_existing += 1
     
@@ -476,10 +476,10 @@ def create_all_averaged_surfaces(input_folder: str = None, output_folder: str = 
         input_path=input_path,
         output_path=output_path,
         compiled_vmap_circular=compiled_vmap_circular,
-        compiled_vmap_spatial=compiled_vmap_spatial,
+        compiled_vmap_idf=compiled_vmap_idf,
         feat_diff_grid=feat_diff_grid,
-        mu1_bias_grid=mu1_bias_grid,
-        mu2_bias_grid=mu2_bias_grid,
+        mu_feat_bias_grid=mu_feat_bias_grid,
+        mu_idf_bias_grid=mu_idf_bias_grid,
         feat_diff_steps=feat_diff_steps,
         bias_bandwidth=bias_bandwidth,
         feat_bandwidth=feat_bandwidth,

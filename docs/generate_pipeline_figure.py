@@ -23,7 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from docs.generate_readme_figures import _first_list, prepare_fitting_data  # noqa: E402
-from shared.mu1_axis import bin_indices_np, mu1_grid_np  # noqa: E402
+from shared.mu_feat_axis import bin_indices_np, mu_feat_grid_np  # noqa: E402
 from shared.prediction import predictor_from_surrogate  # noqa: E402
 from shared.surrogate import load_surrogate  # noqa: E402
 from surface_computation.wnm_simulation import simulate  # noqa: E402
@@ -83,14 +83,14 @@ def _response_surfaces(predictions):
     """Simulated training responses and a matching packaged-WNM prediction."""
     row = predictions.iloc[len(predictions) // 2]
     feature_grid = _first_list(predictions["feat_diff_grid"])
-    params = {name: float(row[name]) for name in ("sd_feat1", "sd_feat2", "sd_spat")}
+    params = {name: float(row[name]) for name in ("sd_feat1", "sd_feat2", "sd_idf")}
     n_samples = int(predictions["n_samples"].dropna().iloc[0])
     design = np.column_stack((
         *(np.full_like(feature_grid, params[name]) for name in params), feature_grid,
     ))
     predictor = predictor_from_surrogate(load_surrogate(n_samples=n_samples))
     mass = np.asarray(predictor.cell_probabilities(design))
-    bias_grid = mu1_grid_np()
+    bias_grid = mu_feat_grid_np()
     responses = np.asarray(simulate(jax.random.PRNGKey(7), design,
                                     n_simulations=200, n_samples=n_samples,
                                     block_rows=4))[:, :, 0]
@@ -103,24 +103,24 @@ def _response_surfaces(predictions):
                            "random_seed": 7},
             "surface": simulated.T, "predicted_surface": mass.T,
             "feat_diff_grid": feature_grid,
-            "mu1_bias_grid": bias_grid}
+            "mu_feat_bias_grid": bias_grid}
 
 
-def _generate_evidence(surface_params, feature_difference=40.0, ident_difference=25.0):
+def _generate_evidence(surface_params, feature_difference=40.0, idf_difference=25.0):
     """Sample the model's two Gaussian evidence distributions with known sources."""
     rng = np.random.default_rng(int(surface_params.get("random_seed", 7)))
     total = int(surface_params.get("n_samples", 100))
     counts = (total // 2, total - total // 2)
     sf1 = float(surface_params["sd_feat1"])
     sf2 = float(surface_params["sd_feat2"])
-    ident_sd = float(surface_params["sd_spat"])
+    idf_sd = float(surface_params["sd_idf"])
     means = np.array([
-        [-feature_difference / 2, -ident_difference / 2],
-        [feature_difference / 2, ident_difference / 2],
+        [-feature_difference / 2, -idf_difference / 2],
+        [feature_difference / 2, idf_difference / 2],
     ])
     samples = [
-        rng.multivariate_normal(means[0], np.diag([sf1**2, ident_sd**2]), counts[0]),
-        rng.multivariate_normal(means[1], np.diag([sf2**2, ident_sd**2]), counts[1]),
+        rng.multivariate_normal(means[0], np.diag([sf1**2, idf_sd**2]), counts[0]),
+        rng.multivariate_normal(means[1], np.diag([sf2**2, idf_sd**2]), counts[1]),
     ]
     return means, samples
 
@@ -143,7 +143,7 @@ def _plot_simulation(ax, surface_params):
 def _surface_density(record, field="surface"):
     density = np.asarray(record[field], dtype=float)
     feature_grid = np.asarray(record["feat_diff_grid"], dtype=float)
-    bias_grid = np.asarray(record["mu1_bias_grid"], dtype=float)
+    bias_grid = np.asarray(record["mu_feat_bias_grid"], dtype=float)
     mask_bias = (bias_grid >= -60) & (bias_grid <= 60)
     mask_feature = feature_grid <= 140
     relative = density[np.ix_(mask_bias, mask_feature)]
@@ -198,14 +198,14 @@ def _plot_network(ax, record):
 
 
 def _plot_predictions(ax, predictions):
-    required = {"sd_feat1", "sd_feat2", "sd_spat", "mu1_expectation_curve", "feat_diff_grid"}
+    required = {"sd_feat1", "sd_feat2", "sd_idf", "mu_feat_expectation_curve", "feat_diff_grid"}
     missing = required.difference(predictions.columns)
     if missing:
         raise ValueError(f"WNM prediction export lacks columns: {sorted(missing)}")
     feature_grid = _first_list(predictions["feat_diff_grid"])
     for (_, row), color in zip(predictions.iterrows(), ("#2c7bb6", "#f28e2b", "#b2182b")):
-        ax.plot(feature_grid, np.asarray(row["mu1_expectation_curve"]),
-                color=color, linewidth=1.8, label=f"{row['sd_spat']:g}°")
+        ax.plot(feature_grid, np.asarray(row["mu_feat_expectation_curve"]),
+                color=color, linewidth=1.8, label=f"{row['sd_idf']:g}°")
     ax.axhline(0, color="#7b8794", linewidth=0.8, linestyle=(0, (4, 3)))
     ax.set_xlim(feature_grid[0], feature_grid[-1])
     ax.set_xticks((2, 45, 90, 135, 180))

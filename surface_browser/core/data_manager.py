@@ -19,7 +19,7 @@ parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from shared.mu1_axis import guard_surface_mu1_axis
+from shared.mu_feat_axis import guard_surface_mu_feat_axis
 from shared.utils import (
     Surface, AveragedSurface, SurfaceUnpickler,
     ensure_averaged_surface_file, _build_bundle_index,
@@ -48,8 +48,8 @@ class SurfaceDataManager:
             return pd.DataFrame()
 
         # Patterns to match both regular and averaged surfaces
-        regular_pattern = r'surface_sf1_([\d.]+)_sf2_([\d.]+)_sp_([\d.]+)_.*\.pkl'
-        averaged_pattern = r'averaged_sf1_([\d.]+)_sf2_([\d.]+)_sp_([\d.]+)\.pkl'
+        regular_pattern = r'surface_sf1_([\d.]+)_sf2_([\d.]+)_idf_([\d.]+)_.*\.pkl'
+        averaged_pattern = r'averaged_sf1_([\d.]+)_sf2_([\d.]+)_idf_([\d.]+)\.pkl'
 
         # Scan both regular surfaces and averaged surfaces
         for pattern_glob, pattern_re, surface_type in [
@@ -63,12 +63,12 @@ class SurfaceDataManager:
 
                     if match:
                         # Parse from filename - very fast
-                        sd_feat1, sd_feat2, sd_spat = map(float, match.groups())
+                        sd_feat1, sd_feat2, sd_idf = map(float, match.groups())
                         surfaces.append({
                             'file': surface_file,
                             'sd_feat1': sd_feat1,
                             'sd_feat2': sd_feat2,
-                            'sd_spat': sd_spat,
+                            'sd_idf': sd_idf,
                             'filename': surface_file.name,
                             'source': 'filename',
                             'surface_type': surface_type
@@ -86,7 +86,7 @@ class SurfaceDataManager:
                                     'file': surface_file,
                                     'sd_feat1': params.get('sd_feat1', 0),
                                     'sd_feat2': params.get('sd_feat2', 0), 
-                                    'sd_spat': params.get('sd_spat', 0),
+                                    'sd_idf': params.get('sd_idf', 0),
                                     'filename': surface_file.name,
                                     'source': 'pickle',
                                     'surface_type': 'unknown'
@@ -114,12 +114,12 @@ class SurfaceDataManager:
             match = re.match(averaged_pattern, filename)
             if not match:
                 continue
-            sd_feat1, sd_feat2, sd_spat = map(float, match.groups())
+            sd_feat1, sd_feat2, sd_idf = map(float, match.groups())
             surfaces.append({
                 'file': directory / filename,  # materialised on first open
                 'sd_feat1': sd_feat1,
                 'sd_feat2': sd_feat2,
-                'sd_spat': sd_spat,
+                'sd_idf': sd_idf,
                 'filename': filename,
                 'source': 'bundle',
                 'surface_type': 'averaged'
@@ -127,12 +127,12 @@ class SurfaceDataManager:
             bundled_count += 1
 
         columns = [
-            'file', 'sd_feat1', 'sd_feat2', 'sd_spat', 'filename', 'source', 'surface_type'
+            'file', 'sd_feat1', 'sd_feat2', 'sd_idf', 'filename', 'source', 'surface_type'
         ]
         self.surfaces_df = pd.DataFrame(surfaces, columns=columns)
         if not self.surfaces_df.empty:
             self.surfaces_df = self.surfaces_df.sort_values(
-                ['sd_feat1', 'sd_feat2', 'sd_spat']
+                ['sd_feat1', 'sd_feat2', 'sd_idf']
             )
 
         # Show loading stats
@@ -172,10 +172,10 @@ class SurfaceDataManager:
             else:
                 surface = data  # Fallback if it's directly a Surface object
 
-            # Legacy 181-row surfaces carry their own stale mu1 axis in the
+            # Legacy 181-row surfaces carry their own stale mu_feat axis in the
             # pickle, so a config change alone cannot fix them: guard, and point
             # at the on-disk migration.
-            guard_surface_mu1_axis(surface, source=str(path))
+            guard_surface_mu_feat_axis(surface, source=str(path))
 
             # Cache the result
             self._surface_cache[file_path] = surface
@@ -207,7 +207,7 @@ class SurfaceDataManager:
             if surface is not None:
                 surfaces.append(surface)
                 surface_type_label = f" ({surface_row.get('surface_type', 'unknown')})"
-                titles.append(f"sf1={surface_row['sd_feat1']:.1f}, sf2={surface_row['sd_feat2']:.1f}, sp={surface_row['sd_spat']:.1f}{surface_type_label}")
+                titles.append(f"sf1={surface_row['sd_feat1']:.1f}, sf2={surface_row['sd_feat2']:.1f}, idf={surface_row['sd_idf']:.1f}{surface_type_label}")
 
         # Clear progress indicators
         if len(surface_rows) > 5:
@@ -233,7 +233,7 @@ class SurfaceDataManager:
 
         return {
             param: (float(df[param].min()), float(df[param].max()))
-            for param in ['sd_feat1', 'sd_feat2', 'sd_spat']
+            for param in ['sd_feat1', 'sd_feat2', 'sd_idf']
         }
 
     def get_surface_count_stats(self) -> Dict[str, int]:
@@ -245,7 +245,7 @@ class SurfaceDataManager:
             'total_surfaces': len(self.surfaces_df),
             'unique_sd_feat1': len(self.surfaces_df['sd_feat1'].unique()),
             'unique_sd_feat2': len(self.surfaces_df['sd_feat2'].unique()),
-            'unique_sd_spat': len(self.surfaces_df['sd_spat'].unique()),
+            'unique_sd_idf': len(self.surfaces_df['sd_idf'].unique()),
             'cache_size': len(self._surface_cache)
         }
         
@@ -267,16 +267,16 @@ class SurfaceDataManager:
 
     def validate_filename_pattern(self, filename: str) -> bool:
         """Check if filename follows expected patterns."""
-        regular_pattern = r'surface_sf1_([\d.]+)_sf2_([\d.]+)_sp_([\d.]+)_.*\.pkl'
-        averaged_pattern = r'averaged_sf1_([\d.]+)_sf2_([\d.]+)_sp_([\d.]+)\.pkl'
+        regular_pattern = r'surface_sf1_([\d.]+)_sf2_([\d.]+)_idf_([\d.]+)_.*\.pkl'
+        averaged_pattern = r'averaged_sf1_([\d.]+)_sf2_([\d.]+)_idf_([\d.]+)\.pkl'
         return bool(re.match(regular_pattern, filename)) or bool(re.match(averaged_pattern, filename))
 
     def suggest_filename_format(self):
         """Show expected filename formats for user reference."""
         st.info("""
         **Expected filename formats:**
-        - Regular surfaces: `surface_sf1_25.5_sf2_28.3_sp_45.2_hash.pkl`
-        - Averaged surfaces: `averaged_sf1_25.5_sf2_28.3_sp_45.2.pkl`
+        - Regular surfaces: `surface_sf1_25.5_sf2_28.3_idf_45.2_hash.pkl`
+        - Averaged surfaces: `averaged_sf1_25.5_sf2_28.3_idf_45.2.pkl`
         
         Fast loading relies on these naming conventions.
         """)

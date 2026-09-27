@@ -131,7 +131,7 @@ results/my_study/
 |---|---|
 | Target feature noise (`sd_feat1`) | Uncertainty in the reported feature of the target item |
 | Non-target feature noise (`sd_feat2`) | Uncertainty in the other item's feature |
-| Identifiability noise (`sd_spat`) | Uncertainty along the dimension that distinguishes the items, such as location or timing; shared across conditions during fitting |
+| Identifiability noise (`sd_idf`) | Uncertainty along the dimension that distinguishes the items, such as location or timing; shared across conditions during fitting |
 | Motor noise (`sd_motor`) | Variability added at the response stage; fixed at zero by default and fitted with `--no-skip-motor-noise` |
 | Internal sample count (`--n-samples`) | Amount of internal evidence available for separating the two representations; choose 20 or 100 |
 
@@ -152,7 +152,7 @@ The computational pipeline has four steps:
 
 Read the [model pipeline explanation](docs/model_pipeline.md) for the scientific assumptions, simulation, training, and fitting details. To train a custom predictor, start with [simulation and training-data generation](surface_computation/README.md) and the [training guide](surrogate_training/wnm/README.md).
 
-For direct inspection of simulated distributions or predictions in the identifiability dimension (`mu2`), use the [averaged-surface tools](surface_computation/Likelihood_Surface_Pipeline_Documentation.md). Generating a complete simulation grid is a substantial GPU computation.
+For direct inspection of simulated distributions or predictions in the identifiability dimension (`mu_idf`), use the [averaged-surface tools](surface_computation/Likelihood_Surface_Pipeline_Documentation.md). Generating a complete simulation grid is a substantial GPU computation.
 
 ## Compare models and reproduce project analyses
 

@@ -18,7 +18,7 @@ def test_public_prediction_api_uses_wnm_by_default(tmp_path):
     pd.DataFrame([{
         "sd_feat1": 10.0,
         "sd_feat2": 30.0,
-        "sd_spat": 20.0,
+        "sd_idf": 20.0,
     }]).to_csv(input_path, index=False)
 
     simulate_surfaces_from_file(
@@ -27,7 +27,7 @@ def test_public_prediction_api_uses_wnm_by_default(tmp_path):
     frame = pd.read_csv(output_path)
     assert frame.loc[0, "surrogate_family"] == "wnm"
     assert frame.loc[0, "surrogate_artifact"] == WNM.name
-    for column in ("mu1_density_curve", "mu1_expectation_curve", "sd_curve"):
+    for column in ("mu_feat_density_curve", "mu_feat_expectation_curve", "sd_curve"):
         assert column in frame
         assert "nan" not in str(frame.loc[0, column]).lower()
 
@@ -39,7 +39,7 @@ def test_public_prediction_rejects_invalid_motor_sd_before_model_execution(tmp_p
     pd.DataFrame([{
         "sd_feat1": 10.0,
         "sd_feat2": 30.0,
-        "sd_spat": 20.0,
+        "sd_idf": 20.0,
         "sd_motor": bad_motor,
     }]).to_csv(input_path, index=False)
 
@@ -48,7 +48,7 @@ def test_public_prediction_rejects_invalid_motor_sd_before_model_execution(tmp_p
             str(input_path), 20, str(output_path), skip_motor_noise=False)
 
 
-def test_raw_prediction_uses_stored_surface_and_retains_mu2(tmp_path):
+def test_raw_prediction_uses_stored_surface_and_retains_mu_idf(tmp_path):
     import pickle
     from shared.config import config
     from shared.utils import AveragedSurface
@@ -58,21 +58,21 @@ def test_raw_prediction_uses_stored_surface_and_retains_mu2(tmp_path):
     surfaces_dir = tmp_path / "averaged_surfaces_20samples"
     surfaces_dir.mkdir()
     feat = config.create_grid("feat_diff")
-    mu1 = config.create_grid("mu1_bias")
-    mu2 = config.create_grid("mu2_bias")
+    mu_feat = config.create_grid("mu_feat_bias")
+    mu_idf = config.create_grid("mu_idf_bias")
     surface = AveragedSurface(
-        feat_diff_grid=feat, mu1_bias_grid=mu1, mu2_bias_grid=mu2,
-        mu1_comp1_surface=np.full((len(mu1), len(feat)), -np.log(360.0)),
-        mu1_comp2_surface=np.full((len(mu1), len(feat)), -np.log(360.0)),
-        mu2_comp1_surface=np.full((len(mu2), len(feat)), -np.log(len(mu2))),
-        mu2_comp2_surface=np.full((len(mu2), len(feat)), -np.log(len(mu2))),
+        feat_diff_grid=feat, mu_feat_bias_grid=mu_feat, mu_idf_bias_grid=mu_idf,
+        mu_feat_comp1_surface=np.full((len(mu_feat), len(feat)), -np.log(360.0)),
+        mu_feat_comp2_surface=np.full((len(mu_feat), len(feat)), -np.log(360.0)),
+        mu_idf_comp1_surface=np.full((len(mu_idf), len(feat)), -np.log(len(mu_idf))),
+        mu_idf_comp2_surface=np.full((len(mu_idf), len(feat)), -np.log(len(mu_idf))),
     )
-    (surfaces_dir / "averaged_sf1_10.0_sf2_30.0_sp_20.0.pkl").write_bytes(
+    (surfaces_dir / "averaged_sf1_10.0_sf2_30.0_idf_20.0.pkl").write_bytes(
         pickle.dumps({"surface": surface}))
     pd.DataFrame([{
         "sd_feat1": 10.0,
         "sd_feat2": 30.0,
-        "sd_spat": 20.0,
+        "sd_idf": 20.0,
     }]).to_csv(input_path, index=False)
 
     simulate_surfaces_from_file(
@@ -81,8 +81,8 @@ def test_raw_prediction_uses_stored_surface_and_retains_mu2(tmp_path):
 
     frame = pd.read_csv(output_path)
     assert frame.loc[0, "surrogate_family"] == "averaged_surfaces"
-    assert bool(frame.loc[0, "has_mu2_data"])
-    assert "nan" not in str(frame.loc[0, "mu2_expectation_curve"]).lower()
+    assert bool(frame.loc[0, "has_mu_idf_data"])
+    assert "nan" not in str(frame.loc[0, "mu_idf_expectation_curve"]).lower()
 
     with pytest.raises(ValueError, match="unknown surface_source"):
         simulate_surfaces_from_file(str(input_path), 20, str(output_path),

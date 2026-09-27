@@ -18,7 +18,7 @@ def _extract_surface_data(surface, dimension=1, component=1):
     surface : Surface object or tuple
         Either a Surface object with grids and surfaces, or legacy tuple format
     dimension : int
-        1 for mu1, 2 for mu2 (default: 1)
+        1 for mu_feat, 2 for mu_idf (default: 1)
     component : int 
         1 or 2 for component selection (default: 1)
         
@@ -36,17 +36,17 @@ def _extract_surface_data(surface, dimension=1, component=1):
             feat_diff_1d = surface.feat_diff_grid
             
             if dimension == 1:
-                bias_1d = surface.mu1_bias_grid
+                bias_1d = surface.mu_feat_bias_grid
                 if component == 1:
-                    log_surface_data = surface.mu1_comp1_surface
+                    log_surface_data = surface.mu_feat_comp1_surface
                 else:
-                    log_surface_data = surface.mu1_comp2_surface
+                    log_surface_data = surface.mu_feat_comp2_surface
             else:  # dimension == 2
-                bias_1d = surface.mu2_bias_grid
+                bias_1d = surface.mu_idf_bias_grid
                 if component == 1:
-                    log_surface_data = surface.mu2_comp1_surface
+                    log_surface_data = surface.mu_idf_comp1_surface
                 else:
-                    log_surface_data = surface.mu2_comp2_surface
+                    log_surface_data = surface.mu_idf_comp2_surface
             
             # Create meshgrids compatible with contour plotting
             # Surface data is shaped as (bias_points, feat_diff_points)
@@ -63,7 +63,7 @@ def _extract_surface_data(surface, dimension=1, component=1):
     except ImportError:
         pass
     
-    # Legacy tuple format: (feat_diff_grid, mu1_error_grid, log_likelihood_surface, likelihood_surface)
+    # Legacy tuple format: (feat_diff_grid, mu_feat_error_grid, log_likelihood_surface, likelihood_surface)
     if isinstance(surface, (tuple, list)) and len(surface) >= 3:
         feat_diff_grid, bias_grid, log_surface_data = surface[0], surface[1], surface[2]
         return feat_diff_grid, bias_grid, log_surface_data
@@ -87,7 +87,7 @@ def plot_surface_comparison(surface1: Union[Tuple, 'Surface'], surface2: Union[T
     -----------
     surface1, surface2 : Surface object or tuple
         Either Surface objects with grids and surfaces, or legacy tuple format:
-        (feat_diff_grid, mu1_error_grid, log_likelihood_surface, likelihood_surface)
+        (feat_diff_grid, mu_feat_error_grid, log_likelihood_surface, likelihood_surface)
     titles : tuple
         Titles for the two surfaces
     figsize : tuple
@@ -101,7 +101,7 @@ def plot_surface_comparison(surface1: Union[Tuple, 'Surface'], surface2: Union[T
     save_path : str, optional
         Path to save the plot
     dimension : int
-        1 for mu1, 2 for mu2 (only used for Surface objects)
+        1 for mu_feat, 2 for mu_idf (only used for Surface objects)
     component : int
         1 or 2 for component selection (only used for Surface objects)
 
@@ -112,15 +112,15 @@ def plot_surface_comparison(surface1: Union[Tuple, 'Surface'], surface2: Union[T
     """
     
     # Extract data using the helper function
-    feat_diff_grid1, mu1_error_grid1, surface_data1 = _extract_surface_data(surface1, dimension, component)
-    feat_diff_grid2, mu1_error_grid2, surface_data2 = _extract_surface_data(surface2, dimension, component)
+    feat_diff_grid1, mu_feat_error_grid1, surface_data1 = _extract_surface_data(surface1, dimension, component)
+    feat_diff_grid2, mu_feat_error_grid2, surface_data2 = _extract_surface_data(surface2, dimension, component)
     if do_exp:
         surface_data1 = jnp.exp(surface_data1)
         surface_data2 = jnp.exp(surface_data2)
     # Check if grids are compatible for difference calculation
     grids_compatible = (feat_diff_grid1.shape == feat_diff_grid2.shape and
                        np.allclose(feat_diff_grid1, feat_diff_grid2, atol=1e-6) and
-                       np.allclose(mu1_error_grid1, mu1_error_grid2, atol=1e-6))
+                       np.allclose(mu_feat_error_grid1, mu_feat_error_grid2, atol=1e-6))
 
     # Create subplots
     if grids_compatible:
@@ -135,19 +135,19 @@ def plot_surface_comparison(surface1: Union[Tuple, 'Surface'], surface2: Union[T
 
     # Collect all data and labels in lists
     feat_diff_grids = [feat_diff_grid1, feat_diff_grid2]
-    mu1_error_grids = [mu1_error_grid1, mu1_error_grid2]
+    mu_feat_error_grids = [mu_feat_error_grid1, mu_feat_error_grid2]
     log_likelihoods = [surface_data1, surface_data2]
 
     for i in range(2):
         if same_color_axis:
-            im = axes[i].contourf(feat_diff_grids[i], mu1_error_grids[i], log_likelihoods[i],
+            im = axes[i].contourf(feat_diff_grids[i], mu_feat_error_grids[i], log_likelihoods[i],
                               levels=20, cmap='viridis', vmin=vmin, vmax=vmax)
         else:
-            im = axes[i].contourf(feat_diff_grids[i], mu1_error_grids[i], log_likelihoods[i],
+            im = axes[i].contourf(feat_diff_grids[i], mu_feat_error_grids[i], log_likelihoods[i],
                                   levels=20, cmap='viridis')
         axes[i].set_title(titles[i])
         axes[i].set_xlabel('feat_diff')
-        axes[i].set_ylabel('mu1_error')
+        axes[i].set_ylabel('mu_feat_error')
         if not same_color_axis:
             plt.colorbar(im, ax=axes[i])
 
@@ -168,12 +168,12 @@ def plot_surface_comparison(surface1: Union[Tuple, 'Surface'], surface2: Union[T
         difference = surface_data1 - surface_data2
         max_abs_diff = np.max(np.abs(difference))
 
-        im3 = axes[2].contourf(feat_diff_grid1, mu1_error_grid1, difference,
+        im3 = axes[2].contourf(feat_diff_grid1, mu_feat_error_grid1, difference,
                               levels=20, cmap='RdBu_r',
                               vmin=-max_abs_diff, vmax=max_abs_diff)
         axes[2].set_title(f'Difference ({titles[0]} - {titles[1]})')
         axes[2].set_xlabel('feat_diff')
-        axes[2].set_ylabel('mu1_error')
+        axes[2].set_ylabel('mu_feat_error')
         plt.colorbar(im3, ax=axes[2])
 
         # Add difference statistics

@@ -24,42 +24,42 @@ if str(ROOT) not in sys.path:
 
 from shared.raw_surfaces import apply_motor_noise, bias_curves, density_asymmetry_curves
 from shared.config import DENSITY_CURVE_SPEC, config
-from shared.mu1_axis import guard_surface_mu1_axis, periodic_integral
+from shared.mu_feat_axis import guard_surface_mu_feat_axis, periodic_integral
 from shared import surrogate
 from shared.prediction import predictor_from_surrogate
 from shared.utils import (SurfaceUnpickler, ensure_averaged_surface_file,
                           gaussian_curve_smoother)
 
-def _generate_mu2_bias_curve_batch(mu2_surfaces_batch: jnp.ndarray, target_feat_indices: jnp.ndarray) -> jnp.ndarray:
-    """Generate mu2 bias curves for batch of mu2 surfaces using linear integration (not circular)."""
-    # Create mu2 bias grid
-    mu2_bias_grid = config.create_grid('mu2_bias')
+def _generate_mu_idf_bias_curve_batch(mu_idf_surfaces_batch: jnp.ndarray, target_feat_indices: jnp.ndarray) -> jnp.ndarray:
+    """Generate mu_idf bias curves for batch of mu_idf surfaces using linear integration (not circular)."""
+    # Create mu_idf bias grid
+    mu_idf_bias_grid = config.create_grid('mu_idf_bias')
 
     # Vectorized computation for each surface
-    def compute_single_mu2_bias_curve(log_surfaces):
-        """Compute bias curve for a single mu2 surface."""
+    def compute_single_mu_idf_bias_curve(log_surfaces):
+        """Compute bias curve for a single mu_idf surface."""
         # Convert log probabilities to probabilities
-        mu2_prob_surface = jnp.exp(log_surfaces)
-        target_prob_profiles = mu2_prob_surface[:, target_feat_indices]
+        mu_idf_prob_surface = jnp.exp(log_surfaces)
+        target_prob_profiles = mu_idf_prob_surface[:, target_feat_indices]
 
-        # Linear expectation computation for mu2 (not circular like mu1)
-        # E[mu2] = integral of mu2 * p(mu2) dmu2
-        expectations = jnp.trapezoid(mu2_bias_grid.reshape(-1, 1) * target_prob_profiles, x=mu2_bias_grid, axis=0)
+        # Linear expectation computation for mu_idf (not circular like mu_feat)
+        # E[mu_idf] = integral of mu_idf * p(mu_idf) dmu_idf
+        expectations = jnp.trapezoid(mu_idf_bias_grid.reshape(-1, 1) * target_prob_profiles, x=mu_idf_bias_grid, axis=0)
         return expectations
 
     # Apply to entire batch using vmap
-    vectorized_compute = jax.vmap(compute_single_mu2_bias_curve)
-    return vectorized_compute(mu2_surfaces_batch)
+    vectorized_compute = jax.vmap(compute_single_mu_idf_bias_curve)
+    return vectorized_compute(mu_idf_surfaces_batch)
 
 
-def _generate_mu2_density_asymmetry_batch(mu2_surfaces_batch: jnp.ndarray, target_feat_indices: jnp.ndarray) -> jnp.ndarray:
-    """Generate mu2 density asymmetry curves for batch of mu2 surfaces using linear bias (not circular)."""
-    # Create mu2 bias grid
-    mu2_bias_grid = config.create_grid('mu2_bias')
+def _generate_mu_idf_density_asymmetry_batch(mu_idf_surfaces_batch: jnp.ndarray, target_feat_indices: jnp.ndarray) -> jnp.ndarray:
+    """Generate mu_idf density asymmetry curves for batch of mu_idf surfaces using linear bias (not circular)."""
+    # Create mu_idf bias grid
+    mu_idf_bias_grid = config.create_grid('mu_idf_bias')
 
     # Vectorized computation for each surface
-    def compute_single_mu2_density_asymmetry(log_surfaces, apply_smoothing: bool = True, smoothing_sigma: float = 5.0):
-        """Compute density asymmetry for a single mu2 log probability surface."""
+    def compute_single_mu_idf_density_asymmetry(log_surfaces, apply_smoothing: bool = True, smoothing_sigma: float = 5.0):
+        """Compute density asymmetry for a single mu_idf log probability surface."""
         # Convert to probabilities
         probs = jnp.exp(log_surfaces)
         
@@ -67,11 +67,11 @@ def _generate_mu2_density_asymmetry_batch(mu2_surfaces_batch: jnp.ndarray, targe
         target_probs = probs[:, target_feat_indices]
         
         # Compute asymmetry for each target feature difference
-        positive_mask = mu2_bias_grid > 0
-        negative_mask = mu2_bias_grid < 0
+        positive_mask = mu_idf_bias_grid > 0
+        negative_mask = mu_idf_bias_grid < 0
         
         # Vectorized computation across all target indices with proper discretization
-        dx = config.mu2_bias_step  # Grid spacing for numerical integration
+        dx = config.mu_idf_bias_step  # Grid spacing for numerical integration
         
         # Use jnp.where instead of boolean indexing to avoid concreteness issues
         positive_probs = jnp.where(positive_mask[:, None], target_probs, 0.0)
@@ -82,7 +82,7 @@ def _generate_mu2_density_asymmetry_batch(mu2_surfaces_batch: jnp.ndarray, targe
         
         asymmetry = p_positive - p_negative
 
-        # Same smoother as the mu1 path, from the one shared implementation.
+        # Same smoother as the mu_feat path, from the one shared implementation.
         # This used to be a second inline copy that convolved via `correlate`;
         # the kernel is symmetric, so the two agree exactly (checked in
         # tests/test_curve_smoother.py) and the duplicate bought nothing.
@@ -91,23 +91,23 @@ def _generate_mu2_density_asymmetry_batch(mu2_surfaces_batch: jnp.ndarray, targe
         return asymmetry
 
     # Apply to entire batch using vmap with smoothing enabled (sigma=5)
-    vectorized_compute = jax.vmap(lambda log_surf: compute_single_mu2_density_asymmetry(
+    vectorized_compute = jax.vmap(lambda log_surf: compute_single_mu_idf_density_asymmetry(
         log_surf, apply_smoothing=True, smoothing_sigma=5.0
     ))
-    return vectorized_compute(mu2_surfaces_batch)
+    return vectorized_compute(mu_idf_surfaces_batch)
 
 
 def compute_predicted_sd_curves_batch(log_surfaces_batch, feat_vals):
     """Compute predicted circular-SD curves for a batch of surfaces (fully vectorized).
 
     For each surface and each requested feature-difference value, integrates the
-    probability distribution over the mu1_bias axis using the circular standard
+    probability distribution over the mu_feat_bias axis using the circular standard
     deviation formula ``sqrt(-2 * log(R))`` where ``R`` is the mean resultant
     length.
 
     Args:
         log_surfaces_batch: Log-probability surfaces with shape
-            ``(n_surfaces, n_mu1_bias, n_feat_diff)``.
+            ``(n_surfaces, n_mu_feat_bias, n_feat_diff)``.
         feat_vals: Sequence of feature-difference values (in degrees) at which
             to evaluate the SD curves.  Each value is snapped to the nearest
             grid index.
@@ -116,30 +116,30 @@ def compute_predicted_sd_curves_batch(log_surfaces_batch, feat_vals):
         Array of shape ``(n_surfaces, len(feat_vals))`` containing circular
         standard deviations in degrees.
     """
-    mu1_bias_grid = config.create_grid('mu1_bias')
-    n_surfaces, n_mu1_bias, n_feat_diff = log_surfaces_batch.shape
+    mu_feat_bias_grid = config.create_grid('mu_feat_bias')
+    n_surfaces, n_mu_feat_bias, n_feat_diff = log_surfaces_batch.shape
     n_feat_vals = len(feat_vals)
     
     # Convert to probability space
-    prob_surfaces = jnp.exp(log_surfaces_batch)  # Shape: (n_surfaces, n_mu1_bias, n_feat_diff)
+    prob_surfaces = jnp.exp(log_surfaces_batch)  # Shape: (n_surfaces, n_mu_feat_bias, n_feat_diff)
     
     # Vectorized feature index mapping
     feat_indices = jnp.round((jnp.array(feat_vals) - config.feat_diff_range[0]) / config.feat_diff_step).astype(int)
     feat_indices = jnp.clip(feat_indices, 0, n_feat_diff - 1)
     
     # Extract probability profiles for all surfaces and feature values at once
-    # Shape: (n_surfaces, n_mu1_bias, n_feat_vals)
+    # Shape: (n_surfaces, n_mu_feat_bias, n_feat_vals)
     prob_profiles = prob_surfaces[:, :, feat_indices]
     
     # Precompute angular components
-    angles_rad = jnp.radians(mu1_bias_grid)  # Shape: (n_mu1_bias,)
-    cos_angles = jnp.cos(angles_rad)  # Shape: (n_mu1_bias,)
-    sin_angles = jnp.sin(angles_rad)  # Shape: (n_mu1_bias,)
+    angles_rad = jnp.radians(mu_feat_bias_grid)  # Shape: (n_mu_feat_bias,)
+    cos_angles = jnp.cos(angles_rad)  # Shape: (n_mu_feat_bias,)
+    sin_angles = jnp.sin(angles_rad)  # Shape: (n_mu_feat_bias,)
     
     # Vectorized circular SD computation for all surfaces and feature values
     # Compute mean cos and sin using periodic quadrature (sum x cell width)
-    # prob_profiles: (n_surfaces, n_mu1_bias, n_feat_vals)
-    # cos_angles: (n_mu1_bias,) -> broadcast to (1, n_mu1_bias, 1)
+    # prob_profiles: (n_surfaces, n_mu_feat_bias, n_feat_vals)
+    # cos_angles: (n_mu_feat_bias,) -> broadcast to (1, n_mu_feat_bias, 1)
     mass = periodic_integral(prob_profiles, axis=1)  # Shape: (n_surfaces, n_feat_vals)
     mean_cos = periodic_integral(prob_profiles * cos_angles[None, :, None], axis=1)  # Shape: (n_surfaces, n_feat_vals)
     mean_sin = periodic_integral(prob_profiles * sin_angles[None, :, None], axis=1)  # Shape: (n_surfaces, n_feat_vals)
@@ -155,21 +155,21 @@ def compute_predicted_sd_curves_batch(log_surfaces_batch, feat_vals):
     return circular_sds
 
 
-def load_averaged_surface(sd_feat1: float, sd_feat2: float, sd_spat: float, n_samples: int,
+def load_averaged_surface(sd_feat1: float, sd_feat2: float, sd_idf: float, n_samples: int,
                           surfaces_dir: str) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Load averaged surfaces from file for given parameters.
     Surfaces are stored in canonical form (sf1 <= sf2) with:
-    - mu1_comp1_surface: lower-noise component bias surface
-    - mu1_comp2_surface: higher-noise component bias surface
+    - mu_feat_comp1_surface: lower-noise component bias surface
+    - mu_feat_comp2_surface: higher-noise component bias surface
 
     Args:
-        sd_feat1, sd_feat2, sd_spat: Parameter values
+        sd_feat1, sd_feat2, sd_idf: Parameter values
         n_samples: Number of samples used for training
         surfaces_dir: Path to the averaged surfaces directory.
 
     Returns:
-        Tuple of (mu1_surface, mu2_surface) as JAX arrays (appropriate components based on parameter ordering)
+        Tuple of (mu_feat_surface, mu_idf_surface) as JAX arrays (appropriate components based on parameter ordering)
 
     Raises:
         FileNotFoundError: If surface file doesn't exist
@@ -201,9 +201,9 @@ def load_averaged_surface(sd_feat1: float, sd_feat2: float, sd_spat: float, n_sa
     # Use canonical ordering for filename; ensure .0 suffix matches saved filenames
     canonical_sf1 = float(min(sd_feat1, sd_feat2))
     canonical_sf2 = float(max(sd_feat1, sd_feat2))
-    sd_spat_f = float(sd_spat)
+    sd_idf_f = float(sd_idf)
 
-    filename = f"averaged_sf1_{canonical_sf1}_sf2_{canonical_sf2}_sp_{sd_spat_f}.pkl"
+    filename = f"averaged_sf1_{canonical_sf1}_sf2_{canonical_sf2}_idf_{sd_idf_f}.pkl"
     # Resolve the individual file, materialising it from a surface bundle when
     # only the bundled form exists (raises FileNotFoundError if truly absent).
     file_path = ensure_averaged_surface_file(surfaces_dir, filename)
@@ -213,19 +213,19 @@ def load_averaged_surface(sd_feat1: float, sd_feat2: float, sd_spat: float, n_sa
             surface_data = SurfaceUnpickler(f).load()
         
         surface_obj = surface_data['surface']
-        guard_surface_mu1_axis(surface_obj, source=str(file_path))
+        guard_surface_mu_feat_axis(surface_obj, source=str(file_path))
 
         # Select appropriate components based on parameter ordering
         if sd_feat1 <= sd_feat2:
             # Use lower-noise component surfaces (comp1)
-            mu1_surface = jnp.array(surface_obj.mu1_comp1_surface)
-            mu2_surface = jnp.array(surface_obj.mu2_comp1_surface)
+            mu_feat_surface = jnp.array(surface_obj.mu_feat_comp1_surface)
+            mu_idf_surface = jnp.array(surface_obj.mu_idf_comp1_surface)
         else:
             # Use higher-noise component surfaces (comp2)
-            mu1_surface = jnp.array(surface_obj.mu1_comp2_surface)
-            mu2_surface = jnp.array(surface_obj.mu2_comp2_surface)
+            mu_feat_surface = jnp.array(surface_obj.mu_feat_comp2_surface)
+            mu_idf_surface = jnp.array(surface_obj.mu_idf_comp2_surface)
             
-        return mu1_surface, mu2_surface
+        return mu_feat_surface, mu_idf_surface
             
     except Exception as e:
         raise RuntimeError(f"Failed to load surface from {file_path}: {e}")
@@ -239,7 +239,7 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
     """Generate prediction curves from the packaged model or stored surfaces.
 
     surface_source="model" uses the current WNM surrogate. "raw" loads averaged
-    simulation surfaces, retaining the separate mu2 outputs.
+    simulation surfaces, retaining the separate mu_idf outputs.
     """
     if surface_source not in {"model", "raw"}:
         raise ValueError(f"unknown surface_source {surface_source!r}")
@@ -254,7 +254,7 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
     except Exception as exc:
         raise RuntimeError(f"could not read parameter file {input_path}: {exc}") from exc
 
-    required_cols = ['sd_feat1', 'sd_feat2', 'sd_spat']
+    required_cols = ['sd_feat1', 'sd_feat2', 'sd_idf']
     if not skip_motor_noise:
         required_cols.append('sd_motor')
     missing_cols = [col for col in required_cols if col not in params_df.columns]
@@ -278,16 +278,16 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
     params_df['sd_motor'] = motor_values
 
     parameters_array = jnp.asarray(
-        params_df[['sd_feat1', 'sd_feat2', 'sd_spat', 'sd_motor']].values,
+        params_df[['sd_feat1', 'sd_feat2', 'sd_idf', 'sd_motor']].values,
         dtype=jnp.float32)
 
     feat_diff_grid = jnp.asarray(config.create_grid('feat_diff'), dtype=jnp.float32)
-    mu1_bias_grid = jnp.asarray(config.create_grid('mu1_bias'), dtype=jnp.float32)
+    mu_feat_bias_grid = jnp.asarray(config.create_grid('mu_feat_bias'), dtype=jnp.float32)
     n_feat_points = len(feat_diff_grid)
     resolved_checkpoint_path = None
     surrogate_family = None
     resolved_n_samples = n_samples
-    mu2_surfaces_batch = None
+    mu_idf_surfaces_batch = None
 
     density_curves = []
     expectation_curves = []
@@ -297,16 +297,16 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
         if not averaged_surfaces_dir:
             raise ValueError("averaged_surfaces_dir is required with surface_source=raw")
         surrogate_family = "averaged_surfaces"
-        mu1_surfaces_list = []
-        mu2_surfaces_list = []
-        for sf1, sf2, sp in parameters_array[:, :3]:
-            mu1_surface, mu2_surface = load_averaged_surface(
-                float(sf1), float(sf2), float(sp), n_samples,
+        mu_feat_surfaces_list = []
+        mu_idf_surfaces_list = []
+        for sf1, sf2, idf in parameters_array[:, :3]:
+            mu_feat_surface, mu_idf_surface = load_averaged_surface(
+                float(sf1), float(sf2), float(idf), n_samples,
                 surfaces_dir=averaged_surfaces_dir)
-            mu1_surfaces_list.append(mu1_surface)
-            mu2_surfaces_list.append(mu2_surface)
-        log_surfaces_batch = jnp.stack(mu1_surfaces_list)
-        mu2_surfaces_batch = jnp.stack(mu2_surfaces_list)
+            mu_feat_surfaces_list.append(mu_feat_surface)
+            mu_idf_surfaces_list.append(mu_idf_surface)
+        log_surfaces_batch = jnp.stack(mu_feat_surfaces_list)
+        mu_idf_surfaces_batch = jnp.stack(mu_idf_surfaces_list)
 
         if not skip_motor_noise:
             noisy = []
@@ -335,11 +335,11 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
         if smoothing_sigma is None:
             smoothing_sigma = (
                 DENSITY_CURVE_SPEC["emp_density_weights_sd"] / config.feat_diff_step)
-        for sf1, sf2, sp, motor in np.asarray(parameters_array):
+        for sf1, sf2, idf, motor in np.asarray(parameters_array):
             rows = jnp.column_stack([
                 jnp.full(feat_diff_grid.shape, sf1),
                 jnp.full(feat_diff_grid.shape, sf2),
-                jnp.full(feat_diff_grid.shape, sp),
+                jnp.full(feat_diff_grid.shape, idf),
                 feat_diff_grid,
             ])
             effective_motor = 0.0 if skip_motor_noise else float(motor)
@@ -355,50 +355,50 @@ def simulate_surfaces_from_file(input_path: str, n_samples: int, output_path: st
         density_curves = np.stack(density_curves)
         sd_curves = np.stack(sd_curves)
 
-    if mu2_surfaces_batch is not None:
+    if mu_idf_surfaces_batch is not None:
         target_feat_indices = jnp.arange(n_feat_points)
-        mu2_expectation_curves = _generate_mu2_bias_curve_batch(
-            mu2_surfaces_batch, target_feat_indices)
-        mu2_density_curves = _generate_mu2_density_asymmetry_batch(
-            mu2_surfaces_batch, target_feat_indices)
+        mu_idf_expectation_curves = _generate_mu_idf_bias_curve_batch(
+            mu_idf_surfaces_batch, target_feat_indices)
+        mu_idf_density_curves = _generate_mu_idf_density_asymmetry_batch(
+            mu_idf_surfaces_batch, target_feat_indices)
     else:
-        mu2_expectation_curves = None
-        mu2_density_curves = None
+        mu_idf_expectation_curves = None
+        mu_idf_density_curves = None
 
     results_list = []
     for i in range(len(parameters_array)):
         row = {
             'sd_feat1': float(parameters_array[i, 0]),
             'sd_feat2': float(parameters_array[i, 1]),
-            'sd_spat': float(parameters_array[i, 2]),
+            'sd_idf': float(parameters_array[i, 2]),
             'sd_motor': float(parameters_array[i, 3]),
-            'mu1_density_curve': np.asarray(density_curves[i]).tolist(),
-            'mu2_density_curve': (
-                np.asarray(mu2_density_curves[i]).tolist()
-                if mu2_density_curves is not None
+            'mu_feat_density_curve': np.asarray(density_curves[i]).tolist(),
+            'mu_idf_density_curve': (
+                np.asarray(mu_idf_density_curves[i]).tolist()
+                if mu_idf_density_curves is not None
                 else [float('nan')] * n_feat_points),
-            'mu1_expectation_curve': np.asarray(expectation_curves[i]).tolist(),
-            'mu2_expectation_curve': (
-                np.asarray(mu2_expectation_curves[i]).tolist()
-                if mu2_expectation_curves is not None
+            'mu_feat_expectation_curve': np.asarray(expectation_curves[i]).tolist(),
+            'mu_idf_expectation_curve': (
+                np.asarray(mu_idf_expectation_curves[i]).tolist()
+                if mu_idf_expectation_curves is not None
                 else [float('nan')] * n_feat_points),
             'sd_curve': np.asarray(sd_curves[i]).tolist(),
             'feat_diff_grid': np.asarray(feat_diff_grid).tolist() if i == 0 else None,
-            'mu1_bias_grid': np.asarray(mu1_bias_grid).tolist() if i == 0 else None,
-            'mu2_bias_grid': config.create_grid('mu2_bias').tolist() if i == 0 else None,
+            'mu_feat_bias_grid': np.asarray(mu_feat_bias_grid).tolist() if i == 0 else None,
+            'mu_idf_bias_grid': config.create_grid('mu_idf_bias').tolist() if i == 0 else None,
             'feat_diff_range': list(config.feat_diff_range) if i == 0 else None,
-            'mu1_bias_range': list(config.mu1_bias_range) if i == 0 else None,
-            'mu2_bias_range': list(config.mu2_bias_range) if i == 0 else None,
+            'mu_feat_bias_range': list(config.mu_feat_bias_range) if i == 0 else None,
+            'mu_idf_bias_range': list(config.mu_idf_bias_range) if i == 0 else None,
             'feat_diff_step': config.feat_diff_step if i == 0 else None,
-            'mu1_bias_step': config.mu1_bias_step if i == 0 else None,
-            'mu2_bias_step': config.mu2_bias_step if i == 0 else None,
+            'mu_feat_bias_step': config.mu_feat_bias_step if i == 0 else None,
+            'mu_idf_bias_step': config.mu_idf_bias_step if i == 0 else None,
             'n_samples': resolved_n_samples if i == 0 else None,
             'surrogate_family': surrogate_family if i == 0 else None,
             'surrogate_artifact': (
                 Path(resolved_checkpoint_path).name
                 if i == 0 and resolved_checkpoint_path is not None else None),
             'skip_motor_noise': skip_motor_noise if i == 0 else None,
-            'has_mu2_data': mu2_expectation_curves is not None if i == 0 else None,
+            'has_mu_idf_data': mu_idf_expectation_curves is not None if i == 0 else None,
         }
         results_list.append(row)
 
@@ -434,7 +434,7 @@ def main():
                        help='Skip motor noise computation (sd_motor = 0)')
     parser.add_argument('--surface-source', choices=['model', 'raw'], default='model',
                        help='model: use the selected trained predictor (default); '
-                            'raw: load averaged simulation surfaces and include mu2 outputs')
+                            'raw: load averaged simulation surfaces and include mu_idf outputs')
     parser.add_argument('--averaged-surfaces-dir',
                        help='Path to averaged surfaces directory (required with --surface-source raw).')
     parser.add_argument('--checkpoint-path',

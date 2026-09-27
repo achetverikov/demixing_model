@@ -14,7 +14,7 @@ For batch predictions and the R interface, see the [prediction guide](../surface
 
 ## Inspect simulation surfaces
 
-Stored-surface tabs show averaged simulation outputs, including the separate identifiability-dimension (`mu2`) predictions. To enable them, set the artifact root to a directory containing your generated averaged surfaces:
+Stored-surface tabs show averaged simulation outputs, including the separate identifiability-dimension (`mu_idf`) predictions. To enable them, set the artifact root to a directory containing your generated averaged surfaces:
 
 ```bash
 DEMIXING_ARTIFACT_ROOT=/path/to/artifacts \

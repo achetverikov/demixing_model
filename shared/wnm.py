@@ -1,10 +1,10 @@
 """Conditional wrapped-normal mixture density for Demixing Model bias.
 
-Represents ``p(b | sd_feat1, sd_feat2, sd_spat, feat_diff)`` directly as
+Represents ``p(b | sd_feat1, sd_feat2, sd_idf, feat_diff)`` directly as
 
     q(b|x) = sum_k pi_k(x) * WN(b; mu_k(x), sigma_k(x))
 
-with (pi, mu, sigma) produced by a small MLP.  ``b`` is the ``mu1_bias`` value
+with (pi, mu, sigma) produced by a small MLP.  ``b`` is the ``mu_feat_bias`` value
 returned by ``jax_fit_main.simulate_dual_component_bias_distribution``; the
 circle is 360 degrees wide and densities are **per degree**.
 
@@ -40,7 +40,7 @@ def featurise(params):
     """Map raw parameters to normalised network inputs.
 
     Args:
-        params: ``(..., 4)`` array of ``[sd_feat1, sd_feat2, sd_spat, feat_diff]``.
+        params: ``(..., 4)`` array of ``[sd_feat1, sd_feat2, sd_idf, feat_diff]``.
 
     Returns:
         ``(..., 6)`` array.  The three SDs enter as log values rescaled to
@@ -261,7 +261,7 @@ def _spread_mean_init(n_components: int):
 
 
 class ConditionalWrappedMixture(nn.Module):
-    """MLP mapping ``[sd_feat1, sd_feat2, sd_spat, feat_diff]`` to mixture parameters.
+    """MLP mapping ``[sd_feat1, sd_feat2, sd_idf, feat_diff]`` to mixture parameters.
 
     Attributes:
         n_components: number of wrapped-normal components ``K``.

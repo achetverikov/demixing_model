@@ -91,16 +91,16 @@ def _inputs(golden, case):
 
 def _grids():
     feat_diff_grid = config.create_grid('feat_diff')
-    mu1_bias_grid = config.create_grid('mu1_bias')
-    diff = jnp.abs(mu1_bias_grid[:, None] - mu1_bias_grid[None, :])
-    return feat_diff_grid, jnp.minimum(diff, 360.0 - diff), len(mu1_bias_grid)
+    mu_feat_bias_grid = config.create_grid('mu_feat_bias')
+    diff = jnp.abs(mu_feat_bias_grid[:, None] - mu_feat_bias_grid[None, :])
+    return feat_diff_grid, jnp.minimum(diff, 360.0 - diff), len(mu_feat_bias_grid)
 
 
 def _build(datasets):
-    feat_diff_grid, d_circ, n_mu1_bias = _grids()
+    feat_diff_grid, d_circ, n_mu_feat_bias = _grids()
     return build_fitting_targets(
         {name: jnp.asarray(values) for name, values in datasets.items()},
-        feat_diff_grid=feat_diff_grid, d_circ_matrix=d_circ, n_mu1_bias=n_mu1_bias,
+        feat_diff_grid=feat_diff_grid, d_circ_matrix=d_circ, n_mu_feat_bias=n_mu_feat_bias,
         emp_density_weights_sd=F.DENSITY_CURVE_SPEC["emp_density_weights_sd"],
         density_bandwidth_rule=F.DENSITY_CURVE_SPEC["density_bandwidth_rule"],
         density_bandwidth_mode=F.DENSITY_CURVE_SPEC["density_bandwidth_mode"],

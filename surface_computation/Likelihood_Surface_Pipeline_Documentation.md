@@ -24,7 +24,7 @@ Use this pipeline to generate a grid of simulated response distributions for sur
 │    Creates 3D parameter grid:                                   │
 │    - sd_feat1: Standard deviation for feature component 1       │
 │    - sd_feat2: Standard deviation for feature component 2       │
-│    - sd_spat: Spatial standard deviation                        │
+│    - sd_idf: Identifiability standard deviation                        │
 │                                                                  │
 │    Grid configuration:                                           │
 │    - Level 1 (coarse): step = config.param_step                 │
@@ -54,7 +54,7 @@ Use this pipeline to generate a grid of simulated response distributions for sur
 ┌──────────────────────────────────────────────────────────────────┐
 │ 3. Chunk Processing Loop                                        │
 │                                                                  │
-│    FOR EACH parameter combination (sd_feat1, sd_feat2, sd_spat):│
+│    FOR EACH parameter combination (sd_feat1, sd_feat2, sd_idf):│
 │    │                                                             │
 │    ├─ Check if samples already exist (skip if yes)              │
 │    ├─ Simulate bias samples via jax_fit_main                    │
@@ -72,7 +72,7 @@ Use this pipeline to generate a grid of simulated response distributions for sur
 │    Function: simulate_dual_component_bias_distribution()        │
 │                                                                  │
 │    INPUT PARAMETERS:                                             │
-│    ├─ sd_feat1, sd_feat2, sd_spat (from grid)                   │
+│    ├─ sd_feat1, sd_feat2, sd_idf (from grid)                   │
 │    ├─ feat_diff (from config.create_grid('feat_diff'))          │
 │    ├─ n_simulations (per run; split across 10 scans)            │
 │    ├─ n_samples (from runtime args)                             │
@@ -85,8 +85,8 @@ Use this pipeline to generate a grid of simulated response distributions for sur
 │    - Results concatenated to reach n_simulations total          │
 │                                                                  │
 │    RETURNS:                                                      │
-│    - mu_1_bias: (n_feat_diff, n_simulations, 2)                 │
-│    - mu_2_bias: (n_feat_diff, n_simulations, 2)                 │
+│    - mu_feat_bias: (n_feat_diff, n_simulations, 2)                 │
+│    - mu_idf_bias: (n_feat_diff, n_simulations, 2)                 │
 │    - full_results (optional, when save_full_results=True)       │
 └───────────────┬──────────────────────────────────────────────────┘
                 │
@@ -96,8 +96,8 @@ Use this pipeline to generate a grid of simulated response distributions for sur
 │    Function: save_samples_checkpoint()                          │
 │                                                                  │
 │    FILENAME FORMAT:                                              │
-│    samples_sf1_{X.X}_sf2_{Y.Y}_sp_{Z.Z}_{HASH}.pkl.gz           │
-│    Example: samples_sf1_60.0_sf2_115.0_sp_82.0_a3f2c1d8.pkl.gz  │
+│    samples_sf1_{X.X}_sf2_{Y.Y}_idf_{Z.Z}_{HASH}.pkl.gz           │
+│    Example: samples_sf1_60.0_sf2_115.0_idf_82.0_a3f2c1d8.pkl.gz  │
 │                                                                  │
 │    STORAGE LOCATION:                                             │
 │    config.samples_folder (set by configure_samples_folder)      │
@@ -109,14 +109,14 @@ Use this pipeline to generate a grid of simulated response distributions for sur
 │        'parameters': {                                           │
 │            'sd_feat1': float,                                    │
 │            'sd_feat2': float,                                    │
-│            'sd_spat': float,                                     │
+│            'sd_idf': float,                                     │
 │            'param_name': str,                                    │
 │            'param_hash': str,                                    │
 │            'machine_id': str,                                    │
 │            'platform': str                                       │
 │        },                                                        │
-│        'mu1_samples': Array (float16),                           │
-│        'mu2_samples': Array (float16),                           │
+│        'mu_feat_samples': Array (float16),                           │
+│        'mu_idf_samples': Array (float16),                           │
 │        'full_results': Array (float32, optional),                │
 │        'computation_time': float,                                │
 │        'timestamp': float                                        │
@@ -170,7 +170,7 @@ is also supplied. `--averaged-surfaces-dir` selects the output, and
 `--bundle-output` writes one compressed bundle per chunk.
 
 For targeted reference simulations, `--param-file MANIFEST.csv` restricts the
-run to unique rows containing `sd_feat1`, `sd_feat2`, and `sd_spat`. It is
+run to unique rows containing `sd_feat1`, `sd_feat2`, and `sd_idf`. It is
 mutually exclusive with `--match-csv-params`. This is the route used for the
 independent 100k objective-ablation references; those surfaces are validation
 targets, not replacements for the 10k training grid.
@@ -200,8 +200,8 @@ python surface_computation/simulated_samples_grid.py \
 ### Coordination Files
 ```
 sim_samples_*_*/  # config.samples_folder
-├── samples_sf1_60.0_sf2_115.0_sp_82.0_a3f2c1d8.pkl.gz
-├── samples_sf1_70.0_sf2_120.0_sp_90.0_b4e3d2f9.pkl.gz
+├── samples_sf1_60.0_sf2_115.0_idf_82.0_a3f2c1d8.pkl.gz
+├── samples_sf1_70.0_sf2_120.0_idf_90.0_b4e3d2f9.pkl.gz
 ├── ...
 ├── progress_summary_PC1.json
 ├── progress_summary_PC2.json
@@ -219,14 +219,14 @@ sim_samples_*_*/  # config.samples_folder
     'parameters': {
         'sd_feat1': 60.0,
         'sd_feat2': 115.0,
-        'sd_spat': 82.0,
-        'param_name': 'sf1_60.0_sf2_115.0_sp_82.0',
+        'sd_idf': 82.0,
+        'param_name': 'sf1_60.0_sf2_115.0_idf_82.0',
         'param_hash': 'a3f2c1d8',
         'machine_id': 'PC1',
         'platform': 'hostname'
     },
-    'mu1_samples': array([...], dtype=float16),   # always float16
-    'mu2_samples': array([...], dtype=float16),   # always float16
+    'mu_feat_samples': array([...], dtype=float16),   # always float16
+    'mu_idf_samples': array([...], dtype=float16),   # always float16
     'full_results': array([...], dtype=float32),  # optional, only when enabled
     'computation_time': 28.4,
     'timestamp': 1728394425.123
@@ -239,12 +239,12 @@ import gzip
 import pickle
 from pathlib import Path
 
-samples_file = Path("samples_sf1_60.0_sf2_115.0_sp_82.0_a3f2c1d8.pkl.gz")
+samples_file = Path("samples_sf1_60.0_sf2_115.0_idf_82.0_a3f2c1d8.pkl.gz")
 with gzip.open(samples_file, 'rb') as f:
     data = pickle.load(f)
 
-mu1 = data['mu1_samples']
-mu2 = data['mu2_samples']
+mu_feat = data['mu_feat_samples']
+mu_idf = data['mu_idf_samples']
 params = data['parameters']
 ```
 
@@ -278,9 +278,9 @@ sim_samples_{sim_part}_{n_samples}samples_{geometry}_{algorithm}_{covariance}_{w
 ```
 Where:
 - `sim_part` is `n_simulations` formatted as `1k`, `2k`, etc. when divisible by 1000 (otherwise raw integer)
-- `geometry` is `circular` if `jf.wrap_1st` is True, else `linear`
+- `geometry` is `circular` if `jf.wrap_feat` is True, else `linear`
 - `algorithm` is `em` (lowercased). **Only `em` is implemented.** `vbem` / `vbem_mix` exist
-  as CLI choices, docstrings, and zero-filled result columns (`weight_mix`/`mu1_mix`/`mu2_mix`)
+  as CLI choices, docstrings, and zero-filled result columns (`weight_mix`/`mu_feat_mix`/`mu_idf_mix`)
   but have **no inference code** — requesting them now raises `NotImplementedError`
   (pinned by `tests/test_flag_dispatch.py`).
 - `covariance` is `diagcov` (the default and **only implemented mode**). `fullcov`
@@ -294,14 +294,14 @@ Where:
 ### Sample Generation Parameters
 ```python
 feat_diff_step = 2
-mu1_bias_step = 2
-mu2_bias_step = 6
+mu_feat_bias_step = 2
+mu_idf_bias_step = 6
 n_simulations = 10000  # CLI default; 100k was used for selected references
 n_samples = 100
 ```
 
-The mu1 bias grid is periodic and half-open: `[-180, 180)` at 2° spacing,
-giving 180 distinct cells. Feature difference and mu2 bias are bounded,
+The mu_feat bias grid is periodic and half-open: `[-180, 180)` at 2° spacing,
+giving 180 distinct cells. Feature difference and mu_idf bias are bounded,
 inclusive grids. `n_samples` is a runtime observer assumption; production
 artifacts exist for 20 and 100, and it is not the Monte Carlo iteration count.
 
@@ -319,7 +319,7 @@ artifacts exist for 20 and 100, and it is not the Monte Carlo iteration count.
 - JAX JIT compilation provides substantial speedup for large runs
 
 ### Memory Usage
-- `mu1_samples` and `mu2_samples` are stored as float16 to reduce disk usage
+- `mu_feat_samples` and `mu_idf_samples` are stored as float16 to reduce disk usage
 - Optional `full_results` uses float32 and increases file size
 
 ## Notes for developers

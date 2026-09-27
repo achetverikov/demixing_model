@@ -277,13 +277,13 @@ def test_an_everywhere_non_finite_objective_raises():
 
 def test_layout_is_two_feature_sds_per_condition_plus_shared_terms():
     assert condition_parameter_layout(1, fit_motor=False) == (
-        "sd_feat1_c0", "sd_feat2_c0", "sd_spat")
+        "sd_feat1_c0", "sd_feat2_c0", "sd_idf")
     assert condition_parameter_layout(2, fit_motor=True) == (
-        "sd_feat1_c0", "sd_feat2_c0", "sd_feat1_c1", "sd_feat2_c1", "sd_spat", "sd_motor")
+        "sd_feat1_c0", "sd_feat2_c0", "sd_feat1_c1", "sd_feat2_c1", "sd_idf", "sd_motor")
 
 
 def test_bounds_follow_the_layout_and_come_from_the_surrogate():
-    """The feature and spatial axes have different domains, and the search must
+    """The feature and identifiability axes have different domains, and the search must
     respect that rather than applying one interval to both."""
     bounds = build_bounds(2, (2.5, 200.0), (5.0, 200.0), motor_bounds=(0.1, 50.0))
     assert bounds.shape == (6, 2)

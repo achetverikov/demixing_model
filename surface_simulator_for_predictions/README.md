@@ -10,7 +10,7 @@ Use CSV, Parquet, or Arrow with one row per parameter combination:
 |---|---|---|
 | `sd_feat1` | Yes | Target-item feature noise |
 | `sd_feat2` | Yes | Competing-item feature noise |
-| `sd_spat` | Yes | Uncertainty about which evidence belongs to which item |
+| `sd_idf` | Yes | Uncertainty about which evidence belongs to which item |
 | `sd_motor` | Unless `--skip-motor-noise` is used | Response-stage motor noise |
 
 Supply noise values in 360° model units. For example, 10° on a 180° orientation scale corresponds to 20 model degrees. See the [model reference](../pretrained/README.md) for supported parameter ranges.
@@ -33,8 +33,8 @@ The output contains one row per input combination:
 
 | Field | Contents |
 |---|---|
-| `mu1_density_curve` | Asymmetry of the predicted feature-error distribution |
-| `mu1_expectation_curve` | Predicted circular mean bias in model degrees |
+| `mu_feat_density_curve` | Asymmetry of the predicted feature-error distribution |
+| `mu_feat_expectation_curve` | Predicted circular mean bias in model degrees |
 | `sd_curve` | Predicted circular response SD in model degrees |
 | `feat_diff_grid` | Stimulus differences in model degrees, stored in the first row with grid/configuration metadata |
 
@@ -50,7 +50,7 @@ source("surface_simulator_for_predictions/surface_simulator.R")
 params <- data.frame(
   sd_feat1 = c(10, 10, 10),
   sd_feat2 = c(30, 30, 30),
-  sd_spat = c(20, 60, 120)
+  sd_idf = c(20, 60, 120)
 )
 
 predictions <- simulate_surfaces(
@@ -64,7 +64,7 @@ Helpers `simulate_unequal_noise2()` and `simulate_equal_noise()` construct commo
 
 ## Predict from averaged simulation surfaces
 
-Use raw mode to inspect averaged simulation predictions, including bias in the separate identifiability dimension (`mu2`). Provide a directory of generated averaged surfaces:
+Use raw mode to inspect averaged simulation predictions, including bias in the separate identifiability dimension (`mu_idf`). Provide a directory of generated averaged surfaces:
 
 ```bash
 python surface_simulator_for_predictions/surface_simulator.py \
@@ -76,7 +76,7 @@ python surface_simulator_for_predictions/surface_simulator.py \
   --skip-motor-noise
 ```
 
-The requested parameter combinations must exist on the 5° surface grid. Raw mode adds `mu2_density_curve` and `mu2_expectation_curve`. Both loose surface files and compressed bundles are supported; use a writable directory for bundles so requested files can be extracted.
+The requested parameter combinations must exist on the 5° surface grid. Raw mode adds `mu_idf_density_curve` and `mu_idf_expectation_curve`. Both loose surface files and compressed bundles are supported; use a writable directory for bundles so requested files can be extracted.
 
 In R, set `surface_source = "raw"` and provide an absolute `averaged_surfaces_dir`. See the [simulation guide](../surface_computation/README.md) for generating surfaces.
 

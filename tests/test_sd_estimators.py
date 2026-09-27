@@ -32,7 +32,7 @@ from model_fit_to_data.create_unified_subject_plots import (  # noqa: E402
     SD_N_BINS, compute_empirical_sd_curve, compute_feat_bin_weights,
     compute_predicted_sd_curves_batch, compute_predicted_sd_curves_batch_pooled)
 from shared.config import config  # noqa: E402
-from shared.mu1_axis import mu1_cell_width  # noqa: E402
+from shared.mu_feat_axis import mu_feat_cell_width  # noqa: E402
 
 FEAT_VALS = np.arange(config.feat_diff_range[0], config.feat_diff_range[1] + 1, 2)
 TRUE_SD = 30.0
@@ -40,11 +40,11 @@ TRUE_SD = 30.0
 
 def wrapped_normal_surface(sds_per_column, means_per_column):
     """Log densities: one wrapped-normal-ish column per feature difference."""
-    grid = np.asarray(config.create_grid('mu1_bias'), dtype=float)
+    grid = np.asarray(config.create_grid('mu_feat_bias'), dtype=float)
     offsets = np.radians((grid[:, None] - means_per_column[None, :] + 180) % 360 - 180)
     sd_rad = np.radians(sds_per_column)[None, :]
     density = np.exp(-0.5 * (offsets / sd_rad) ** 2)
-    density /= density.sum(axis=0, keepdims=True) * mu1_cell_width()
+    density /= density.sum(axis=0, keepdims=True) * mu_feat_cell_width()
     return np.log(density)[None, ...]
 
 

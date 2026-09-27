@@ -6,7 +6,7 @@ smooth their curves with this, so a change here changes what every density fit
 means.
 
 The extraction that created this helper -- it previously existed twice, once in
-the mu1 asymmetry path and once inside the mu2 simulator -- was verified against
+the mu_feat asymmetry path and once inside the mu_idf simulator -- was verified against
 verbatim copies of both predecessors at the time. That check has been removed:
 it was a migration proof, and keeping it would pin the helper to the shape of the
 code it replaced rather than to the behaviour that matters.
@@ -25,7 +25,7 @@ if str(REPO_ROOT) not in sys.path:
 from shared.utils import compute_single_density_asymmetry, gaussian_curve_smoother  # noqa: E402
 
 # The production sigma is weights_sd / feat_diff_step = 20 / 2; the others span
-# the range the surface and mu2 paths have used.
+# the range the surface and mu_idf paths have used.
 # The production sigma is weights_sd / feat_diff_step = 20 / 2. The others are
 # one below and one above it; more values of the same kind add instances, not
 # coverage. Lengths cover even and odd, which the kernel padding distinguishes.
@@ -74,9 +74,9 @@ def test_kernel_width_follows_sigma():
 
 def test_asymmetry_path_still_routes_through_the_helper():
     """The caller must use the helper, not re-inline an equivalent smoother."""
-    from shared.mu1_axis import mu1_grid
+    from shared.mu_feat_axis import mu_feat_grid
 
-    grid = mu1_grid()
+    grid = mu_feat_grid()
     rng = np.random.default_rng(11)
     surface = jnp.asarray(np.log(np.abs(rng.normal(size=(len(grid), 90))) + 1e-3))
     indices = jnp.arange(0, 90, 5)

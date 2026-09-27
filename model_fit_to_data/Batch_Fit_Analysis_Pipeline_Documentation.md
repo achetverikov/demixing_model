@@ -24,7 +24,7 @@ The CSV contains one row per trial:
 | `bias_to_distr_corr` | Response error signed toward the competitor: positive for attraction, negative for repulsion | `--y-col` |
 | `is_outlier` | Optional flag: 1 excludes the trial | `--outlier-col` |
 
-The fitter groups conditions within each participant and experiment. Each condition gets its own `sd_feat1` and `sd_feat2`; the group shares `sd_spat` and, when enabled, `sd_motor`. By default, conditions need at least 30 usable trials and flagged outliers are excluded.
+The fitter groups conditions within each participant and experiment. Each condition gets its own `sd_feat1` and `sd_feat2`; the group shares `sd_idf` and, when enabled, `sd_motor`. By default, conditions need at least 30 usable trials and flagged outliers are excluded.
 
 ## Choose a fitting criterion
 

@@ -13,24 +13,24 @@ def normalize_to_density(log_probs):
     Uses logsumexp for numerical stability with dx correction.
 
     Args:
-        log_probs: Shape (batch, mu1_error, feat_diff) - uses config for dimensions
+        log_probs: Shape (batch, mu_feat_error, feat_diff) - uses config for dimensions
 
     Returns:
         Normalized log densities with same shape
     """
-    from shared.mu1_axis import assert_mu1_axis, mu1_cell_width
+    from shared.mu_feat_axis import assert_mu_feat_axis, mu_feat_cell_width
 
     # Periodic cell width: period / n, NOT the inclusive-grid (max-min)/(n-1).
     # The two coincide numerically on the correct grid; the inclusive form is
     # what silently produced a 2.0112° step once the row count changed.
-    assert_mu1_axis(log_probs.shape[1], name="normalize_to_density input")
-    dmu1 = mu1_cell_width()
+    assert_mu_feat_axis(log_probs.shape[1], name="normalize_to_density input")
+    dmu_feat = mu_feat_cell_width()
 
     # Normalize using logsumexp (ensures discrete probabilities sum to 1)
     log_probs_discrete = log_probs - jax.scipy.special.logsumexp(log_probs, axis=1, keepdims=True)
 
     # Convert to continuous density by dividing by dx (in log space: subtract log(dx))
-    log_density = log_probs_discrete - jnp.log(dmu1)
+    log_density = log_probs_discrete - jnp.log(dmu_feat)
 
     return log_density
 
@@ -91,10 +91,10 @@ def smooth_surface(surface_obj: Dict):
     return surface_obj
 
 def compute_expectation(surface_data):
-    """Compute E[mu1_error] as function of feat_diff."""
-    feat_diff_grid, mu1_error_grid, log_likelihood_surface, likelihood_surface = surface_data
+    """Compute E[mu_feat_error] as function of feat_diff."""
+    feat_diff_grid, mu_feat_error_grid, log_likelihood_surface, likelihood_surface = surface_data
     feat_diff_values = feat_diff_grid[0, :]
-    mu1_error_values = mu1_error_grid[:, 0]
+    mu_feat_error_values = mu_feat_error_grid[:, 0]
 
     log_probs = log_likelihood_surface - logsumexp(log_likelihood_surface, axis=0, keepdims=True)
 
@@ -102,7 +102,7 @@ def compute_expectation(surface_data):
     probs = jnp.exp(log_probs)
 
     # Step 3: Compute expectations
-    expected_mu1_error = jnp.dot(mu1_error_values, probs)  # shape: (num_feat_diff,)
-    # Compute the expected mu1_error for each feat_diff column
+    expected_mu_feat_error = jnp.dot(mu_feat_error_values, probs)  # shape: (num_feat_diff,)
+    # Compute the expected mu_feat_error for each feat_diff column
 
-    return feat_diff_values, expected_mu1_error
+    return feat_diff_values, expected_mu_feat_error

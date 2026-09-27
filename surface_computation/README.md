@@ -24,7 +24,7 @@ The generator saves simulation chunks beside the output so interrupted runs can 
 
 ## Generate averaged surfaces
 
-For direct inspection of simulated distributions or identifiability-dimension (`mu2`) predictions, use `simulated_samples_grid.py`. It generates samples on a parameter grid; averaging tools then turn them into density surfaces.
+For direct inspection of simulated distributions or identifiability-dimension (`mu_idf`) predictions, use `simulated_samples_grid.py`. It generates samples on a parameter grid; averaging tools then turn them into density surfaces.
 
 - [Grid simulation guide](Likelihood_Surface_Pipeline_Documentation.md)
 - [Distributed generation on Vast.ai](../cloud/README_vast.md)

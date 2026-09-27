@@ -24,11 +24,11 @@ if str(REPO_ROOT) not in sys.path:
 
 from shared import wnm as wm  # noqa: E402
 from shared import surrogate  # noqa: E402
-from shared.mu1_axis import mu1_grid, mu1_cell_width  # noqa: E402
+from shared.mu_feat_axis import mu_feat_grid, mu_feat_cell_width  # noqa: E402
 from shared.prediction import (  # noqa: E402
-    PARAM_ORDER, SPATIAL_SEPARATION, SurfacePredictor, WrappedMixturePredictor,
-    LEGACY_DOMAIN, domain_from_meta, dprime_from_sd_spat, gaussian_curve_smoother,
-    legal_warmup_params, mirror_params, predictor_from_surrogate, sd_spat_from_dprime,
+    PARAM_ORDER, IDF_SEPARATION, SurfacePredictor, WrappedMixturePredictor,
+    LEGACY_DOMAIN, domain_from_meta, dprime_from_sd_idf, gaussian_curve_smoother,
+    legal_warmup_params, mirror_params, predictor_from_surrogate, sd_idf_from_dprime,
     validate_params)
 from shared.utils import compute_single_density_asymmetry  # noqa: E402
 
@@ -39,7 +39,7 @@ needs_artifact = pytest.mark.skipif(not ARTIFACT.exists(),
 # Narrow, broad, asymmetric in both orders, low and high d-prime, both ends of
 # the feature axis.
 # Spans the declared domain: sd_feat down to 2.5 (well below the production
-# fitting floor of 5, and the region that motivates this surrogate), sd_spat only
+# fitting floor of 5, and the region that motivates this surrogate), sd_idf only
 # to 5, and both feature-noise orders.
 PARAMS = jnp.asarray([
     [10.0, 10.0, 10.0, 2.0],
@@ -59,11 +59,11 @@ def predictor():
 # Conventions
 # ---------------------------------------------------------------------------
 
-def test_dprime_and_sd_spat_are_one_number_in_two_views():
-    for sd_spat in (5.0, 21.0, 42.0, 200.0):
-        dprime = float(dprime_from_sd_spat(sd_spat))
-        assert dprime == pytest.approx(SPATIAL_SEPARATION / sd_spat)
-        assert float(sd_spat_from_dprime(dprime)) == pytest.approx(sd_spat)
+def test_dprime_and_sd_idf_are_one_number_in_two_views():
+    for sd_idf in (5.0, 21.0, 42.0, 200.0):
+        dprime = float(dprime_from_sd_idf(sd_idf))
+        assert dprime == pytest.approx(IDF_SEPARATION / sd_idf)
+        assert float(sd_idf_from_dprime(dprime)) == pytest.approx(sd_idf)
 
 def test_mirror_swaps_only_the_two_feature_sds():
     out = np.asarray(mirror_params(PARAMS))
@@ -189,7 +189,7 @@ def test_a_narrow_component_is_mis_massed_by_a_grid_but_not_by_integration():
     exact = float(wm.wrapped_normal_interval_probability(
         dist["mu"], dist["sigma"], 0.0, 180.0, 8)[0, 0])
 
-    grid = mu1_grid()
+    grid = mu_feat_grid()
     density = jnp.exp(wm.mixture_logpdf_grid(grid, dist, 4))[0]
     renormalised = density / jnp.sum(density)
     grid_mass = float(jnp.sum(jnp.where(grid > 0, renormalised, 0.0)))
@@ -205,7 +205,7 @@ def test_a_narrow_component_is_mis_massed_by_a_grid_but_not_by_integration():
 def test_cell_probabilities_are_a_distribution_across_the_domain(predictor, sd_motor):
     """Wrap truncation check: 8 wraps must still integrate to 1 at broad scales."""
     probs = np.asarray(predictor.with_motor_noise(sd_motor).cell_probabilities(PARAMS))
-    assert probs.shape == (len(PARAMS), len(mu1_grid()))
+    assert probs.shape == (len(PARAMS), len(mu_feat_grid()))
     assert np.all(probs >= -1e-9)
     np.testing.assert_allclose(probs.sum(axis=-1), 1.0, atol=1e-5)
 
@@ -227,7 +227,7 @@ def test_cell_probabilities_are_jittable_and_differentiable(predictor):
 @needs_artifact
 def test_grid_density_integrates_to_one(predictor):
     density = np.exp(np.asarray(predictor.grid_log_density(PARAMS)))
-    np.testing.assert_allclose(density.sum(axis=-1) * mu1_cell_width(), 1.0, atol=1e-3)
+    np.testing.assert_allclose(density.sum(axis=-1) * mu_feat_cell_width(), 1.0, atol=1e-3)
 
 
 @needs_artifact
@@ -271,7 +271,7 @@ def test_smoothing_refuses_a_batch_that_is_not_one_curve(predictor):
 def test_surface_asymmetry_matches_the_historical_implementation():
     """Both families must be compared through one estimator, not two."""
     rng = np.random.default_rng(5)
-    grid = mu1_grid()
+    grid = mu_feat_grid()
     surfaces = jnp.asarray(np.log(np.abs(rng.normal(size=(3, len(grid), 90))) + 1e-3))
     indices = jnp.arange(0, 90, 5)
 
@@ -284,7 +284,7 @@ def test_surface_asymmetry_matches_the_historical_implementation():
 
 def test_surface_smoothed_curve_matches_the_historical_implementation():
     rng = np.random.default_rng(6)
-    grid = mu1_grid()
+    grid = mu_feat_grid()
     surfaces = jnp.asarray(np.log(np.abs(rng.normal(size=(2, len(grid), 90))) + 1e-3))
     indices = jnp.arange(0, 90, 3)
 
@@ -297,7 +297,7 @@ def test_surface_smoothed_curve_matches_the_historical_implementation():
 
 
 def test_surface_predictor_will_not_pretend_to_apply_motor_noise():
-    surfaces = jnp.zeros((1, len(mu1_grid()), 90))
+    surfaces = jnp.zeros((1, len(mu_feat_grid()), 90))
     predictor = SurfacePredictor(surfaces, n_samples=20, artifact="test.pkl")
     with pytest.raises(NotImplementedError, match="Apply motor noise"):
         predictor.with_motor_noise(10.0)
@@ -319,9 +319,9 @@ def test_the_domain_is_derived_from_the_corpus_not_the_featurisation(predictor):
     assert set(domain) == set(PARAM_ORDER)
     assert domain["sd_feat1"] == (2.5, 200.0)
     assert domain["sd_feat2"] == (2.5, 200.0)
-    # sd_spat is 42/d' with d' capped at 8.4, so it does not reach below 5 --
+    # sd_idf is 42/d' with d' capped at 8.4, so it does not reach below 5 --
     # which is why one shared interval for all three SDs could not be right.
-    assert domain["sd_spat"] == (5.0, 200.0)
+    assert domain["sd_idf"] == (5.0, 200.0)
     assert domain["feat_diff"] == (0.5, 180.0)
 
     predictor.distribution(jnp.asarray([[2.5, 2.5, 5.0, 0.5],
@@ -354,7 +354,7 @@ def test_untrained_regions_are_still_refused(predictor):
         predictor.distribution(jnp.asarray([[10.0, 10.0, 10.0, 0.0]], jnp.float32))
     with pytest.raises(ValueError, match="sd_feat1"):
         predictor.distribution(jnp.asarray([[2.0, 10.0, 10.0, 30.0]], jnp.float32))
-    with pytest.raises(ValueError, match="sd_spat"):
+    with pytest.raises(ValueError, match="sd_idf"):
         predictor.distribution(jnp.asarray([[10.0, 10.0, 4.0, 30.0]], jnp.float32))
 
 
@@ -424,7 +424,7 @@ def test_scoring_cell_masses_underflow_only_where_it_cannot_matter():
     """
     from scipy.stats import norm
 
-    from shared.mu1_axis import mu1_cell_width, mu1_grid
+    from shared.mu_feat_axis import mu_feat_cell_width, mu_feat_grid
 
     artifact = surrogate.WNM_DEFAULTS[20]
     if not artifact.exists():
@@ -435,8 +435,8 @@ def test_scoring_cell_masses_underflow_only_where_it_cannot_matter():
     rows = jnp.asarray([[2.5, 2.5, 5.0, 2.0]], jnp.float32)
     probabilities = np.asarray(predictor.cell_probabilities(rows, validate=False))[0]
 
-    centres = np.asarray(mu1_grid())
-    half = mu1_cell_width() / 2.0
+    centres = np.asarray(mu_feat_grid())
+    half = mu_feat_cell_width() / 2.0
     dist = predictor.distribution(rows, validate=False)
     mu = np.asarray(dist["mu"], np.float64)
     sigma = np.asarray(dist["sigma"], np.float64)

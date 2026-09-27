@@ -21,10 +21,10 @@ import jax.numpy as jnp
 import jax_fit_functions as jf
 from jax_fit_functions import ResCol
 
-# Two well-separated clusters (feat_diff = spat_diff = 80°, sd = 10°) so EM recovers
+# Two well-separated clusters (feat_diff = idf_diff = 80°, sd = 10°) so EM recovers
 # the mixture weights cleanly and any weight movement is data-driven, not noise.
-_MU1 = jnp.array([-40.0, 40.0])
-_MU2 = jnp.array([-40.0, 40.0])
+_MU_FEAT = jnp.array([-40.0, 40.0])
+_MU_IDF = jnp.array([-40.0, 40.0])
 _SD1 = jnp.array([10.0, 10.0])
 _SD2 = jnp.array([10.0, 10.0])
 
@@ -33,7 +33,7 @@ def _fit(weights_gen, fix_weights, diagonal_covariance=True, algorithm="EM",
          seed=0, n_samples=500):
     key = jax.random.PRNGKey(seed)
     return jf.jax_generate_and_fit(
-        key, _MU1, _MU2, _SD1, _SD2,
+        key, _MU_FEAT, _MU_IDF, _SD1, _SD2,
         weights=weights_gen, n_samples=n_samples,
         algorithm=algorithm, fix_weights=fix_weights,
         diagonal_covariance=diagonal_covariance,

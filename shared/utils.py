@@ -13,7 +13,7 @@ import pickle
 import gzip
 from shared.surface_folder_parsing import load_surface
 from shared.config import config
-from shared.mu1_axis import mu1_cell_width, periodic_integral, sign_masks
+from shared.mu_feat_axis import mu_feat_cell_width, periodic_integral, sign_masks
 import jax.numpy as jnp
 import jax
 
@@ -58,7 +58,7 @@ def load_surface_by_params(params: Dict, surfaces_folder: str = config.surfaces_
     """Load a surface matching the given parameter set.
 
     Args:
-        params: Parameter dict with `sd_feat1`, `sd_feat2`, and `sd_spat`.
+        params: Parameter dict with `sd_feat1`, `sd_feat2`, and `sd_idf`.
         surfaces_folder: Folder containing surface pickle files.
         smooth: Whether to apply entropy-based smoothing.
 
@@ -68,7 +68,7 @@ def load_surface_by_params(params: Dict, surfaces_folder: str = config.surfaces_
     Raises:
         FileNotFoundError: If no matching surface is found or multiple matches exist.
     """
-    regex = rf"surface_sf1_{params['sd_feat1']:.1f}_sf2_{params['sd_feat2']:.1f}_sp_{params['sd_spat']:.1f}_\w+\.pkl"
+    regex = rf"surface_sf1_{params['sd_feat1']:.1f}_sf2_{params['sd_feat2']:.1f}_idf_{params['sd_idf']:.1f}_\w+\.pkl"
     pattern = re.compile(regex)
     # print(f'Using regex {regex}')
     matching_files = [f for f in Path(surfaces_folder).glob("surface_*.pkl") if pattern.match(f.name)]
@@ -126,35 +126,35 @@ class Surface:
     Parameters:
     -----------
     feat_diff_grid : jnp.ndarray - 1D array of feature difference values
-    mu1_bias_grid : jnp.ndarray - 1D array of mu1 bias values
-    mu2_bias_grid : jnp.ndarray - 1D array of mu2 bias values
-    mu1_comp1_surface : jnp.ndarray - Log-likelihood surface for mu1 bias, component 1
-    mu1_comp2_surface : jnp.ndarray - Log-likelihood surface for mu1 bias, component 2
-    mu2_comp1_surface : jnp.ndarray - Log-likelihood surface for mu2 bias, component 1
-    mu2_comp2_surface : jnp.ndarray - Log-likelihood surface for mu2 bias, component 2
+    mu_feat_bias_grid : jnp.ndarray - 1D array of mu_feat bias values
+    mu_idf_bias_grid : jnp.ndarray - 1D array of mu_idf bias values
+    mu_feat_comp1_surface : jnp.ndarray - Log-likelihood surface for mu_feat bias, component 1
+    mu_feat_comp2_surface : jnp.ndarray - Log-likelihood surface for mu_feat bias, component 2
+    mu_idf_comp1_surface : jnp.ndarray - Log-likelihood surface for mu_idf bias, component 1
+    mu_idf_comp2_surface : jnp.ndarray - Log-likelihood surface for mu_idf bias, component 2
     """
 
     feat_diff_grid: jnp.ndarray
-    mu1_bias_grid: jnp.ndarray
-    mu2_bias_grid: jnp.ndarray
-    mu1_comp1_surface: jnp.ndarray
-    mu1_comp2_surface: jnp.ndarray
-    mu2_comp1_surface: jnp.ndarray
-    mu2_comp2_surface: jnp.ndarray
+    mu_feat_bias_grid: jnp.ndarray
+    mu_idf_bias_grid: jnp.ndarray
+    mu_feat_comp1_surface: jnp.ndarray
+    mu_feat_comp2_surface: jnp.ndarray
+    mu_idf_comp1_surface: jnp.ndarray
+    mu_idf_comp2_surface: jnp.ndarray
 
     def __post_init__(self):
         """Validate surface dimensions after initialization."""
-        expected_mu1 = (len(self.mu1_bias_grid), len(self.feat_diff_grid))
-        expected_mu2 = (len(self.mu2_bias_grid), len(self.feat_diff_grid))
+        expected_mu_feat = (len(self.mu_feat_bias_grid), len(self.feat_diff_grid))
+        expected_mu_idf = (len(self.mu_idf_bias_grid), len(self.feat_diff_grid))
 
-        if self.mu1_comp1_surface.shape != expected_mu1:
-            raise ValueError(f"mu1_comp1_surface shape {self.mu1_comp1_surface.shape} != {expected_mu1}")
-        if self.mu1_comp2_surface.shape != expected_mu1:
-            raise ValueError(f"mu1_comp2_surface shape {self.mu1_comp2_surface.shape} != {expected_mu1}")
-        if self.mu2_comp1_surface.shape != expected_mu2:
-            raise ValueError(f"mu2_comp1_surface shape {self.mu2_comp1_surface.shape} != {expected_mu2}")
-        if self.mu2_comp2_surface.shape != expected_mu2:
-            raise ValueError(f"mu2_comp2_surface shape {self.mu2_comp2_surface.shape} != {expected_mu2}")
+        if self.mu_feat_comp1_surface.shape != expected_mu_feat:
+            raise ValueError(f"mu_feat_comp1_surface shape {self.mu_feat_comp1_surface.shape} != {expected_mu_feat}")
+        if self.mu_feat_comp2_surface.shape != expected_mu_feat:
+            raise ValueError(f"mu_feat_comp2_surface shape {self.mu_feat_comp2_surface.shape} != {expected_mu_feat}")
+        if self.mu_idf_comp1_surface.shape != expected_mu_idf:
+            raise ValueError(f"mu_idf_comp1_surface shape {self.mu_idf_comp1_surface.shape} != {expected_mu_idf}")
+        if self.mu_idf_comp2_surface.shape != expected_mu_idf:
+            raise ValueError(f"mu_idf_comp2_surface shape {self.mu_idf_comp2_surface.shape} != {expected_mu_idf}")
 
     def get_surf(self, dimension: int, component: int, log: bool = True) -> jnp.ndarray:
         """
@@ -162,7 +162,7 @@ class Surface:
 
         Parameters:
         -----------
-        dimension : int - 1 (mu1) or 2 (mu2)
+        dimension : int - 1 (mu_feat) or 2 (mu_idf)
         component : int - 1 or 2
         log : bool - True for log-likelihood, False for probability surface
 
@@ -173,10 +173,10 @@ class Surface:
 
         # Select surface
         surface_map = {
-            (1, 1): self.mu1_comp1_surface,
-            (1, 2): self.mu1_comp2_surface,
-            (2, 1): self.mu2_comp1_surface,
-            (2, 2): self.mu2_comp2_surface
+            (1, 1): self.mu_feat_comp1_surface,
+            (1, 2): self.mu_feat_comp2_surface,
+            (2, 1): self.mu_idf_comp1_surface,
+            (2, 2): self.mu_idf_comp2_surface
         }
         surface = surface_map[(dimension, component)]
 
@@ -184,8 +184,8 @@ class Surface:
 
     def get_bias_grid(self, dimension: int) -> jnp.ndarray:
         """Get bias grid for specified dimension."""
-        if dimension == 1: return self.mu1_bias_grid
-        if dimension == 2: return self.mu2_bias_grid
+        if dimension == 1: return self.mu_feat_bias_grid
+        if dimension == 2: return self.mu_idf_bias_grid
         raise ValueError(f"dimension must be 1 or 2, got {dimension}")
 
     def summary(self) -> str:
@@ -193,10 +193,10 @@ class Surface:
         return "\n".join([
             "Surface Summary:",
             f"  Feature difference: {len(self.feat_diff_grid)} points [{self.feat_diff_grid.min():.1f}, {self.feat_diff_grid.max():.1f}]",
-            f"  Mu1 bias: {len(self.mu1_bias_grid)} points [{self.mu1_bias_grid.min():.1f}, {self.mu1_bias_grid.max():.1f}]",
-            f"  Mu2 bias: {len(self.mu2_bias_grid)} points [{self.mu2_bias_grid.min():.1f}, {self.mu2_bias_grid.max():.1f}]",
-            f"  Mu1 surfaces: {self.mu1_comp1_surface.shape} each (comp1, comp2)",
-            f"  Mu2 surfaces: {self.mu2_comp1_surface.shape} each (comp1, comp2)"
+            f"  MuFeat bias: {len(self.mu_feat_bias_grid)} points [{self.mu_feat_bias_grid.min():.1f}, {self.mu_feat_bias_grid.max():.1f}]",
+            f"  MuIdf bias: {len(self.mu_idf_bias_grid)} points [{self.mu_idf_bias_grid.min():.1f}, {self.mu_idf_bias_grid.max():.1f}]",
+            f"  MuFeat surfaces: {self.mu_feat_comp1_surface.shape} each (comp1, comp2)",
+            f"  MuIdf surfaces: {self.mu_idf_comp1_surface.shape} each (comp1, comp2)"
         ])
 
 @dataclass
@@ -246,7 +246,7 @@ def _build_bundle_index(surfaces_dir: Path) -> Dict[str, Path]:
     """Map each bundled surface filename to the bundle that contains it.
 
     Uses the cheap per-bundle ``*.manifest.json`` files (``surface_ids`` are
-    ``"sf1|sf2|sp"``) so no ``.pkl.gz`` is decompressed during indexing.
+    ``"sf1|sf2|idf"``) so no ``.pkl.gz`` is decompressed during indexing.
     """
     index: Dict[str, Path] = {}
     for manifest_path in sorted(surfaces_dir.glob("surface_bundle_*.manifest.json")):
@@ -258,8 +258,8 @@ def _build_bundle_index(surfaces_dir: Path) -> Dict[str, Path]:
         bundle_path = manifest_path.with_name(
             manifest_path.name.removesuffix(".manifest.json") + ".pkl.gz")
         for surface_id in manifest.get("surface_ids", []):
-            sf1, sf2, sp = surface_id.split("|")
-            filename = f"averaged_sf1_{sf1}_sf2_{sf2}_sp_{sp}.pkl"
+            sf1, sf2, idf = surface_id.split("|")
+            filename = f"averaged_sf1_{sf1}_sf2_{sf2}_idf_{idf}.pkl"
             index.setdefault(filename, bundle_path)
     return index
 
@@ -302,25 +302,25 @@ def ensure_averaged_surface_file(surfaces_dir, filename: str) -> Path:
     return file_path
 
 
-def compute_single_bias_curve(log_surfaces: jnp.ndarray, target_feat_indices: jnp.ndarray, mu1_bias_grid: jnp.ndarray) -> jnp.ndarray:
+def compute_single_bias_curve(log_surfaces: jnp.ndarray, target_feat_indices: jnp.ndarray, mu_feat_bias_grid: jnp.ndarray) -> jnp.ndarray:
     """
     Compute bias curve from log probability surface for given feature indices.
     
     Args:
-        log_surfaces: Log probability surface with shape (n_mu1_bias, n_feat_diff)
+        log_surfaces: Log probability surface with shape (n_mu_feat_bias, n_feat_diff)
         target_feat_indices: Indices of feature difference values to compute bias for
-        mu1_bias_grid: Grid of mu1 bias values
+        mu_feat_bias_grid: Grid of mu_feat bias values
         
     Returns:
         Circular means (bias values) for the target feature indices
     """
     # Convert log probabilities to probabilities
-    mu1_prob_surface = jnp.exp(log_surfaces)
-    target_prob_profiles = mu1_prob_surface[:, target_feat_indices]
+    mu_feat_prob_surface = jnp.exp(log_surfaces)
+    target_prob_profiles = mu_feat_prob_surface[:, target_feat_indices]
 
     # Vectorized circular mean computation for all target indices
-    cos_vals = jnp.cos(jnp.radians(mu1_bias_grid)).reshape(-1, 1)
-    sin_vals = jnp.sin(jnp.radians(mu1_bias_grid)).reshape(-1, 1)
+    cos_vals = jnp.cos(jnp.radians(mu_feat_bias_grid)).reshape(-1, 1)
+    sin_vals = jnp.sin(jnp.radians(mu_feat_bias_grid)).reshape(-1, 1)
 
     # Periodic quadrature (sum x cell width): trapezoid over x=grid spans only
     # grid[-1]-grid[0] = 358 deg of the 360 deg period and half-weights the ends.
@@ -365,15 +365,15 @@ def gaussian_curve_smoother(curve: jnp.ndarray, smoothing_sigma: float) -> jnp.n
     return jnp.convolve(padded, kernel, mode='valid')
 
 
-def compute_single_density_asymmetry(log_surfaces: jnp.ndarray, target_feat_indices: jnp.ndarray, mu1_bias_grid: jnp.ndarray, 
+def compute_single_density_asymmetry(log_surfaces: jnp.ndarray, target_feat_indices: jnp.ndarray, mu_feat_bias_grid: jnp.ndarray,
                                    apply_smoothing: bool = True, smoothing_sigma: float = 5.0) -> jnp.ndarray:
     """
     Compute density asymmetry for a single log probability surface with optional Gaussian smoothing.
     
     Args:
-        log_surfaces: Log probability surface with shape (n_mu1_bias, n_feat_diff)
+        log_surfaces: Log probability surface with shape (n_mu_feat_bias, n_feat_diff)
         target_feat_indices: Indices of feature difference values to compute asymmetry for
-        mu1_bias_grid: Grid of mu1 bias values
+        mu_feat_bias_grid: Grid of mu_feat bias values
         apply_smoothing: Whether to apply Gaussian smoothing to the asymmetry curve
         smoothing_sigma: Standard deviation for Gaussian smoothing kernel
         
@@ -390,10 +390,10 @@ def compute_single_density_asymmetry(log_surfaces: jnp.ndarray, target_feat_indi
     # antipode (-180) are excluded from both masks: on a circle they are the two
     # sign-ambiguous angles.  Counting -180 as negative injects a spurious
     # asymmetry at exactly the row that carries mass for broad sd_feat.
-    positive_mask, negative_mask = sign_masks(mu1_bias_grid)
+    positive_mask, negative_mask = sign_masks(mu_feat_bias_grid)
 
     # Vectorized computation across all target indices with proper discretization
-    dx = mu1_cell_width()  # Periodic cell width for numerical integration
+    dx = mu_feat_cell_width()  # Periodic cell width for numerical integration
 
     # Use jnp.where instead of boolean indexing to avoid concreteness issues
     positive_probs = jnp.where(positive_mask[:, None], target_probs, 0.0)

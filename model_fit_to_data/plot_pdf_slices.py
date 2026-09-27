@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Plot PDF slices p(mu1_bias | feat_diff) comparing model predictions to empirical data.
+Plot PDF slices p(mu_feat_bias | feat_diff) comparing model predictions to empirical data.
 
 Rows = subjects (those with the clearest bias signal / dissociation selected automatically).
 Columns = feature difference values.

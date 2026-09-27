@@ -197,18 +197,18 @@ def search_bounds(domain) -> dict:
 
     Bounds travel with the loaded artifact so a search stays inside its training
     domain. Production WNM reaches 2.5 degrees on the feature SDs and 5 degrees
-    on spatial SD, because ``sd_spat`` is ``42/d'`` and d-prime was capped.
+    on identifiability SD, because ``sd_idf`` is ``42/d'`` and d-prime was capped.
 
     The two feature SDs share one interval: they are exchangeable, and a search
     that could reach a value for one but not the other would break that symmetry.
 
     Returns:
-        ``{"sd_feat": (low, high), "sd_spat": (low, high)}``.
+        ``{"sd_feat": (low, high), "sd_idf": (low, high)}``.
     """
     feat_low = max(domain["sd_feat1"][0], domain["sd_feat2"][0])
     feat_high = min(domain["sd_feat1"][1], domain["sd_feat2"][1])
     return {"sd_feat": (float(feat_low), float(feat_high)),
-            "sd_spat": (float(domain["sd_spat"][0]), float(domain["sd_spat"][1]))}
+            "sd_idf": (float(domain["sd_idf"][0]), float(domain["sd_idf"][1]))}
 
 
 @dataclass(frozen=True)

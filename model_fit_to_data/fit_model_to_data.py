@@ -499,7 +499,7 @@ def process_subject(
         method_results[method] = {'result': result, 'duration': duration}
         shared = result['shared_params']
         log(f"  {method} done in {duration:.1f}s - "
-            f"sd_spat={shared['sd_spat']:.1f}, sd_motor={shared['sd_motor']:.1f}", "green")
+            f"sd_idf={shared['sd_idf']:.1f}, sd_motor={shared['sd_motor']:.1f}", "green")
         if progress is not None and method_task is not None:
             progress.advance(method_task)
     if progress is not None and method_task is not None:
@@ -539,7 +539,7 @@ def process_subject(
             entry.update({
                 f'{method}_fitted_params': jnp.array([
                     cond_res['sd_feat1'], cond_res['sd_feat2'],
-                    shared['sd_spat'], shared['sd_motor'],
+                    shared['sd_idf'], shared['sd_motor'],
                 ]),
                 f'{method}_optimization_time': mdata['duration'],
                 f'{method}_stage_times': opt.get('stage_times', []),

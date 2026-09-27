@@ -46,5 +46,5 @@ operational security task, independent of the legacy surface pipeline.
   browser integration, parity work, or promotion analysis. WNM is the supported
   fitting backend; surface-NN training, fitting, and reproduction are retired.
 - Revival of the retired hard-binned `expectation` objective.
-- Joint `(mu1, mu2)` modelling. This remains unscheduled research, not migration
+- Joint `(mu_feat, mu_idf)` modelling. This remains unscheduled research, not migration
   work.

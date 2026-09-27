@@ -1,11 +1,11 @@
 """Load raw EM bias samples from an existing production sample corpus.
 
 ``$DEMIXING_ARTIFACT_ROOT/sim_samples_10k_100samples_circular_em_fullcov_free_weights``
-holds ~66k filenames on the 5-degree ``(sd_feat1, sd_feat2, sd_ident)`` grid
+holds ~66k filenames on the 5-degree ``(sd_feat1, sd_feat2, sd_idf)`` grid
 (5-200 in each dimension).  **Most of them are processed stubs, not raw
 samples:** once a combination has been reduced to a KDE surface the raw outcomes
 are dropped and the file is rewritten as a ~400-byte stub (a ``'stub'`` marker
-and empty ``mu1_samples``/``mu2_samples`` arrays).  Only ~2096 files (~6.5 MB
+and empty ``mu_feat_samples``/``mu_idf_samples`` arrays).  Only ~2096 files (~6.5 MB
 each, covering ~1605 of the 64000 grid triples plus their ``_r0``/``_r1`` mirror
 runs) still carry the raw per-simulation biases — 90 ``feat_diff`` rows x 10,000
 EM outcomes x 2 components — which are exactly what the WNM raw-sample training path consumes.
@@ -45,7 +45,7 @@ from shared.config import artifact_root, config
 DEFAULT_CORPUS = "sim_samples_10k_100samples_circular_em_fullcov_free_weights"
 
 _FILE_RE = re.compile(
-    r"samples_sf1_(?P<sf1>[\d.]+)_sf2_(?P<sf2>[\d.]+)_sp_(?P<sp>[\d.]+)"
+    r"samples_sf1_(?P<sf1>[\d.]+)_sf2_(?P<sf2>[\d.]+)_idf_(?P<idf>[\d.]+)"
     r"(?:_r(?P<run>\d))?_[a-f0-9]{8}\.pkl\.gz$"
 )
 
@@ -62,7 +62,7 @@ def corpus_dir(name: str = DEFAULT_CORPUS) -> Path:
 
 def list_files(directory: Path, min_bytes: int = USABLE_MIN_BYTES
                ) -> List[Tuple[Path, Tuple[float, float, float]]]:
-    """Return ``(path, (sd_feat1, sd_feat2, sd_ident))`` for every *usable* sample file.
+    """Return ``(path, (sd_feat1, sd_feat2, sd_idf))`` for every *usable* sample file.
 
     Files below ``min_bytes`` are dropped: in the production corpus the vast
     majority of entries are ~400-byte stubs whose raw samples were removed after
@@ -79,7 +79,7 @@ def list_files(directory: Path, min_bytes: int = USABLE_MIN_BYTES
             m = _FILE_RE.match(e.name)
             if m and e.stat().st_size >= min_bytes:
                 out.append((Path(e.path),
-                            (float(m['sf1']), float(m['sf2']), float(m['sp']))))
+                            (float(m['sf1']), float(m['sf2']), float(m['idf']))))
     return sorted(out, key=lambda t: t[1])
 
 
@@ -109,7 +109,7 @@ def load_file(path: Path, params: Tuple[float, float, float],
     """
     with gzip.open(path, 'rb') as f:
         data = pickle.load(f)
-    bias = np.asarray(data['mu1_samples'], dtype=np.float32)
+    bias = np.asarray(data['mu_feat_samples'], dtype=np.float32)
     if bias.ndim != 3 or bias.shape[0] == 0:
         raise ValueError(f"{path.name} holds no usable samples (shape {bias.shape})")
 
@@ -122,10 +122,10 @@ def load_file(path: Path, params: Tuple[float, float, float],
             bias.shape[1], size=max_sims, replace=False)
         bias = bias[:, idx]
 
-    sf1, sf2, sp = params
+    sf1, sf2, idf = params
     design = np.column_stack([
         np.full(fd.shape, sf1), np.full(fd.shape, sf2),
-        np.full(fd.shape, sp), fd,
+        np.full(fd.shape, idf), fd,
     ]).astype(np.float32)
     return design, bias
 
@@ -140,7 +140,7 @@ def load_corpus(directory: Path, n_files: Optional[int] = None,
     are deliberately modest; raise ``max_sims`` toward 10,000 once the pipeline
     is known to work.
 
-    ``exclude_params`` drops whole ``(sd_feat1, sd_feat2, sd_ident)`` triples —
+    ``exclude_params`` drops whole ``(sd_feat1, sd_feat2, sd_idf)`` triples —
     use it to hold out grid points for validation.
     """
     files = list_files(directory)

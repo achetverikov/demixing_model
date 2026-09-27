@@ -213,13 +213,13 @@ def test_sidecar_round_trips_payload_and_digest(run_files):
 
 
 
-def test_payload_records_the_live_mu1_grid_size(run_files):
+def test_payload_records_the_live_mu_feat_grid_size(run_files):
     """Ties a run to the circularity fix: the half-open 180-point axis and the
     pre-fix 181-point one must not share a digest."""
     data, checkpoint, _ = run_files
     from shared.config import config
 
-    assert make_payload(data, checkpoint)["mu1_grid_size"] == config.mu1_bias_grid_size
+    assert make_payload(data, checkpoint)["mu_feat_grid_size"] == config.mu_feat_bias_grid_size
 
 
 # ---------------------------------------------------------------------------

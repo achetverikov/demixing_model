@@ -39,7 +39,7 @@ mkdir -p "$OUT"
   --pdf-slices
 
 cat > "$PARAMS" <<'EOF'
-sd_feat1,sd_feat2,sd_spat
+sd_feat1,sd_feat2,sd_idf
 10,30,20
 EOF
 

@@ -97,7 +97,7 @@ class AnalyticConditional:
         self.sd_motor = 0.0
 
     def cell_probabilities(self, params, edges=None, validate=True, sd_motor=None):
-        # params rows are [sd_feat1, sd_feat2, sd_spat, feat_diff]; only the
+        # params rows are [sd_feat1, sd_feat2, sd_idf, feat_diff]; only the
         # coordinate is used, so the score is a pure function of the design.
         return jnp.asarray(
             _cell_mass(np.asarray(params)[:, 3], self.sd, self.amplitude))

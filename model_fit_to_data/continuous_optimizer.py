@@ -297,7 +297,7 @@ def minimize_continuous(objective: Callable, bounds: Sequence[tuple],
 def condition_parameter_layout(n_conditions: int, fit_motor: bool) -> tuple:
     """Names of the searched parameters, in order.
 
-    Two feature SDs per condition, one shared spatial SD, and one shared motor SD
+    Two feature SDs per condition, one shared identifiability SD, and one shared motor SD
     when it is free. A fixed zero motor SD is the separate no-motor case, not a
     log parameter with a bound at zero -- log space has no zero.
     """
@@ -306,24 +306,24 @@ def condition_parameter_layout(n_conditions: int, fit_motor: bool) -> tuple:
     names = []
     for index in range(n_conditions):
         names.extend([f"sd_feat1_c{index}", f"sd_feat2_c{index}"])
-    names.append("sd_spat")
+    names.append("sd_idf")
     if fit_motor:
         names.append("sd_motor")
     return tuple(names)
 
 
-def build_bounds(n_conditions: int, sd_feat_bounds: tuple, sd_spat_bounds: tuple,
+def build_bounds(n_conditions: int, sd_feat_bounds: tuple, sd_idf_bounds: tuple,
                  motor_bounds: Optional[tuple] = None) -> np.ndarray:
     """Bounds matching :func:`condition_parameter_layout`.
 
-    ``sd_feat_bounds`` and ``sd_spat_bounds`` come from the surrogate, via
+    ``sd_feat_bounds`` and ``sd_idf_bounds`` come from the surrogate, via
     ``shared.surrogate.search_bounds``, so the search stays inside the loaded
     artifact's domain.
     """
     bounds = []
     for _ in range(n_conditions):
         bounds.extend([sd_feat_bounds, sd_feat_bounds])
-    bounds.append(sd_spat_bounds)
+    bounds.append(sd_idf_bounds)
     if motor_bounds is not None:
         bounds.append(motor_bounds)
     return np.asarray(bounds, dtype=np.float64)

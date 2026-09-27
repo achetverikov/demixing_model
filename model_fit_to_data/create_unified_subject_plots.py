@@ -40,7 +40,7 @@ from model_fit_to_data.result_identity import (
 )
 from shared import surrogate
 from shared.config import config
-from shared.mu1_axis import mu1_cell_width, periodic_integral, sign_masks
+from shared.mu_feat_axis import mu_feat_cell_width, periodic_integral, sign_masks
 from shared.prediction import (mixture_plot_curves, pooled_bias_weighted_crps,
                                predictor_from_surrogate)
 from shared import seed_manager
@@ -207,29 +207,29 @@ def compute_predicted_sd_curves_batch(log_surfaces_batch, feat_vals):
     half-weighted the endpoint bins and spanned 358° of the 360° period, and the
     missing division then biased the model SD upward).
     """
-    mu1_bias_grid = config.create_grid('mu1_bias')
-    n_surfaces, n_mu1_bias, n_feat_diff = log_surfaces_batch.shape
+    mu_feat_bias_grid = config.create_grid('mu_feat_bias')
+    n_surfaces, n_mu_feat_bias, n_feat_diff = log_surfaces_batch.shape
     n_feat_vals = len(feat_vals)
 
     # Convert to probability space
-    prob_surfaces = jnp.exp(log_surfaces_batch)  # Shape: (n_surfaces, n_mu1_bias, n_feat_diff)
+    prob_surfaces = jnp.exp(log_surfaces_batch)  # Shape: (n_surfaces, n_mu_feat_bias, n_feat_diff)
 
     # Vectorized feature index mapping
     feat_indices = jnp.round((jnp.array(feat_vals) - config.feat_diff_range[0]) / config.feat_diff_step).astype(int)
     feat_indices = jnp.clip(feat_indices, 0, n_feat_diff - 1)
 
     # Extract probability profiles for all surfaces and feature values at once
-    # Shape: (n_surfaces, n_mu1_bias, n_feat_vals)
+    # Shape: (n_surfaces, n_mu_feat_bias, n_feat_vals)
     prob_profiles = prob_surfaces[:, :, feat_indices]
 
     # Precompute angular components
-    angles_rad = jnp.radians(mu1_bias_grid)  # Shape: (n_mu1_bias,)
-    cos_angles = jnp.cos(angles_rad)  # Shape: (n_mu1_bias,)
-    sin_angles = jnp.sin(angles_rad)  # Shape: (n_mu1_bias,)
+    angles_rad = jnp.radians(mu_feat_bias_grid)  # Shape: (n_mu_feat_bias,)
+    cos_angles = jnp.cos(angles_rad)  # Shape: (n_mu_feat_bias,)
+    sin_angles = jnp.sin(angles_rad)  # Shape: (n_mu_feat_bias,)
 
     # Vectorized circular SD computation for all surfaces and feature values.
-    # prob_profiles: (n_surfaces, n_mu1_bias, n_feat_vals)
-    # cos_angles: (n_mu1_bias,) -> broadcast to (1, n_mu1_bias, 1)
+    # prob_profiles: (n_surfaces, n_mu_feat_bias, n_feat_vals)
+    # cos_angles: (n_mu_feat_bias,) -> broadcast to (1, n_mu_feat_bias, 1)
     mass = periodic_integral(prob_profiles, axis=1)
     mean_cos = periodic_integral(prob_profiles * cos_angles[None, :, None], axis=1)
     mean_sin = periodic_integral(prob_profiles * sin_angles[None, :, None], axis=1)
@@ -261,7 +261,7 @@ def compute_predicted_sd_curves_batch_pooled(log_surfaces_batch, bin_weights_bat
     and is covered by ``tests/test_prediction_contract.py``.
 
     Args:
-        log_surfaces_batch: (n_surfaces, n_mu1_bias, n_feat_diff) log densities.
+        log_surfaces_batch: (n_surfaces, n_mu_feat_bias, n_feat_diff) log densities.
         bin_weights_batch: (n_surfaces, n_bins, n_feat_vals) mixture weights,
             rows summing to 1 (or 0 for bins with no trials → NaN output).
 
@@ -591,7 +591,7 @@ def prepare_all_subjects_data(
         all_asymm_curves = bundle["asymmetry"]
         all_predicted_sd = bundle["sd"]
         all_predicted_sd_pooled = bundle["pooled_sd"]
-        bias_grid = np.asarray(config.create_grid("mu1_bias"))
+        bias_grid = np.asarray(config.create_grid("mu_feat_bias"))
         difference = np.abs(bias_grid[:, None] - bias_grid[None, :])
         distance_matrix = np.minimum(difference, 360.0 - difference)
 
@@ -929,7 +929,7 @@ def create_unified_subject_plot(
                         color='black', linestyle=':', linewidth=2, alpha=0.9, label='Data (smoothed)')
 
             ax1.set_xlabel('Feature Difference (°)')
-            ax1.set_ylabel('Mu1 Bias (degrees)')
+            ax1.set_ylabel('MuFeat Bias (degrees)')
             ax1.set_title(f'{noise_cond}')
             ax1.grid(True, alpha=0.3)
 
@@ -1304,7 +1304,7 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
                          'k--', linewidth=2, alpha=0.8, label='Data (smoothed)')
 
             ax1.set_xlabel('Feature Difference (°)')
-            ax1.set_ylabel('Mu1 Bias (degrees)')
+            ax1.set_ylabel('MuFeat Bias (degrees)')
             ax1.set_title(f'{noise_cond}')
             ax1.legend()
             ax1.grid(True)
@@ -1400,18 +1400,18 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
     return None
 
 
-def _model_slice(log_surf: np.ndarray, feat_grid: np.ndarray, mu1_grid: np.ndarray,
+def _model_slice(log_surf: np.ndarray, feat_grid: np.ndarray, mu_feat_grid: np.ndarray,
                  target_fd: float, weights_sd: float):
     """Return (prob, E, asym) for one Gaussian-weighted model surface slice."""
     w = np.exp(-0.5 * ((feat_grid - target_fd) / weights_sd) ** 2)
     w /= w.sum()
     surf = np.exp(log_surf - log_surf.max(axis=0, keepdims=True))
-    dx = mu1_cell_width()
+    dx = mu_feat_cell_width()
     surf /= surf.sum(axis=0, keepdims=True) * dx
     prob = surf @ w
-    E    = float(np.sum(mu1_grid * prob) * dx)
+    E    = float(np.sum(mu_feat_grid * prob) * dx)
     # Signed split excludes both 0 and the antipode (-180) — see sign_masks.
-    pos_mask, neg_mask = (np.asarray(m) for m in sign_masks(mu1_grid))
+    pos_mask, neg_mask = (np.asarray(m) for m in sign_masks(mu_feat_grid))
     asym = float(np.sum(prob[pos_mask]) * dx - np.sum(prob[neg_mask]) * dx)
     return prob, E, asym
 
@@ -1445,7 +1445,7 @@ def _empirical_slice(fd_vals: np.ndarray, bias_vals: np.ndarray,
     return (kernels * w[None, :]).sum(axis=1)
 
 
-def _plot_log_surface(prediction_backend, params, feat_grid, mu1_grid):
+def _plot_log_surface(prediction_backend, params, feat_grid, mu_feat_grid):
     """Display-grid WNM density with fitted motor noise."""
     params = np.asarray(params, dtype=float)
     sd_motor = float(params[3]) if len(params) >= 4 else 0.0
@@ -1457,7 +1457,7 @@ def _plot_log_surface(prediction_backend, params, feat_grid, mu1_grid):
         feat,
     ])
     return np.asarray(prediction_backend.grid_log_density(
-        rows, grid=jnp.asarray(mu1_grid), sd_motor=sd_motor)).T
+        rows, grid=jnp.asarray(mu_feat_grid), sd_motor=sd_motor)).T
 
 def create_pdf_slice_plots(
     extended_results: Dict,
@@ -1469,7 +1469,7 @@ def create_pdf_slice_plots(
     feat_diffs_data: Optional[List[float]] = None,
     weights_sd_model: float = 20.0,
 ) -> None:
-    """For each experiment × condition × fitting method, plot p(mu1_bias | feat_diff) slices.
+    """For each experiment × condition × fitting method, plot p(mu_feat_bias | feat_diff) slices.
 
     Rows = subjects, columns = feat_diff values.  Selects subjects that show a
     bias/asymmetry dissociation first; falls back to the first n_subjects.
@@ -1480,7 +1480,7 @@ def create_pdf_slice_plots(
     plots_dir.mkdir(exist_ok=True, parents=True)
 
     angle_display_scale = _angle_display_scale(circ_space)
-    mu1_grid  = np.array(config.create_grid('mu1_bias'))
+    mu_feat_grid  = np.array(config.create_grid('mu_feat_bias'))
     feat_grid = np.array(config.create_grid('feat_diff'))  # model space
     bias_limit_data = circ_space / 2
     bias_plot_grid = np.linspace(-bias_limit_data, bias_limit_data, 361)
@@ -1527,9 +1527,9 @@ def create_pdf_slice_plots(
             for subject_id, result in subject_list:
                 params = np.array(result[f'{optimizer_name}_fitted_params'])
                 log_surf = _plot_log_surface(
-                    prediction_backend, params, feat_grid, mu1_grid)
+                    prediction_backend, params, feat_grid, mu_feat_grid)
                 fd0 = feat_diffs_model[0]
-                _, E0, asym0 = _model_slice(log_surf, feat_grid, mu1_grid, fd0, weights_sd_model)
+                _, E0, asym0 = _model_slice(log_surf, feat_grid, mu_feat_grid, fd0, weights_sd_model)
                 dissoc = int((E0 < 0 and asym0 > 0) or (E0 > 0 and asym0 < 0))
                 scored.append((dissoc, abs(E0), subject_id, result, log_surf, params))
 
@@ -1552,7 +1552,7 @@ def create_pdf_slice_plots(
 
                 for col, (fd_data, fd_model) in enumerate(zip(feat_diffs_data, feat_diffs_model)):
                     ax = axes[row, col]
-                    prob, E, asym = _model_slice(log_surf, feat_grid, mu1_grid,
+                    prob, E, asym = _model_slice(log_surf, feat_grid, mu_feat_grid,
                                                  fd_model, weights_sd_model)
                     emp = _empirical_slice(
                         fd_vals, bias_vals, fd_model, bias_plot_grid_model,
@@ -1560,12 +1560,12 @@ def create_pdf_slice_plots(
                     prob_display = prob / angle_display_scale
                     E_display = E * angle_display_scale
 
-                    ax.fill_between(mu1_grid * angle_display_scale, prob_display, alpha=0.55, color='#6baed6')
-                    ax.plot(mu1_grid * angle_display_scale, prob_display, color='#2171b5', lw=1.2)
-                    shade_pos, shade_neg = (np.asarray(m) for m in sign_masks(mu1_grid))
-                    ax.fill_between(mu1_grid * angle_display_scale, prob_display, where=shade_pos,
+                    ax.fill_between(mu_feat_grid * angle_display_scale, prob_display, alpha=0.55, color='#6baed6')
+                    ax.plot(mu_feat_grid * angle_display_scale, prob_display, color='#2171b5', lw=1.2)
+                    shade_pos, shade_neg = (np.asarray(m) for m in sign_masks(mu_feat_grid))
+                    ax.fill_between(mu_feat_grid * angle_display_scale, prob_display, where=shade_pos,
                                     alpha=0.35, color='forestgreen')
-                    ax.fill_between(mu1_grid * angle_display_scale, prob_display, where=shade_neg,
+                    ax.fill_between(mu_feat_grid * angle_display_scale, prob_display, where=shade_neg,
                                     alpha=0.35, color='tomato')
 
                     ax.plot(bias_plot_grid, emp / angle_display_scale, color='darkorange', lw=1.5, alpha=0.85,
@@ -1575,7 +1575,7 @@ def create_pdf_slice_plots(
                     ax.axvline(0, color='gray',  lw=0.8, ls=':')
                     ax.set_xlim(-bias_limit_data, bias_limit_data)
                     ax.tick_params(labelsize=8)
-                    ax.set_xlabel('mu1 bias (°)', fontsize=9)
+                    ax.set_xlabel('mu_feat bias (°)', fontsize=9)
 
                     dissoc_here = (E < 0 and asym > 0) or (E > 0 and asym < 0)
                     sign  = '+' if asym >= 0 else ''
@@ -1589,7 +1589,7 @@ def create_pdf_slice_plots(
                         ax.set_ylabel('Density', fontsize=9)
                         p = params
                         lbl = (f"Subj {subject_id}\n"
-                               f"f1={p[0]:.0f} f2={p[1]:.0f} sp={p[2]:.0f}")
+                               f"f1={p[0]:.0f} f2={p[1]:.0f} idf={p[2]:.0f}")
                         ax.annotate(lbl, xy=(-0.42, 0.5), xycoords='axes fraction',
                                     fontsize=8, ha='center', va='center', rotation=90,
                                     annotation_clip=False)

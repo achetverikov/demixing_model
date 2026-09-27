@@ -34,7 +34,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from shared.config import config
-from shared.mu1_axis import bin_indices, mu1_grid
+from shared.mu_feat_axis import bin_indices, mu_feat_grid
 
 #: Methods this module can score. The public command writes all of them.
 SUPPORTED_METHODS = ("likelihood", "expectation", "smoothed_exp", "density",
@@ -45,16 +45,16 @@ SUPPORTED_METHODS = ("likelihood", "expectation", "smoothed_exp", "density",
 MEAN_ONLY_METHODS = ("expectation", "smoothed_exp")
 
 
-def condition_rows(sd_feat1, sd_feat2, sd_spat, feat_diff_values) -> jnp.ndarray:
+def condition_rows(sd_feat1, sd_feat2, sd_idf, feat_diff_values) -> jnp.ndarray:
     """Parameter rows for one condition, one per requested feature difference.
 
-    The surrogate takes ``[sd_feat1, sd_feat2, sd_spat, feat_diff]`` per row, so a
+    The surrogate takes ``[sd_feat1, sd_feat2, sd_idf, feat_diff]`` per row, so a
     condition's curve is a batch that varies only in its last column.
     """
     feat = jnp.asarray(feat_diff_values, dtype=jnp.float32)
     return jnp.stack([jnp.broadcast_to(jnp.asarray(sd_feat1, jnp.float32), feat.shape),
                       jnp.broadcast_to(jnp.asarray(sd_feat2, jnp.float32), feat.shape),
-                      jnp.broadcast_to(jnp.asarray(sd_spat, jnp.float32), feat.shape),
+                      jnp.broadcast_to(jnp.asarray(sd_idf, jnp.float32), feat.shape),
                       feat], axis=-1)
 
 
@@ -70,7 +70,7 @@ def _smoothing_sigma(emp_density_weights_sd, density_smoothing_sigma):
     return float(emp_density_weights_sd) / config.feat_diff_step
 
 
-def predicted_asymmetry_curve(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid,
+def predicted_asymmetry_curve(predictor, sd_feat1, sd_feat2, sd_idf, feat_diff_grid,
                               emp_density_weights_sd, density_smoothing_sigma=None,
                               sd_motor=None):
     """Fitting-smoothed analytic signed-arc asymmetry over the feature grid.
@@ -81,17 +81,17 @@ def predicted_asymmetry_curve(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_
     feature grid, which is what the layout rules actually constrain, is a fixed
     constant and can be checked before any fitting begins.
     """
-    rows = condition_rows(sd_feat1, sd_feat2, sd_spat, feat_diff_grid)
+    rows = condition_rows(sd_feat1, sd_feat2, sd_idf, feat_diff_grid)
     return predictor.smoothed_asymmetry_curve(
         rows, _smoothing_sigma(emp_density_weights_sd, density_smoothing_sigma),
         validate=False, sd_motor=sd_motor)
 
 
-def predicted_matched_density_curve(predictor, sd_feat1, sd_feat2, sd_spat,
+def predicted_matched_density_curve(predictor, sd_feat1, sd_feat2, sd_idf,
                                     feat_diff_grid, feature_operator,
                                     density_bandwidth, sd_motor=None):
     """Signed mass after the empirical KDE and observed-design operators."""
-    rows = condition_rows(sd_feat1, sd_feat2, sd_spat, feat_diff_grid)
+    rows = condition_rows(sd_feat1, sd_feat2, sd_idf, feat_diff_grid)
     effective_motor = predictor.sd_motor if sd_motor is None else sd_motor
     smoothing_sd = jnp.hypot(jnp.asarray(effective_motor), density_bandwidth)
     raw = predictor.signed_arc_asymmetry(
@@ -99,10 +99,10 @@ def predicted_matched_density_curve(predictor, sd_feat1, sd_feat2, sd_spat,
     return feature_operator @ raw
 
 
-def predicted_matched_mean_bias(predictor, sd_feat1, sd_feat2, sd_spat,
+def predicted_matched_mean_bias(predictor, sd_feat1, sd_feat2, sd_idf,
                                 feat_diff_grid, feature_operator, sd_motor=None):
     """Circular mean after pooling model first moments on the observed design."""
-    rows = condition_rows(sd_feat1, sd_feat2, sd_spat, feat_diff_grid)
+    rows = condition_rows(sd_feat1, sd_feat2, sd_idf, feat_diff_grid)
     mean, resultant = predictor.mean_and_resultant(
         rows, validate=False, sd_motor=sd_motor)
     radians = jnp.radians(mean)
@@ -124,11 +124,11 @@ def packed_curve_loss(method, predictor, parameters, coordinates, condition_inde
     if method not in ("density", "smoothed_exp"):
         raise ValueError(f"packed curve loss does not implement {method!r}")
     n_conditions = feature_operator.shape[0]
-    shared_spatial = parameters[2 * n_conditions]
+    shared_idf = parameters[2 * n_conditions]
     rows = jnp.column_stack((
         parameters[2 * condition_index],
         parameters[2 * condition_index + 1],
-        jnp.full_like(coordinates, shared_spatial),
+        jnp.full_like(coordinates, shared_idf),
         coordinates,
     ))
     fitted_motor = parameters[2 * n_conditions + 1] if fit_motor else None
@@ -169,7 +169,7 @@ def validate_feature_grid(feat_diff_grid, predictor=None):
                         name="feature grid against the surrogate domain")
 
 
-def predicted_mean_bias(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_values,
+def predicted_mean_bias(predictor, sd_feat1, sd_feat2, sd_idf, feat_diff_values,
                         sd_motor=None):
     """Analytic circular mean bias, in model degrees, at the requested features.
 
@@ -177,7 +177,7 @@ def predicted_mean_bias(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_values
     whose components straddle the wrap would give a mean that depends on where
     the grid was cut.
     """
-    rows = condition_rows(sd_feat1, sd_feat2, sd_spat, feat_diff_values)
+    rows = condition_rows(sd_feat1, sd_feat2, sd_idf, feat_diff_values)
     mean, _ = predictor.mean_and_resultant(rows, validate=False, sd_motor=sd_motor)
     return mean
 
@@ -196,7 +196,7 @@ def prediction_coordinates(targets, feat_diff_grid):
             if targets.feature_coordinate_mode == "exact" else feat_diff_grid)
 
 
-def predicted_cell_probabilities(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid,
+def predicted_cell_probabilities(predictor, sd_feat1, sd_feat2, sd_idf, feat_diff_grid,
                                  sd_motor=None):
     """``(n_bias, n_feat)`` integrated cell mass, the layout the CRPS code wants.
 
@@ -204,13 +204,13 @@ def predicted_cell_probabilities(predictor, sd_feat1, sd_feat2, sd_spat, feat_di
     degree, well inside a 2-degree reporting cell, so a narrow component's mass
     read off the grid depends on where its peak fell within the cell.
     """
-    rows = condition_rows(sd_feat1, sd_feat2, sd_spat, feat_diff_grid)
+    rows = condition_rows(sd_feat1, sd_feat2, sd_idf, feat_diff_grid)
     probabilities = predictor.cell_probabilities(rows, validate=False,
                                                  sd_motor=sd_motor)  # (n_feat, n_bias)
     return probabilities.T
 
 
-def pooled_cell_probabilities(predictor, sd_feat1, sd_feat2, sd_spat, coordinates,
+def pooled_cell_probabilities(predictor, sd_feat1, sd_feat2, sd_idf, coordinates,
                               feature_operator, sd_motor=None):
     """``(n_bias, n_feat)`` cell mass after the observed-design pooling operator.
 
@@ -226,11 +226,11 @@ def pooled_cell_probabilities(predictor, sd_feat1, sd_feat2, sd_spat, coordinate
     coordinates they index cannot contribute.
     """
     probabilities = predicted_cell_probabilities(
-        predictor, sd_feat1, sd_feat2, sd_spat, coordinates, sd_motor=sd_motor)
+        predictor, sd_feat1, sd_feat2, sd_idf, coordinates, sd_motor=sd_motor)
     return probabilities @ feature_operator.T
 
 
-def trial_log_density(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff, bias,
+def trial_log_density(predictor, sd_feat1, sd_feat2, sd_idf, feat_diff, bias,
                       sd_motor=None):
     """Log density at each trial's own bias and feature difference.
 
@@ -240,14 +240,14 @@ def trial_log_density(predictor, sd_feat1, sd_feat2, sd_spat, feat_diff, bias,
     """
     rows = jnp.stack([jnp.broadcast_to(jnp.asarray(sd_feat1, jnp.float32), jnp.asarray(feat_diff).shape),
                       jnp.broadcast_to(jnp.asarray(sd_feat2, jnp.float32), jnp.asarray(feat_diff).shape),
-                      jnp.broadcast_to(jnp.asarray(sd_spat, jnp.float32), jnp.asarray(feat_diff).shape),
+                      jnp.broadcast_to(jnp.asarray(sd_idf, jnp.float32), jnp.asarray(feat_diff).shape),
                       jnp.asarray(feat_diff, jnp.float32)], axis=-1)
     return predictor.log_density(rows, jnp.asarray(bias, jnp.float32), validate=False,
                                  sd_motor=sd_motor)
 
 
 def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_feat2,
-                    sd_spat, *, curve_losses, ccc_or_combined_kwargs, energy_score,
+                    sd_idf, *, curve_losses, ccc_or_combined_kwargs, energy_score,
                     d_circ_matrix, feat_diff_grid, emp_density_weights_sd,
                     density_smoothing_sigma=None, trials: Optional[tuple] = None,
                     sd_motor=None):
@@ -258,7 +258,7 @@ def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_fe
         predictor: a ``WrappedMixturePredictor``, motor noise already applied.
         targets: the :class:`fitting_targets.FittingTargets` for this subject.
         condition_index: which row of those targets to score against.
-        sd_feat1, sd_feat2, sd_spat: this condition's parameters, in model degrees.
+        sd_feat1, sd_feat2, sd_idf: this condition's parameters, in model degrees.
         curve_losses: ``_compute_curve_losses`` from the optimizer, injected so
             both families share one implementation of every curve loss.
         ccc_or_combined_kwargs: extra keyword arguments for the legacy density
@@ -297,14 +297,14 @@ def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_fe
                 "scoped to the density objectives -- likelihood and CRPS are unaffected.")
         if is_matched:
             predicted = predicted_matched_density_curve(
-                predictor, sd_feat1, sd_feat2, sd_spat,
+                predictor, sd_feat1, sd_feat2, sd_idf,
                 prediction_coordinates(targets, feat_diff_grid),
                 targets.feature_operator[condition_index],
                 targets.density_bandwidth[condition_index], sd_motor=sd_motor)
             target = targets.matched_density_target[condition_index]
         else:
             predicted = predicted_asymmetry_curve(
-                predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid,
+                predictor, sd_feat1, sd_feat2, sd_idf, feat_diff_grid,
                 emp_density_weights_sd, density_smoothing_sigma, sd_motor=sd_motor)
             target = targets.target_density[condition_index]
         loss_type = "ccc" if is_matched else "combined"
@@ -314,7 +314,7 @@ def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_fe
 
     if method == "expectation":
         feat_values = feat_diff_grid[targets.feat_indices]
-        predicted = predicted_mean_bias(predictor, sd_feat1, sd_feat2, sd_spat, feat_values,
+        predicted = predicted_mean_bias(predictor, sd_feat1, sd_feat2, sd_idf, feat_values,
                                         sd_motor=sd_motor)
         return curve_losses(predicted[None, :],
                             targets.target_bias[condition_index][None, :],
@@ -323,7 +323,7 @@ def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_fe
 
     if method == "smoothed_exp":
         predicted = predicted_matched_mean_bias(
-            predictor, sd_feat1, sd_feat2, sd_spat,
+            predictor, sd_feat1, sd_feat2, sd_idf,
             prediction_coordinates(targets, feat_diff_grid),
             targets.feature_operator[condition_index], sd_motor=sd_motor)
         return curve_losses(predicted[None, :],
@@ -337,7 +337,7 @@ def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_fe
         # by the same operator before it reaches the energy score. The per-trial
         # ``crps`` branch below deliberately keeps the unpooled conditional.
         probabilities = pooled_cell_probabilities(
-            predictor, sd_feat1, sd_feat2, sd_spat,
+            predictor, sd_feat1, sd_feat2, sd_idf,
             prediction_coordinates(targets, feat_diff_grid),
             targets.feature_operator[condition_index], sd_motor=sd_motor)
         weights = (targets.fd_weights if method == "balanced_crps"
@@ -355,13 +355,13 @@ def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_fe
     feat_diff, bias = trials
 
     if method == "likelihood":
-        return -jnp.sum(trial_log_density(predictor, sd_feat1, sd_feat2, sd_spat,
+        return -jnp.sum(trial_log_density(predictor, sd_feat1, sd_feat2, sd_idf,
                                           feat_diff, bias, sd_motor=sd_motor))
 
     # crps: energy score at each trial's own (bias cell, feature) location, with
     # the grid indexing the surface backend uses, so only the probabilities differ.
     probabilities = predicted_cell_probabilities(
-        predictor, sd_feat1, sd_feat2, sd_spat, feat_diff_grid,
+        predictor, sd_feat1, sd_feat2, sd_idf, feat_diff_grid,
         sd_motor=sd_motor)                                                # (n_bias, n_feat)
     cross = d_circ_matrix @ probabilities                                 # (n_bias, n_feat)
     second = jnp.sum(probabilities * cross, axis=0)                       # (n_feat,)
@@ -386,14 +386,14 @@ def score_all_conditions(method, predictor, targets, parameters, *, curve_losses
     objective means, and is not part of this transition.
 
     Args:
-        parameters: ``[sd_feat1_c0, sd_feat2_c0, ..., sd_spat]`` as laid out by
+        parameters: ``[sd_feat1_c0, sd_feat2_c0, ..., sd_idf]`` as laid out by
             ``continuous_optimizer.condition_parameter_layout``. Motor noise is
             carried by ``predictor``, not by this vector.
     """
     n_conditions = len(targets.condition_names)
     parameters = jnp.asarray(parameters)
     # One trailing entry when the motor SD is searched. It is a shared parameter
-    # like sd_spat, and it is traced, so it reaches the scorers as a value rather
+    # like sd_idf, and it is traced, so it reaches the scorers as a value rather
     # than through a predictor rebuilt per evaluation.
     expected = 2 * n_conditions + 1 + int(bool(fit_motor))
     # Exact, not "at least". A vector laid out with a trailing sd_motor would
@@ -403,7 +403,7 @@ def score_all_conditions(method, predictor, targets, parameters, *, curve_losses
     if parameters.shape[0] != expected:
         raise ValueError(
             f"expected exactly {expected} parameters for {n_conditions} conditions (two "
-            f"feature SDs each plus a shared spatial SD"
+            f"feature SDs each plus a shared identifiability SD"
             + (", plus a shared motor SD" if fit_motor else "")
             + f"), got {parameters.shape[0]}."
             + ("" if fit_motor else " Motor noise is carried by the predictor unless "
@@ -413,7 +413,7 @@ def score_all_conditions(method, predictor, targets, parameters, *, curve_losses
             f"{len(condition_trials)} trial arrays for {n_conditions} conditions. The "
             "sequence is positional and is paired with the targets by index, so a length "
             "mismatch means some condition is being fitted to another's observations.")
-    sd_spat = parameters[2 * n_conditions]
+    sd_idf = parameters[2 * n_conditions]
     sd_motor = parameters[2 * n_conditions + 1] if fit_motor else None
 
     total = 0.0
@@ -421,7 +421,7 @@ def score_all_conditions(method, predictor, targets, parameters, *, curve_losses
         trials = None if condition_trials is None else condition_trials[index]
         total = total + score_condition(
             method, predictor, targets, index,
-            parameters[2 * index], parameters[2 * index + 1], sd_spat,
+            parameters[2 * index], parameters[2 * index + 1], sd_idf,
             curve_losses=curve_losses,
             ccc_or_combined_kwargs={"corr_weight": corr_weight},
             energy_score=energy_score, d_circ_matrix=d_circ_matrix,
@@ -440,7 +440,7 @@ def evaluate_condition_losses(predictor, targets, params_by_condition, methods, 
 
     The mixture's counterpart to ``fit_model_to_data.evaluate_parameter_losses``,
     with the same semantics: one row of ``params_by_condition`` per condition, in
-    the targets' order, as ``[sd_feat1, sd_feat2, sd_spat]`` with an optional
+    the targets' order, as ``[sd_feat1, sd_feat2, sd_idf]`` with an optional
     fourth ``sd_motor``. Motor noise is applied per condition from that column,
     exactly as the surface version convolves each surface with its own kernel.
 
@@ -465,7 +465,7 @@ def evaluate_condition_losses(predictor, targets, params_by_condition, methods, 
             f"{tuple(params_by_condition.shape)} for {n_conditions} conditions")
     if params_by_condition.shape[1] not in (3, 4):
         raise ValueError(
-            f"expected 3 or 4 columns [sd_feat1, sd_feat2, sd_spat, (sd_motor)], got "
+            f"expected 3 or 4 columns [sd_feat1, sd_feat2, sd_idf, (sd_motor)], got "
             f"{params_by_condition.shape[1]}")
     if condition_trials is not None and len(condition_trials) != n_conditions:
         raise ValueError(

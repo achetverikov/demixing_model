@@ -4,9 +4,8 @@ These designs are deliberately not restricted to the historical 5/10-degree
 surface grid because the WNM surrogate is trained to accept continuous parameter
 values.
 
-The training/design metadata keeps the historical name ``sd_ident`` for the
-third SD coordinate. It is the same quantity exposed as ``sd_spat`` by the
-runtime/fitting API.
+Training designs and the runtime fitting API call the third SD coordinate
+``sd_idf``: noise along the identifiability dimension.
 """
 
 from __future__ import annotations
@@ -20,24 +19,24 @@ from scipy.stats import qmc
 SD_BOUNDS = (5.0, 200.0)
 FEAT_DIFF_BOUNDS = (2.0, 180.0)
 
-PARAM_NAMES = ('sd_feat1', 'sd_feat2', 'sd_ident', 'feat_diff')
+PARAM_NAMES = ('sd_feat1', 'sd_feat2', 'sd_idf', 'feat_diff')
 
 #: Fixed separation passed to the production simulator.  Keep this distinct
 #: from the historical 40-degree convention used to label the UEV figures.
-SIM_SPAT_DIFF = 42.0
+SIM_IDF_DIFF = 42.0
 
 # Grid used by the unequal-encoding-variability figures.  Only canonical
 # ``sd_feat1 <= sd_feat2`` pairs are simulated because each run already returns
 # both component biases.
 UEV_SD_FEAT = (10.0, 20.0, 30.0, 60.0)
-UEV_SPAT_DPRIME = (0.5, 1.0, 2.0)
-UEV_SPAT_DIFF = 40.0
+UEV_IDF_DPRIME = (0.5, 1.0, 2.0)
+UEV_IDF_DIFF = 40.0
 
 
 def sobol_design(n_points: int, seed: int = 0, sd_scale: str = 'log',
                  sd_bounds: Tuple[float, float] = SD_BOUNDS,
                  feat_diff_bounds: Tuple[float, float] = FEAT_DIFF_BOUNDS):
-    """Scrambled Sobol design over ``[sd_feat1, sd_feat2, sd_ident, feat_diff]``.
+    """Scrambled Sobol design over ``[sd_feat1, sd_feat2, sd_idf, feat_diff]``.
 
     Args:
         sd_scale: ``'log'`` spreads the SDs uniformly in log space (the scale
@@ -100,8 +99,8 @@ def low_dprime_trajectory_design(n_curves: int = 24, points_per_curve: int = 45,
     # the upper domain boundary.
     sd1, sd2 = low, np.minimum(low * ratio, SD_BOUNDS[1] - .37)
     dprime = .3 + u[:, 2] * .55
-    sd_ident = SIM_SPAT_DIFF / dprime
-    triples = np.column_stack([sd1, sd2, sd_ident])
+    sd_idf = SIM_IDF_DIFF / dprime
+    triples = np.column_stack([sd1, sd2, sd_idf])
     feat = np.linspace(*FEAT_DIFF_BOUNDS, points_per_curve, dtype=np.float64)
     design = np.column_stack([
         np.repeat(triples, points_per_curve, axis=0),
@@ -133,11 +132,11 @@ def phase_a_trajectory_design(n_curves: int = 10, points_per_curve: int = 90,
         raise ValueError(f"need at least {len(_PHASE_A_ANCHORS)} curves and three points")
     rng = np.random.default_rng(seed)
     triples, names = [], []
-    for name, sd1, sd2, sd_ident in _PHASE_A_ANCHORS:
+    for name, sd1, sd2, sd_idf in _PHASE_A_ANCHORS:
         jitter = rng.uniform(-0.83, 0.83, 3)
         if np.isclose(sd1, sd2):
             jitter[1] = jitter[0]
-        triple = np.clip(np.array([sd1, sd2, sd_ident]) + jitter, *SD_BOUNDS)
+        triple = np.clip(np.array([sd1, sd2, sd_idf]) + jitter, *SD_BOUNDS)
         triples.append(triple)
         names.append(name)
     if n_curves > len(triples):
@@ -158,8 +157,8 @@ def phase_a_trajectory_design(n_curves: int = 10, points_per_curve: int = 90,
 def low_dprime_augmentation_design(n_points: int, seed: int = 0):
     """Off-grid training design emphasizing poorly separated items.
 
-    With the simulator's 42-degree spatial separation, ``sd_ident=50..140``
-    corresponds to spatial d-prime about ``0.84..0.30``. Half the rows target
+    With the simulator's 42-degree identifiability separation, ``sd_idf=50..140``
+    corresponds to identifiability d-prime about ``0.84..0.30``. Half the rows target
     unequal feature noise (ratio ``1.5..8``), one quarter target similar noise
     over the full SD domain, and one quarter use independent full-domain SDs.
     The ordinary component mirror augmentation supplies both input orderings.
@@ -180,9 +179,9 @@ def low_dprime_augmentation_design(n_points: int, seed: int = 0):
     a[similar], b[similar] = base[similar], np.clip(
         base[similar] * similar_ratio[similar], *SD_BOUNDS)
     sd_low, sd_high = np.minimum(a, b), np.maximum(a, b)
-    sd_ident = log_sd(u[:, 3], 50., 140.)
+    sd_idf = log_sd(u[:, 3], 50., 140.)
     feat_diff = FEAT_DIFF_BOUNDS[0] + u[:, 4] * np.diff(FEAT_DIFF_BOUNDS)[0]
-    return np.column_stack([sd_low, sd_high, sd_ident, feat_diff]).astype(np.float32)
+    return np.column_stack([sd_low, sd_high, sd_idf, feat_diff]).astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -190,18 +189,18 @@ def low_dprime_augmentation_design(n_points: int, seed: int = 0):
 # ---------------------------------------------------------------------------
 
 #: Named strata from the task's validation checklist.  Each entry gives sampling
-#: ranges for (sd_feat1, sd_feat2, sd_ident, feat_diff); ``ratio`` strata draw
+#: ranges for (sd_feat1, sd_feat2, sd_idf, feat_diff); ``ratio`` strata draw
 #: sd_feat2 as a multiple of sd_feat1 instead of independently.
 _STRATA: Dict[str, dict] = {
-    'low_noise':        dict(sd1=(5, 25), sd2=(5, 25), sp=(5, 60), d=(2, 180)),
-    'high_noise':       dict(sd1=(90, 200), sd2=(90, 200), sp=(60, 200), d=(2, 180)),
-    'similar_sd_feat':  dict(sd1=(5, 200), ratio=(0.9, 1.1), sp=(5, 200), d=(2, 180)),
-    'unequal_sd_feat':  dict(sd1=(5, 60), ratio=(3.0, 12.0), sp=(5, 200), d=(2, 180)),
-    'low_sd_ident':     dict(sd1=(5, 200), sd2=(5, 200), sp=(5, 20), d=(2, 180)),
-    'high_sd_ident':    dict(sd1=(5, 200), sd2=(5, 200), sp=(120, 200), d=(2, 180)),
-    'small_feat_diff':  dict(sd1=(5, 200), sd2=(5, 200), sp=(5, 200), d=(2, 20)),
-    'mid_feat_diff':    dict(sd1=(5, 200), sd2=(5, 200), sp=(5, 200), d=(40, 100)),
-    'large_feat_diff':  dict(sd1=(5, 200), sd2=(5, 200), sp=(5, 200), d=(140, 180)),
+    'low_noise':        dict(sd1=(5, 25), sd2=(5, 25), idf=(5, 60), d=(2, 180)),
+    'high_noise':       dict(sd1=(90, 200), sd2=(90, 200), idf=(60, 200), d=(2, 180)),
+    'similar_sd_feat':  dict(sd1=(5, 200), ratio=(0.9, 1.1), idf=(5, 200), d=(2, 180)),
+    'unequal_sd_feat':  dict(sd1=(5, 60), ratio=(3.0, 12.0), idf=(5, 200), d=(2, 180)),
+    'low_sd_idf':     dict(sd1=(5, 200), sd2=(5, 200), idf=(5, 20), d=(2, 180)),
+    'high_sd_idf':    dict(sd1=(5, 200), sd2=(5, 200), idf=(120, 200), d=(2, 180)),
+    'small_feat_diff':  dict(sd1=(5, 200), sd2=(5, 200), idf=(5, 200), d=(2, 20)),
+    'mid_feat_diff':    dict(sd1=(5, 200), sd2=(5, 200), idf=(5, 200), d=(40, 100)),
+    'large_feat_diff':  dict(sd1=(5, 200), sd2=(5, 200), idf=(5, 200), d=(140, 180)),
 }
 
 
@@ -214,9 +213,9 @@ def _draw(rng: np.random.Generator, spec: dict, n: int) -> np.ndarray:
         sd2 = np.clip(sd1 * log_u(*spec['ratio'], n), *SD_BOUNDS)
     else:
         sd2 = log_u(*spec['sd2'], n)
-    sp = log_u(*spec['sp'], n)
+    idf = log_u(*spec['idf'], n)
     d = rng.uniform(*spec['d'], n)
-    return np.column_stack([sd1, sd2, sp, d]).astype(np.float32)
+    return np.column_stack([sd1, sd2, idf, d]).astype(np.float32)
 
 
 def validation_design(per_stratum: int = 12, seed: int = 20260808
@@ -276,7 +275,7 @@ def circular_kde(bias_samples, grid, kappa: float = 40.0,
     return dens
 
 
-# Difficult fixed-SD regimes established by the earlier mu1 surrogate
+# Difficult fixed-SD regimes established by the earlier mu_feat surrogate
 # experiments.  Their archived 100k outcomes survive only as KDE surfaces, so
 # these anchors are perturbed off-grid and freshly re-simulated here.
 _STRESS_TRIPLES = (
@@ -325,8 +324,8 @@ def uev_design(feature_step: float = 2.0) -> Tuple[np.ndarray, List[str]]:
     """Canonical grid for raw-vs-density unequal-variability bias curves.
 
     Spatial discriminability follows the experimental definition
-    ``dprime = spatial separation / sd_ident`` with a 40-degree separation, so
-    the three d-prime levels map to ``sd_ident = 80, 40, 20`` degrees.  The
+    ``dprime = identifiability separation / sd_idf`` with a 40-degree separation, so
+    the three d-prime levels map to ``sd_idf = 80, 40, 20`` degrees.  The
     feature grid includes both trained-domain endpoints.
     """
     if feature_step <= 0:
@@ -339,16 +338,16 @@ def uev_design(feature_step: float = 2.0) -> Tuple[np.ndarray, List[str]]:
     rows, labels = [], []
     for i, sd1 in enumerate(UEV_SD_FEAT):
         for sd2 in UEV_SD_FEAT[i:]:
-            for dprime in UEV_SPAT_DPRIME:
-                sd_ident = UEV_SPAT_DIFF / dprime
+            for dprime in UEV_IDF_DPRIME:
+                sd_idf = UEV_IDF_DIFF / dprime
                 rows.append(np.column_stack([
                     np.full(len(feat), sd1), np.full(len(feat), sd2),
-                    np.full(len(feat), sd_ident), feat]))
+                    np.full(len(feat), sd_idf), feat]))
                 labels.extend([f'uev_dprime_{dprime:g}'] * len(feat))
     return np.concatenate(rows).astype(np.float32), labels
 
 
-def uev_extension_design(added_sd_feat=(90., 120.), spatial_dprime=(2.,),
+def uev_extension_design(added_sd_feat=(90., 120.), idf_dprime=(2.,),
                          feature_step: float = 2.0) -> Tuple[np.ndarray, List[str]]:
     """UEV rows involving at least one newly added feature-noise level."""
     added = tuple(float(v) for v in added_sd_feat)
@@ -358,9 +357,9 @@ def uev_extension_design(added_sd_feat=(90., 120.), spatial_dprime=(2.,),
         raise ValueError('added feature SDs must not repeat the base UEV levels')
     if any(v < SD_BOUNDS[0] or v > SD_BOUNDS[1] for v in added):
         raise ValueError(f'added feature SDs must lie in {SD_BOUNDS}')
-    dprime = tuple(float(v) for v in spatial_dprime)
+    dprime = tuple(float(v) for v in idf_dprime)
     if not dprime or any(v <= 0 for v in dprime):
-        raise ValueError('spatial d-prime values must be positive')
+        raise ValueError('identifiability d-prime values must be positive')
     lo, hi = FEAT_DIFF_BOUNDS
     if feature_step <= 0:
         raise ValueError('feature_step must be positive and divide 2-to-180 degrees')
@@ -377,7 +376,7 @@ def uev_extension_design(added_sd_feat=(90., 120.), spatial_dprime=(2.,),
             for value in dprime:
                 rows.append(np.column_stack([
                     np.full(len(feat), sd1), np.full(len(feat), sd2),
-                    np.full(len(feat), UEV_SPAT_DIFF / value), feat]))
+                    np.full(len(feat), UEV_IDF_DIFF / value), feat]))
                 labels.extend([f'uev_extension_dprime_{value:g}'] * len(feat))
     return np.concatenate(rows).astype(np.float32), labels
 
@@ -461,7 +460,7 @@ def label_cases(bias_samples, n_modes_grid: int = 360, kappa: float = 40.0,
     m1 = z.sum(axis=1) / np.maximum(count, 1)
     m1 = np.where(count > 0, m1, np.nan + 1j * np.nan)
 
-    # Diagnostic mode grid, not the model's mu1 reporting axis. Construct it
+    # Diagnostic mode grid, not the model's mu_feat reporting axis. Construct it
     # explicitly as a half-open circular grid so no duplicated +180 endpoint can
     # appear, while allowing a resolution independent of the model grid.
     grid = -180.0 + np.arange(n_modes_grid, dtype=np.float64) * (360.0 / n_modes_grid)

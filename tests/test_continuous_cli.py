@@ -91,7 +91,7 @@ def test_a_continuous_run_completes_and_writes_results(baseline_run):
         assert entry["n_trials"] == len(entry["data_df"]) == 60
         assert params.shape[-1] >= 3
         assert np.all(np.isfinite(params))
-        # The shared spatial SD and the search bounds it came from.
+        # The shared identifiability SD and the search bounds it came from.
         assert 5.0 <= float(params[2]) <= 200.0
         assert 2.5 <= float(params[0]) <= 200.0
 
@@ -156,7 +156,7 @@ def test_removed_search_backend_is_refused(dataset, tmp_path):
 def test_a_motor_enabled_run_actually_searches_the_motor_sd(dataset, tmp_path):
     """The dispatch used to pass sd_motor=0.0 unconditionally, so every
     motor-enabled continuous run fitted at zero while the command and the
-    fingerprint both labelled it motor-enabled. Feature and spatial SDs can
+    fingerprint both labelled it motor-enabled. Feature and identifiability SDs can
     absorb response noise, so the other parameters come out wrong too.
     """
     out = tmp_path / "motor"
@@ -188,7 +188,7 @@ def test_the_fingerprint_records_every_setting_that_moves_the_parameters(baselin
     out = baseline_run
     spec = _fingerprint(out)["continuous_spec"]
     for field in ("method", "parameterisation", "n_starts", "seed", "sd_feat_bounds",
-                  "sd_spat_bounds", "max_iterations", "tolerance", "gradient_tolerance",
+                  "sd_idf_bounds", "max_iterations", "tolerance", "gradient_tolerance",
                   "optimizer_version", "batch_size", "dtype", "matmul_precision", "motor"):
         assert field in spec, field
 

@@ -355,7 +355,7 @@ def main():
         designs = [augmentation_train.design, augmentation_train.mirrored]
     design = np.concatenate(designs)
     domain = {name: [float(design[:, i].min()), float(design[:, i].max())]
-              for i, name in enumerate(("sd_feat1", "sd_feat2", "sd_spat", "feat_diff"))}
+              for i, name in enumerate(("sd_feat1", "sd_feat2", "sd_idf", "feat_diff"))}
     meta = dict(vars(args) | {'training_schema': 'wnm-training/1',
                               'selected_step': selected_step, 'n_samples': n_samples,
                               'supported_domain': domain,

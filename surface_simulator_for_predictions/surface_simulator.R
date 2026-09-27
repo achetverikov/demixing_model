@@ -21,19 +21,19 @@ library(data.table)
 
 #' Simulate surfaces for given parameter combinations
 #'
-#' @param parameters Data frame with columns: sd_feat1, sd_feat2, sd_spat, condition_id
+#' @param parameters Data frame with columns: sd_feat1, sd_feat2, sd_idf, condition_id
 #'                  (sd_motor optional - will be set to 0 if skip_motor_noise=TRUE)
 #' @param n_samples Number of samples used for training (determines which model to use)
 #' @param skip_motor_noise Whether to skip motor noise computation (default: FALSE)
 #' @param averaged_surfaces_dir Path to averaged surfaces (required with surface_source="raw").
-#' @param surface_source Prediction source: "model" (packaged WNM) or "raw" (averaged surfaces with mu2).
+#' @param surface_source Prediction source: "model" (packaged WNM) or "raw" (averaged surfaces with mu_idf).
 #' @param cleanup Whether to clean up temporary files (default: TRUE)
 #' @param work_dir Directory for temporary input/output Arrow files (default: getwd()).
 #'                 Any path conversion needed to reach the Python process (e.g. WSL
 #'                 mnt paths) should be handled by the caller before passing work_dir.
-#' @return Data frame containing simulation results with columns: sd_feat1, sd_feat2, sd_spat, sd_motor,
-#'         feat_diff, mu1_density_asymmetry, mu2_density_asymmetry (if available), mu1_expectation,
-#'         mu2_expectation (if available), sd_curve
+#' @return Data frame containing simulation results with columns: sd_feat1, sd_feat2, sd_idf, sd_motor,
+#'         feat_diff, mu_feat_density_asymmetry, mu_idf_density_asymmetry (if available), mu_feat_expectation,
+#'         mu_idf_expectation (if available), sd_curve
 simulate_surfaces <- function(parameters,
                               n_samples,
                               skip_motor_noise      = FALSE,
@@ -69,9 +69,9 @@ simulate_surfaces <- function(parameters,
   }
 
   if (skip_motor_noise) {
-    required_cols <- c("sd_feat1", "sd_feat2", "sd_spat")
+    required_cols <- c("sd_feat1", "sd_feat2", "sd_idf")
   } else {
-    required_cols <- c("sd_feat1", "sd_feat2", "sd_spat", "sd_motor")
+    required_cols <- c("sd_feat1", "sd_feat2", "sd_idf", "sd_motor")
   }
 
   missing_cols <- setdiff(required_cols, names(parameters))
@@ -135,14 +135,14 @@ simulate_surfaces <- function(parameters,
     # Extract metadata from first row (where it's not NULL)
     metadata <- list(
       feat_diff_grid = unlist(sim_results$feat_diff_grid[1]),
-      mu1_bias_grid = unlist(sim_results$mu1_bias_grid[1]),
-      mu2_bias_grid = if(!is.null(sim_results$mu2_bias_grid[1])) unlist(sim_results$mu2_bias_grid[1]) else NULL,
+      mu_feat_bias_grid = unlist(sim_results$mu_feat_bias_grid[1]),
+      mu_idf_bias_grid = if(!is.null(sim_results$mu_idf_bias_grid[1])) unlist(sim_results$mu_idf_bias_grid[1]) else NULL,
       feat_diff_range = unlist(sim_results$feat_diff_range[1]),
-      mu1_bias_range = unlist(sim_results$mu1_bias_range[1]),
-      mu2_bias_range = if(!is.null(sim_results$mu2_bias_range[1])) unlist(sim_results$mu2_bias_range[1]) else NULL,
+      mu_feat_bias_range = unlist(sim_results$mu_feat_bias_range[1]),
+      mu_idf_bias_range = if(!is.null(sim_results$mu_idf_bias_range[1])) unlist(sim_results$mu_idf_bias_range[1]) else NULL,
       feat_diff_step = sim_results$feat_diff_step[1],
-      mu1_bias_step = sim_results$mu1_bias_step[1],
-      mu2_bias_step = if(!is.null(sim_results$mu2_bias_step[1])) sim_results$mu2_bias_step[1] else NULL,
+      mu_feat_bias_step = sim_results$mu_feat_bias_step[1],
+      mu_idf_bias_step = if(!is.null(sim_results$mu_idf_bias_step[1])) sim_results$mu_idf_bias_step[1] else NULL,
       n_samples = sim_results$n_samples[1],
       # Resolved from the artifact by Python, not echoed back from the request.
       surrogate_family = if (!is.null(sim_results$surrogate_family[1]))
@@ -150,14 +150,14 @@ simulate_surfaces <- function(parameters,
       surrogate_artifact = if (!is.null(sim_results$surrogate_artifact[1]))
         sim_results$surrogate_artifact[1] else NA_character_,
       skip_motor_noise = sim_results$skip_motor_noise[1],
-      has_mu2_data = if(!is.null(sim_results$has_mu2_data[1])) sim_results$has_mu2_data[1] else FALSE
+      has_mu_idf_data = if(!is.null(sim_results$has_mu_idf_data[1])) sim_results$has_mu_idf_data[1] else FALSE
     )
     
     # Unpack to long format
     cat("Unpacking to long format...\n")
     
     # Get parameter columns
-    param_cols <- c("sd_feat1", "sd_feat2", "sd_spat", "sd_motor")
+    param_cols <- c("sd_feat1", "sd_feat2", "sd_idf", "sd_motor")
     
     # Create long format data
     long_results <- data.frame()
@@ -167,34 +167,34 @@ simulate_surfaces <- function(parameters,
       params <- sim_results[i, param_cols]
       
       # Get density curves, expectation curves, and SD curve
-      # Handle both old and new column names for mu1 density
-      if("mu1_density_curve" %in% names(sim_results)) {
-        mu1_density_curve <- unlist(sim_results$mu1_density_curve[i])
+      # Handle both old and new column names for mu_feat density
+      if("mu_feat_density_curve" %in% names(sim_results)) {
+        mu_feat_density_curve <- unlist(sim_results$mu_feat_density_curve[i])
       } else if("density_curve" %in% names(sim_results)) {
-        mu1_density_curve <- unlist(sim_results$density_curve[i])
+        mu_feat_density_curve <- unlist(sim_results$density_curve[i])
       } else {
-        mu1_density_curve <- rep(NA, length(metadata$feat_diff_grid))
+        mu_feat_density_curve <- rep(NA, length(metadata$feat_diff_grid))
       }
       
-      # Handle mu2 density curve
-      mu2_density_curve <- if("mu2_density_curve" %in% names(sim_results) && !is.null(sim_results$mu2_density_curve[i])) {
-        unlist(sim_results$mu2_density_curve[i])
+      # Handle mu_idf density curve
+      mu_idf_density_curve <- if("mu_idf_density_curve" %in% names(sim_results) && !is.null(sim_results$mu_idf_density_curve[i])) {
+        unlist(sim_results$mu_idf_density_curve[i])
       } else {
         rep(NA, length(metadata$feat_diff_grid))
       }
       
-      # Handle both old and new column names for mu1 expectation
-      if("mu1_expectation_curve" %in% names(sim_results)) {
-        mu1_expectation_curve <- unlist(sim_results$mu1_expectation_curve[i])
+      # Handle both old and new column names for mu_feat expectation
+      if("mu_feat_expectation_curve" %in% names(sim_results)) {
+        mu_feat_expectation_curve <- unlist(sim_results$mu_feat_expectation_curve[i])
       } else if("expectation_curve" %in% names(sim_results)) {
-        mu1_expectation_curve <- unlist(sim_results$expectation_curve[i])
+        mu_feat_expectation_curve <- unlist(sim_results$expectation_curve[i])
       } else {
-        mu1_expectation_curve <- rep(NA, length(metadata$feat_diff_grid))
+        mu_feat_expectation_curve <- rep(NA, length(metadata$feat_diff_grid))
       }
       
-      # Handle mu2 expectation curve
-      mu2_expectation_curve <- if("mu2_expectation_curve" %in% names(sim_results) && !is.null(sim_results$mu2_expectation_curve[i])) {
-        unlist(sim_results$mu2_expectation_curve[i])
+      # Handle mu_idf expectation curve
+      mu_idf_expectation_curve <- if("mu_idf_expectation_curve" %in% names(sim_results) && !is.null(sim_results$mu_idf_expectation_curve[i])) {
+        unlist(sim_results$mu_idf_expectation_curve[i])
       } else {
         rep(NA, length(metadata$feat_diff_grid))
       }
@@ -205,13 +205,13 @@ simulate_surfaces <- function(parameters,
       row_data <- data.frame(
         sd_feat1 = params$sd_feat1,
         sd_feat2 = params$sd_feat2,
-        sd_spat = params$sd_spat,
+        sd_idf = params$sd_idf,
         sd_motor = params$sd_motor,
         feat_diff = metadata$feat_diff_grid,
-        mu1_density_asymmetry = mu1_density_curve,
-        mu2_density_asymmetry = mu2_density_curve,
-        mu1_expectation = mu1_expectation_curve,
-        mu2_expectation = mu2_expectation_curve,
+        mu_feat_density_asymmetry = mu_feat_density_curve,
+        mu_idf_density_asymmetry = mu_idf_density_curve,
+        mu_feat_expectation = mu_feat_expectation_curve,
+        mu_idf_expectation = mu_idf_expectation_curve,
         sd_curve = sd_curve,
         # Which model produced these curves. Python resolves the artifact and
         # reports its identity; dropping these here would hand R a table whose
@@ -247,13 +247,13 @@ simulate_surfaces <- function(parameters,
 }
 
 simulate_unequal_noise2 <- function(sd_feat_range         = seq(10, 60, 10),
-                                    sd_spat               = 42,
+                                    sd_idf               = 42,
                                     n_samples             = 20,
                                     averaged_surfaces_dir = NULL,
                                     checkpoint_path       = NULL,
                                     work_dir              = getwd(),
                                     surface_source        = "model") {
-  par_grid <- expand.grid(sd_feat1 = sd_feat_range, sd_feat2 = sd_feat_range, sd_spat = sd_spat)
+  par_grid <- expand.grid(sd_feat1 = sd_feat_range, sd_feat2 = sd_feat_range, sd_idf = sd_idf)
   res <- simulate_surfaces(par_grid,
                            n_samples             = n_samples,
                            skip_motor_noise      = TRUE,
@@ -272,12 +272,12 @@ simulate_unequal_noise2 <- function(sd_feat_range         = seq(10, 60, 10),
 
 
 simulate_equal_noise <- function(sd_feat_range         = seq(10, 60, 10),
-                                 sd_spat               = 42,
+                                 sd_idf               = 42,
                                  n_samples             = 20,
                                  averaged_surfaces_dir = NULL,
                                  work_dir              = getwd(),
                                  surface_source        = "model") {
-  par_grid <- expand.grid(sd_feat1 = sd_feat_range, sd_feat2 = sd_feat_range, sd_spat = sd_spat)
+  par_grid <- expand.grid(sd_feat1 = sd_feat_range, sd_feat2 = sd_feat_range, sd_idf = sd_idf)
   par_grid <- par_grid[par_grid$sd_feat1 == par_grid$sd_feat2, ]
   res <- simulate_surfaces(par_grid,
                            n_samples             = n_samples,

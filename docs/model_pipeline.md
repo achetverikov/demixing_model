@@ -19,10 +19,10 @@ The parameters describe the uncertainty in this evidence:
 |---|---|
 | `sd_feat1` | Target-item feature noise |
 | `sd_feat2` | Competing-item feature noise |
-| `sd_spat` | Identifiability noise, shared by the two items |
+| `sd_idf` | Identifiability noise, shared by the two items |
 | `feat_diff` | True feature difference between the items |
 
-True feature means lie at `−feat_diff/2` and `+feat_diff/2`. The identifiability means are separated by 42 model units, giving identifiability sensitivity `d′ = 42 / sd_spat`.
+True feature means lie at `−feat_diff/2` and `+feat_diff/2`. The identifiability means are separated by 42 model units, giving identifiability sensitivity `d′ = 42 / sd_idf`.
 
 ### One simulated trial
 
@@ -79,7 +79,7 @@ See [simulation and training-data generation](../surface_computation/README.md) 
 
 ### Predictor architecture
 
-The predictor takes `[sd_feat1, sd_feat2, sd_spat, feat_diff]` and outputs mixture weights, circular means, and scales for the target's response-error distribution:
+The predictor takes `[sd_feat1, sd_feat2, sd_idf, feat_diff]` and outputs mixture weights, circular means, and scales for the target's response-error distribution:
 
 `p(bias | parameters, feat_diff) = Σₖ weightₖ × WrappedNormal(bias; meanₖ, scaleₖ)`.
 
@@ -92,7 +92,7 @@ The declared parameter domain is:
 | Input | Range in model degrees |
 |---|---|
 | `sd_feat1`, `sd_feat2` | 2.5–200 |
-| `sd_spat` | 5–200 |
+| `sd_idf` | 5–200 |
 | `feat_diff` | 0.5–180 |
 
 The [pretrained model reference](../pretrained/README.md) records checkpoint identity, training configuration, and domain details. A custom predictor should be validated against independent simulations, comparing response distributions and bias curves across dissimilarity.
@@ -116,7 +116,7 @@ For each participant and experiment, the fitter estimates all conditions jointly
 | Scope | Parameters |
 |---|---|
 | Each condition | `sd_feat1`, `sd_feat2` |
-| Shared across conditions | `sd_spat` |
+| Shared across conditions | `sd_idf` |
 | Shared when motor noise is enabled | `sd_motor` |
 
 Motor noise is fixed at zero by default. The internal sample count is chosen before fitting by selecting the 20- or 100-sample model.

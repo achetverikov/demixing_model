@@ -63,7 +63,7 @@ class SurfaceSelector:
     def _manual_selection(self, max_surfaces):
         """Manual surface selection with performance limits."""
         display_names = [
-            f"sd_feat1={row['sd_feat1']:.1f}, sd_feat2={row['sd_feat2']:.1f}, sd_spat={row['sd_spat']:.1f}"
+            f"sd_feat1={row['sd_feat1']:.1f}, sd_feat2={row['sd_feat2']:.1f}, sd_idf={row['sd_idf']:.1f}"
             for _, row in self.df.iterrows()
         ]
 
@@ -110,7 +110,7 @@ class SurfaceSelector:
             st.write("**Parameter Range Filters:**")
             filter_cols = st.columns(3)
             
-            for i, param in enumerate(['sd_feat1', 'sd_feat2', 'sd_spat']):
+            for i, param in enumerate(['sd_feat1', 'sd_feat2', 'sd_idf']):
                 with filter_cols[i]:
                     min_val = float(self.df[param].min())
                     max_val = float(self.df[param].max())
@@ -147,7 +147,7 @@ class SurfaceSelector:
             st.write(f"Filtered to {len(filtered_df)} surfaces")
 
         # Get unique values for each parameter from filtered data
-        params = ['sd_feat1', 'sd_feat2', 'sd_spat']
+        params = ['sd_feat1', 'sd_feat2', 'sd_idf']
         selected_values = {}
 
         st.write("**Grid Selection:**")
@@ -252,8 +252,8 @@ class SingleSurfaceSelector:
             st.session_state.single_sd_feat1 = None
         if 'single_sd_feat2' not in st.session_state:
             st.session_state.single_sd_feat2 = None
-        if 'single_sd_spat' not in st.session_state:
-            st.session_state.single_sd_spat = None
+        if 'single_sd_idf' not in st.session_state:
+            st.session_state.single_sd_idf = None
             
         st.subheader("Surface Selection")
         
@@ -274,8 +274,8 @@ class SingleSurfaceSelector:
                 available_df = self.df.copy()
                 if st.session_state.single_sd_feat2 is not None:
                     available_df = available_df[available_df['sd_feat2'] == st.session_state.single_sd_feat2]
-                if st.session_state.single_sd_spat is not None:
-                    available_df = available_df[available_df['sd_spat'] == st.session_state.single_sd_spat]
+                if st.session_state.single_sd_idf is not None:
+                    available_df = available_df[available_df['sd_idf'] == st.session_state.single_sd_idf]
                 
                 feat1_options = sorted(available_df['sd_feat1'].unique())
                 
@@ -315,8 +315,8 @@ class SingleSurfaceSelector:
                 available_df = self.df.copy()
                 if st.session_state.single_sd_feat1 is not None:
                     available_df = available_df[available_df['sd_feat1'] == st.session_state.single_sd_feat1]
-                if st.session_state.single_sd_spat is not None:
-                    available_df = available_df[available_df['sd_spat'] == st.session_state.single_sd_spat]
+                if st.session_state.single_sd_idf is not None:
+                    available_df = available_df[available_df['sd_idf'] == st.session_state.single_sd_idf]
                 
                 feat2_options = sorted(available_df['sd_feat2'].unique())
                 
@@ -352,44 +352,44 @@ class SingleSurfaceSelector:
         
         with col3:
             if input_mode == "Dropdown":
-                # Get available sd_spat values (filtered by other selected parameters)
+                # Get available sd_idf values (filtered by other selected parameters)
                 available_df = self.df.copy()
                 if st.session_state.single_sd_feat1 is not None:
                     available_df = available_df[available_df['sd_feat1'] == st.session_state.single_sd_feat1]
                 if st.session_state.single_sd_feat2 is not None:
                     available_df = available_df[available_df['sd_feat2'] == st.session_state.single_sd_feat2]
                 
-                spat_options = sorted(available_df['sd_spat'].unique())
+                idf_options = sorted(available_df['sd_idf'].unique())
                 
                 # Find current index
                 current_idx = 0
-                if st.session_state.single_sd_spat is not None and st.session_state.single_sd_spat in spat_options:
-                    current_idx = spat_options.index(st.session_state.single_sd_spat)
-                elif len(spat_options) > 0:
-                    st.session_state.single_sd_spat = spat_options[0]
+                if st.session_state.single_sd_idf is not None and st.session_state.single_sd_idf in idf_options:
+                    current_idx = idf_options.index(st.session_state.single_sd_idf)
+                elif len(idf_options) > 0:
+                    st.session_state.single_sd_idf = idf_options[0]
                 
-                selected_spat = st.selectbox(
-                    "sd_spat",
-                    options=spat_options,
+                selected_idf = st.selectbox(
+                    "sd_idf",
+                    options=idf_options,
                     index=current_idx,
-                    key="single_spat_select"
+                    key="single_idf_select"
                 )
-                st.session_state.single_sd_spat = selected_spat
+                st.session_state.single_sd_idf = selected_idf
             else:
                 # Manual input
-                all_spat_values = sorted(self.df['sd_spat'].unique())
-                min_val, max_val = min(all_spat_values), max(all_spat_values)
-                default_val = st.session_state.single_sd_spat if st.session_state.single_sd_spat is not None else min_val
+                all_idf_values = sorted(self.df['sd_idf'].unique())
+                min_val, max_val = min(all_idf_values), max(all_idf_values)
+                default_val = st.session_state.single_sd_idf if st.session_state.single_sd_idf is not None else min_val
                 
-                selected_spat = st.number_input(
-                    "sd_spat",
+                selected_idf = st.number_input(
+                    "sd_idf",
                     min_value=float(min_val),
                     max_value=float(max_val),
                     value=float(default_val),
                     step=10.0,
-                    key="single_spat_input"
+                    key="single_idf_input"
                 )
-                st.session_state.single_sd_spat = selected_spat
+                st.session_state.single_sd_idf = selected_idf
 
         with col4:
             if st.button("🎲 Random"):
@@ -397,7 +397,7 @@ class SingleSurfaceSelector:
                 random_surface = self.df.sample(n=1).iloc[0]
                 st.session_state.single_sd_feat1 = random_surface['sd_feat1']
                 st.session_state.single_sd_feat2 = random_surface['sd_feat2']
-                st.session_state.single_sd_spat = random_surface['sd_spat']
+                st.session_state.single_sd_idf = random_surface['sd_idf']
                 st.rerun()
         
         # Find the matching surface
@@ -406,7 +406,7 @@ class SingleSurfaceSelector:
             matching_surfaces = self.df[
                 (self.df['sd_feat1'] == st.session_state.single_sd_feat1) &
                 (self.df['sd_feat2'] == st.session_state.single_sd_feat2) &
-                (self.df['sd_spat'] == st.session_state.single_sd_spat)
+                (self.df['sd_idf'] == st.session_state.single_sd_idf)
             ]
             
             if len(matching_surfaces) == 0:
@@ -420,12 +420,12 @@ class SingleSurfaceSelector:
             # For manual input, find the closest surface
             target_feat1 = st.session_state.single_sd_feat1
             target_feat2 = st.session_state.single_sd_feat2  
-            target_spat = st.session_state.single_sd_spat
+            target_idf = st.session_state.single_sd_idf
             
             # Calculate distances to all surfaces
             distances = []
             for _, row in self.df.iterrows():
-                dist = abs(row['sd_feat1'] - target_feat1) + abs(row['sd_feat2'] - target_feat2) + abs(row['sd_spat'] - target_spat)
+                dist = abs(row['sd_feat1'] - target_feat1) + abs(row['sd_feat2'] - target_feat2) + abs(row['sd_idf'] - target_idf)
                 distances.append(dist)
             
             # Find closest surface
@@ -434,7 +434,7 @@ class SingleSurfaceSelector:
             
             # Show info about the closest match
             if distances[closest_idx] > 0:
-                st.info(f"Closest surface: sd_feat1={closest_surface['sd_feat1']}, sd_feat2={closest_surface['sd_feat2']}, sd_spat={closest_surface['sd_spat']}")
+                st.info(f"Closest surface: sd_feat1={closest_surface['sd_feat1']}, sd_feat2={closest_surface['sd_feat2']}, sd_idf={closest_surface['sd_idf']}")
             
             return closest_surface
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Migrate stored surfaces from the legacy 181-row mu1 axis to the periodic 180.
+"""Migrate stored surfaces from the legacy 181-row mu_feat axis to the periodic 180.
 
-The mu1_bias axis is circular, and the legacy representation gave one physical
+The mu_feat_bias axis is circular, and the legacy representation gave one physical
 angle (±180°) two rows.  The raw simulated surfaces are **bit-identical** at
 those two rows, so the duplicate is pure redundancy in the representation and
 can be dropped without resimulating — but it has to be dropped *on disk*,
-because every surface pickle also carries its own ``mu1_bias_grid``, which no
+because every surface pickle also carries its own ``mu_feat_bias_grid``, which no
 config change can reach.  Loaders therefore carry a guard, not a shim: anything
 still on the old axis is an error pointing here.
 
@@ -16,8 +16,8 @@ What this does, per surface:
 * **verify** the two endpoint rows are identical before touching anything, and
   abort loudly otherwise — a difference would mean the data does not satisfy the
   identity this migration assumes;
-* drop the last row from both mu1 surfaces **and** trim the embedded
-  ``mu1_bias_grid`` in lockstep (``Surface.__post_init__`` validates the arrays
+* drop the last row from both mu_feat surfaces **and** trim the embedded
+  ``mu_feat_bias_grid`` in lockstep (``Surface.__post_init__`` validates the arrays
   against that grid, so trimming one without the other raises);
 * rewrite atomically.
 
@@ -29,7 +29,7 @@ After migrating a released set, re-pack it with ``cloud/package_surface_release.
 so the ``SHA256SUMS`` match; the old tarballs are the backup.
 
 Usage:
-    python cloud/migrate_surfaces_to_periodic_mu1.py <dir> [<dir> ...] [--dry-run]
+    python cloud/migrate_surfaces_to_periodic_mu_feat.py <dir> [<dir> ...] [--dry-run]
 """
 
 from __future__ import annotations
@@ -46,8 +46,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
 
-from shared.mu1_axis import (LEGACY_MU1_GRID_SIZE, is_legacy_mu1_length,
-                             mu1_size, trim_legacy_grid)
+from shared.mu_feat_axis import (LEGACY_MU_FEAT_GRID_SIZE, is_legacy_mu_feat_length,
+                             mu_feat_size, trim_legacy_grid)
 from shared.utils import SurfaceUnpickler
 
 
@@ -61,22 +61,22 @@ def _as_array(x):
 
 def migrate_surface_obj(surface, source: str = "<surface>"):
     """Return (migrated_surface, changed).  Raises if the endpoints disagree."""
-    grid = _as_array(surface.mu1_bias_grid)
-    rows = _as_array(surface.mu1_comp1_surface).shape[0]
+    grid = _as_array(surface.mu_feat_bias_grid)
+    rows = _as_array(surface.mu_feat_comp1_surface).shape[0]
 
-    if grid.size == mu1_size() and rows == mu1_size():
+    if grid.size == mu_feat_size() and rows == mu_feat_size():
         return surface, False
-    if not (is_legacy_mu1_length(grid.size) and is_legacy_mu1_length(rows)):
+    if not (is_legacy_mu_feat_length(grid.size) and is_legacy_mu_feat_length(rows)):
         raise MigrationError(
-            f"{source}: mu1 axis has {grid.size} grid points / {rows} surface "
-            f"rows; expected {mu1_size()} (migrated) or {LEGACY_MU1_GRID_SIZE} "
+            f"{source}: mu_feat axis has {grid.size} grid points / {rows} surface "
+            f"rows; expected {mu_feat_size()} (migrated) or {LEGACY_MU_FEAT_GRID_SIZE} "
             f"(legacy). Refusing to guess.")
 
     # The two endpoint rows are the same angle. Verify before trimming: if they
     # differ, this file is not what the migration assumes and dropping a row
     # would destroy information.
-    updates = {"mu1_bias_grid": trim_legacy_grid(grid)}
-    for field in ("mu1_comp1_surface", "mu1_comp2_surface"):
+    updates = {"mu_feat_bias_grid": trim_legacy_grid(grid)}
+    for field in ("mu_feat_comp1_surface", "mu_feat_comp2_surface"):
         arr = _as_array(getattr(surface, field))
         max_diff = float(np.max(np.abs(arr[0] - arr[-1])))
         if max_diff != 0.0:
@@ -98,7 +98,7 @@ def _migrate_payload(payload, source: str):
             payload = dict(payload)
             payload["surface"] = migrated
         return payload, changed
-    if hasattr(payload, "mu1_bias_grid"):
+    if hasattr(payload, "mu_feat_bias_grid"):
         return migrate_surface_obj(payload, source)
     raise MigrationError(f"{source}: not a surface pickle.")
 
@@ -195,7 +195,7 @@ def main(argv=None) -> int:
         total_changed += n_changed
 
     print(f"Done: {total_changed}/{total_files} file(s) migrated to the "
-          f"{mu1_size()}-point periodic mu1 axis.")
+          f"{mu_feat_size()}-point periodic mu_feat axis.")
     return 0
 
 

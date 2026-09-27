@@ -54,7 +54,7 @@ def compiled_trial_likelihoods(results, predictor, identity, methods):
             if key not in result:
                 continue
             parameters = np.asarray(result[key], dtype=float)
-            physical_bin_width = float(config.mu1_bias_step) / scale
+            physical_bin_width = float(config.mu_feat_bias_step) / scale
             likelihood = evaluate_trial_likelihoods(
                 predictor, parameters, data[:, 0], data[:, 1],
                 physical_bin_width_deg=physical_bin_width,
@@ -71,7 +71,7 @@ def compiled_trial_likelihoods(results, predictor, identity, methods):
                 "fit_condition": str(values.get("condition_id", "")),
                 "optimizer": method,
                 "sd_feat1": parameters[0], "sd_feat2": parameters[1],
-                "sd_spat": parameters[2], "sd_motor": parameters[3],
+                "sd_idf": parameters[2], "sd_motor": parameters[3],
                 **result["bundle_identity"], **identity,
             }
             rows.append(pd.DataFrame({
@@ -169,14 +169,14 @@ def export_curves(results_dir: Path, checkpoint: Path | None, output_dir: Path,
                 "optimizer": method, "n_trials": n_scored,
                 "model_scale": angle_scale,
                 "sd_feat1": parameters[0], "sd_feat2": parameters[1],
-                "sd_spat": parameters[2], "sd_motor": parameters[3],
+                "sd_idf": parameters[2], "sd_motor": parameters[3],
                 "sd_feat1_model_deg": parameters[0],
                 "sd_feat2_model_deg": parameters[1],
-                "sd_spat_model_deg": parameters[2],
+                "sd_idf_model_deg": parameters[2],
                 "sd_motor_model_deg": parameters[3],
                 "sd_feat1_deg": parameters[0] / angle_scale,
                 "sd_feat2_deg": parameters[1] / angle_scale,
-                "sd_spat_deg": parameters[2] / angle_scale,
+                "sd_idf_deg": parameters[2] / angle_scale,
                 "sd_motor_deg": parameters[3] / angle_scale,
                 "loss": result[f"{method}_loss"],
                 f"{method}_loss": result[f"{method}_loss"],
@@ -198,7 +198,7 @@ def export_curves(results_dir: Path, checkpoint: Path | None, output_dir: Path,
                     - n_scored * np.log(angle_scale),
                 "eval_likelihood_nll_mass":
                     result[f"{method}_eval_likelihood_loss"]
-                    - n_scored * np.log(float(config.mu1_bias_step)),
+                    - n_scored * np.log(float(config.mu_feat_bias_step)),
                 **bundle_identity, **identity,
             })
             with jax.default_matmul_precision(matmul_precision):
@@ -231,16 +231,16 @@ def export_curves(results_dir: Path, checkpoint: Path | None, output_dir: Path,
                     "empirical_density_asymmetry": float(
                         np.asarray(empirical["matched_density_target"])[index]),
                     "sd_feat1": float(parameters[0]), "sd_feat2": float(parameters[1]),
-                    "sd_spat": float(parameters[2]), "sd_motor": float(parameters[3]),
+                    "sd_idf": float(parameters[2]), "sd_motor": float(parameters[3]),
                     "density_bandwidth": bandwidth,
                     "model_scale": angle_scale,
                     "sd_feat1_model_deg": float(parameters[0]),
                     "sd_feat2_model_deg": float(parameters[1]),
-                    "sd_spat_model_deg": float(parameters[2]),
+                    "sd_idf_model_deg": float(parameters[2]),
                     "sd_motor_model_deg": float(parameters[3]),
                     "sd_feat1_deg": float(parameters[0] / angle_scale),
                     "sd_feat2_deg": float(parameters[1] / angle_scale),
-                    "sd_spat_deg": float(parameters[2] / angle_scale),
+                    "sd_idf_deg": float(parameters[2] / angle_scale),
                     "sd_motor_deg": float(parameters[3] / angle_scale),
                     "density_bandwidth_model_deg": bandwidth,
                     "density_bandwidth_deg": bandwidth / angle_scale,

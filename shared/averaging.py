@@ -4,11 +4,11 @@ standalone create_averaged_surfaces_from_samples script.
 Public API
 ----------
 make_averaging_functions(config, bias_bandwidth, feat_bandwidth)
-    Compile and return (vmap_circular, vmap_spatial, feat_diff_steps,
-    feat_diff_grid, mu1_bias_grid, mu2_bias_grid, ref_sum).
+    Compile and return (vmap_circular, vmap_idf, feat_diff_steps,
+    feat_diff_grid, mu_feat_bias_grid, mu_idf_bias_grid, ref_sum).
 
-average_sample_pair(mu1_a, mu2_a, mu1_b, mu2_b, sf1, sf2,
-                    vmap_circular, vmap_spatial, feat_diff_steps)
+average_sample_pair(mu_feat_a, mu_idf_a, mu_feat_b, mu_idf_b, sf1, sf2,
+                    vmap_circular, vmap_idf, feat_diff_steps)
     Combine two in-memory sample arrays and return an AveragedSurface.
     For off-diagonal pairs (sf1 != sf2) pass canonical as _a, mirror as _b.
     For diagonal pairs (sf1 == sf2) pass r0 as _a, r1 as _b.
@@ -151,13 +151,13 @@ def make_averaging_functions(config, bias_bandwidth: float = 0.075,
     therefore corresponds to a 6-degree SD.
 
     Returns a dict with keys:
-        vmap_circular, vmap_spatial,
-        feat_diff_steps, feat_diff_grid, mu1_bias_grid, mu2_bias_grid,
+        vmap_circular, vmap_idf,
+        feat_diff_steps, feat_diff_grid, mu_feat_bias_grid, mu_idf_bias_grid,
         ref_sum
     """
     feat_diff_grid = config.create_grid('feat_diff')
-    mu1_bias_grid = config.create_grid('mu1_bias')
-    mu2_bias_grid = config.create_grid('mu2_bias')
+    mu_feat_bias_grid = config.create_grid('mu_feat_bias')
+    mu_idf_bias_grid = config.create_grid('mu_idf_bias')
     feat_diff_steps = jnp.arange(len(feat_diff_grid))
 
     # Reference weight sum for boundary compensation
@@ -169,27 +169,27 @@ def make_averaging_functions(config, bias_bandwidth: float = 0.075,
     @jax.jit
     def kde_circular(i, samples):
         return weighted_kde_single_step_bounded(
-            i, samples, mu1_bias_grid, feat_diff_steps,
+            i, samples, mu_feat_bias_grid, feat_diff_steps,
             bias_bandwidth, feat_bandwidth, ref_sum, True,
         )
 
     @jax.jit
-    def kde_spatial(i, samples):
+    def kde_idf(i, samples):
         return weighted_kde_single_step_bounded(
-            i, samples, mu2_bias_grid, feat_diff_steps,
+            i, samples, mu_idf_bias_grid, feat_diff_steps,
             bias_bandwidth, feat_bandwidth, ref_sum, False,
         )
 
     vmap_circular = jax.vmap(kde_circular, in_axes=(0, None))
-    vmap_spatial = jax.vmap(kde_spatial, in_axes=(0, None))
+    vmap_idf = jax.vmap(kde_idf, in_axes=(0, None))
 
     return {
         'vmap_circular': vmap_circular,
-        'vmap_spatial': vmap_spatial,
+        'vmap_idf': vmap_idf,
         'feat_diff_steps': feat_diff_steps,
         'feat_diff_grid': feat_diff_grid,
-        'mu1_bias_grid': mu1_bias_grid,
-        'mu2_bias_grid': mu2_bias_grid,
+        'mu_feat_bias_grid': mu_feat_bias_grid,
+        'mu_idf_bias_grid': mu_idf_bias_grid,
         'ref_sum': ref_sum,
         'bias_bandwidth': bias_bandwidth,
         'feat_bandwidth': feat_bandwidth,
@@ -200,7 +200,7 @@ def make_averaging_functions(config, bias_bandwidth: float = 0.075,
 # In-memory averaging
 # ---------------------------------------------------------------------------
 
-def average_sample_pair(mu1_a, mu2_a, mu1_b, mu2_b,
+def average_sample_pair(mu_feat_a, mu_idf_a, mu_feat_b, mu_idf_b,
                         sf1: float, sf2: float,
                         avg_fns: dict) -> AveragedSurface:
     """Combine two in-memory sample arrays into one AveragedSurface.
@@ -208,75 +208,75 @@ def average_sample_pair(mu1_a, mu2_a, mu1_b, mu2_b,
     For off-diagonal (sf1 < sf2): pass canonical as _a, mirror (sf2,sf1) as _b.
     For diagonal (sf1 == sf2): pass r0 as _a, r1 as _b.
 
-    mu1_* shape: (feat_diff_n, n_simulations, 2)  — two feature components
-    mu2_* shape: (feat_diff_n, n_simulations, 2)  — two spatial components
+    mu_feat_* shape: (feat_diff_n, n_simulations, 2)  — two feature components
+    mu_idf_* shape: (feat_diff_n, n_simulations, 2)  — two identifiability components
     """
     vmap_circular = avg_fns['vmap_circular']
-    vmap_spatial = avg_fns['vmap_spatial']
+    vmap_idf = avg_fns['vmap_idf']
     feat_diff_steps = avg_fns['feat_diff_steps']
     feat_diff_grid = avg_fns['feat_diff_grid']
-    mu1_bias_grid = avg_fns['mu1_bias_grid']
-    mu2_bias_grid = avg_fns['mu2_bias_grid']
+    mu_feat_bias_grid = avg_fns['mu_feat_bias_grid']
+    mu_idf_bias_grid = avg_fns['mu_idf_bias_grid']
     bias_bandwidth = avg_fns['bias_bandwidth']
     feat_bandwidth = avg_fns['feat_bandwidth']
 
     n_expected = len(feat_diff_steps)
 
     # Drop leading feat_diff=0 row if present (old format compatibility)
-    for arr in [mu1_a, mu2_a, mu1_b, mu2_b]:
+    for arr in [mu_feat_a, mu_idf_a, mu_feat_b, mu_idf_b]:
         if arr is not None and arr.shape[0] > n_expected:
             pass  # handled below
 
     def _trim(arr):
         return arr[1:] if arr is not None and arr.shape[0] > n_expected else arr
 
-    mu1_a, mu2_a = _trim(mu1_a), _trim(mu2_a)
-    mu1_b, mu2_b = _trim(mu1_b), _trim(mu2_b)
+    mu_feat_a, mu_idf_a = _trim(mu_feat_a), _trim(mu_idf_a)
+    mu_feat_b, mu_idf_b = _trim(mu_feat_b), _trim(mu_idf_b)
 
     # Combine samples
     if sf1 != sf2:
         # Mirror flips the component order (sf2,sf1) → (sf1,sf2) symmetry
-        mu1_combined = jnp.concatenate(
-            [mu1_a, jnp.flip(mu1_b, axis=2)], axis=1
+        mu_feat_combined = jnp.concatenate(
+            [mu_feat_a, jnp.flip(mu_feat_b, axis=2)], axis=1
         )
     else:
-        mu1_combined = jnp.concatenate([mu1_a, mu1_b], axis=1)
+        mu_feat_combined = jnp.concatenate([mu_feat_a, mu_feat_b], axis=1)
 
-    mu2_combined = jnp.concatenate([mu2_a, mu2_b], axis=1)
+    mu_idf_combined = jnp.concatenate([mu_idf_a, mu_idf_b], axis=1)
 
     # Pre-filter isolated samples
     if sf1 == sf2:
-        mu1_all = jnp.concatenate([mu1_combined[:, :, 0],
-                                    mu1_combined[:, :, 1]], axis=1)
-        mu1_filtered, _ = prefilter_isolated_samples(mu1_all)
-        mu1_comp1_surface = vmap_circular(
-            jnp.arange(len(feat_diff_steps)), mu1_filtered
+        mu_feat_all = jnp.concatenate([mu_feat_combined[:, :, 0],
+                                    mu_feat_combined[:, :, 1]], axis=1)
+        mu_feat_filtered, _ = prefilter_isolated_samples(mu_feat_all)
+        mu_feat_comp1_surface = vmap_circular(
+            jnp.arange(len(feat_diff_steps)), mu_feat_filtered
         ).T
-        mu1_comp2_surface = mu1_comp1_surface
+        mu_feat_comp2_surface = mu_feat_comp1_surface
     else:
-        comp1_f, _ = prefilter_isolated_samples(mu1_combined[:, :, 0])
-        comp2_f, _ = prefilter_isolated_samples(mu1_combined[:, :, 1])
-        mu1_comp1_surface = vmap_circular(
+        comp1_f, _ = prefilter_isolated_samples(mu_feat_combined[:, :, 0])
+        comp2_f, _ = prefilter_isolated_samples(mu_feat_combined[:, :, 1])
+        mu_feat_comp1_surface = vmap_circular(
             jnp.arange(len(feat_diff_steps)), comp1_f
         ).T
-        mu1_comp2_surface = vmap_circular(
+        mu_feat_comp2_surface = vmap_circular(
             jnp.arange(len(feat_diff_steps)), comp2_f
         ).T
 
-    mu2_flat = mu2_combined.reshape(mu2_combined.shape[0], -1)
-    mu2_flat_f, _ = prefilter_isolated_samples(mu2_flat)
-    mu2_surface = vmap_spatial(
-        jnp.arange(len(feat_diff_steps)), mu2_flat_f
+    mu_idf_flat = mu_idf_combined.reshape(mu_idf_combined.shape[0], -1)
+    mu_idf_flat_f, _ = prefilter_isolated_samples(mu_idf_flat)
+    mu_idf_surface = vmap_idf(
+        jnp.arange(len(feat_diff_steps)), mu_idf_flat_f
     ).T
 
     return AveragedSurface(
         feat_diff_grid=feat_diff_grid,
-        mu1_bias_grid=mu1_bias_grid,
-        mu2_bias_grid=mu2_bias_grid,
-        mu1_comp1_surface=mu1_comp1_surface,
-        mu1_comp2_surface=mu1_comp2_surface,
-        mu2_comp1_surface=mu2_surface,
-        mu2_comp2_surface=mu2_surface,
+        mu_feat_bias_grid=mu_feat_bias_grid,
+        mu_idf_bias_grid=mu_idf_bias_grid,
+        mu_feat_comp1_surface=mu_feat_comp1_surface,
+        mu_feat_comp2_surface=mu_feat_comp2_surface,
+        mu_idf_comp1_surface=mu_idf_surface,
+        mu_idf_comp2_surface=mu_idf_surface,
         n_sample_files_used=2,
         kde_parameters={
             'bias_bandwidth': bias_bandwidth,

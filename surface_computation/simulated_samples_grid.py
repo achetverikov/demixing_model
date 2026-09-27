@@ -125,7 +125,7 @@ def get_grid_level_info(level: int = 1) -> Dict:
     }
 
 
-def create_param_identifier(sd_feat1: float, sd_feat2: float, sd_spat: float,
+def create_param_identifier(sd_feat1: float, sd_feat2: float, sd_idf: float,
                             run_index: Optional[int] = None) -> Tuple[str, str]:
     """Create human-readable parameter identifier and hash.
 
@@ -133,20 +133,20 @@ def create_param_identifier(sd_feat1: float, sd_feat2: float, sd_spat: float,
     to produce distinct filenames and hashes for each independent run.
     """
     if run_index is not None:
-        param_name = f"sf1_{sd_feat1:.1f}_sf2_{sd_feat2:.1f}_sp_{sd_spat:.1f}_r{run_index}"
-        param_str = f"{sd_feat1:.6f}_{sd_feat2:.6f}_{sd_spat:.6f}_r{run_index}"
+        param_name = f"sf1_{sd_feat1:.1f}_sf2_{sd_feat2:.1f}_idf_{sd_idf:.1f}_r{run_index}"
+        param_str = f"{sd_feat1:.6f}_{sd_feat2:.6f}_{sd_idf:.6f}_r{run_index}"
     else:
-        param_name = f"sf1_{sd_feat1:.1f}_sf2_{sd_feat2:.1f}_sp_{sd_spat:.1f}"
-        param_str = f"{sd_feat1:.6f}_{sd_feat2:.6f}_{sd_spat:.6f}"
+        param_name = f"sf1_{sd_feat1:.1f}_sf2_{sd_feat2:.1f}_idf_{sd_idf:.1f}"
+        param_str = f"{sd_feat1:.6f}_{sd_feat2:.6f}_{sd_idf:.6f}"
     param_hash = hashlib.md5(param_str.encode()).hexdigest()[:8]
     return param_name, param_hash
 
 
-def create_surface_identifier(sd_feat1: float, sd_feat2: float, sd_spat: float) -> str:
+def create_surface_identifier(sd_feat1: float, sd_feat2: float, sd_idf: float) -> str:
     """Create a compact canonical ID for one averaged surface."""
     canonical_sf1 = min(sd_feat1, sd_feat2)
     canonical_sf2 = max(sd_feat1, sd_feat2)
-    return f"{canonical_sf1:.1f}|{canonical_sf2:.1f}|{sd_spat:.1f}"
+    return f"{canonical_sf1:.1f}|{canonical_sf2:.1f}|{sd_idf:.1f}"
 
 
 def create_pipeline_surface_ids_for_level(level: int) -> set:
@@ -162,10 +162,10 @@ def create_pipeline_surface_ids_for_level(level: int) -> set:
                   if level == 2 else config.param_range_low)
     param_vals = np.arange(fine_start, config.param_range_high + step_size, step_size)
     ids = {
-        create_surface_identifier(float(sf1), float(sf2), float(sp))
+        create_surface_identifier(float(sf1), float(sf2), float(idf))
         for sf1 in param_vals
         for sf2 in param_vals
-        for sp in param_vals
+        for idf in param_vals
         if sf1 <= sf2
     }
 
@@ -176,11 +176,11 @@ def create_pipeline_surface_ids_for_level(level: int) -> set:
 
 
 def save_samples_checkpoint(output_dir: Path,
-                            mu1_samples: Array,
-                            mu2_samples: Array,
+                            mu_feat_samples: Array,
+                            mu_idf_samples: Array,
                             param_name: str,
                             param_hash: str, sd_feat1: float, sd_feat2: float,
-                            sd_spat: float, computation_time: float, machine_id: str,
+                            sd_idf: float, computation_time: float, machine_id: str,
                             n_simulations: int = 0, n_samples: int = 0,
                             random_seed: int = 0,
                             full_results: Optional[Array] = None, save_csv: bool = False) -> None:
@@ -193,7 +193,7 @@ def save_samples_checkpoint(output_dir: Path,
         'parameters': {
             'sd_feat1': sd_feat1,
             'sd_feat2': sd_feat2,
-            'sd_spat': sd_spat,
+            'sd_idf': sd_idf,
             'param_name': param_name,
             'param_hash': param_hash,
             'machine_id': machine_id,
@@ -203,8 +203,8 @@ def save_samples_checkpoint(output_dir: Path,
             'random_seed': random_seed,
             'git_commit': get_git_commit(),
         },
-        'mu1_samples': mu1_samples.astype(jnp.float16),
-        'mu2_samples': mu2_samples.astype(jnp.float16),
+        'mu_feat_samples': mu_feat_samples.astype(jnp.float16),
+        'mu_idf_samples': mu_idf_samples.astype(jnp.float16),
         'computation_time': computation_time,
         'timestamp': time.time()
     }
@@ -229,7 +229,7 @@ def save_samples_checkpoint(output_dir: Path,
         # Get column names from jax_fit_functions module (single source of truth)
         # jax_generate_and_fit returns 21 columns (see jf.RESULT_COLUMNS)
         # simulate_dual_component_bias_distribution appends 2 bias columns
-        columns = jf.RESULT_COLUMNS + ['mu1_bias', 'mu2_bias']
+        columns = jf.RESULT_COLUMNS + ['mu_feat_bias', 'mu_idf_bias']
 
         header = ','.join(columns)
         np.savetxt(csv_file, np.asarray(full_results_2d), delimiter=',',
@@ -249,7 +249,7 @@ def load_progress_state(output_dir: Path) -> Dict:
             if re.match(r"(surface|samples)_sf1_.*\.pkl.*$", entry.name):
                 try:
                     # Extract param_hash from filename instead of loading pickle
-                    # Filename format: samples_sf1_X_sf2_Y_sp_Z_HASH.pkl
+                    # Filename format: samples_sf1_X_sf2_Y_idf_Z_HASH.pkl
                     hash_value = re.search(r'_([a-f0-9]+)(?=\.pkl)', entry.name).group(1)
                     completed_hashes.add(hash_value)
 
@@ -452,15 +452,15 @@ class ChunkedGridComputer:
     def _create_param_groups(self) -> List[List[Tuple]]:
         """Create parameter combination groups for the current grid level or custom list.
 
-        Each group is a list of 1 or 2 tuples (i, j, k, sf1, sf2, sp).
+        Each group is a list of 1 or 2 tuples (i, j, k, sf1, sf2, idf).
         Off-diagonal pairs (sf1 != sf2) yield a group of two: canonical (sf1 < sf2)
         followed by its mirror (sf2, sf1).  Diagonal combinations yield a singleton.
         Grouping guarantees that mirrors always fall in the same chunk.
         """
         if self.custom_param_list:
             if not self.pipeline:
-                return [[(idx, idx, idx, float(sf1), float(sf2), float(sp), None)]
-                        for idx, (sf1, sf2, sp) in enumerate(self.custom_param_list)]
+                return [[(idx, idx, idx, float(sf1), float(sf2), float(idf), None)]
+                        for idx, (sf1, sf2, idf) in enumerate(self.custom_param_list)]
 
             # Pipeline mode: group mirrors/diagonals into 2-entry groups.
             # Off-diagonal (sf1 != sf2): canonical (min,max) + mirror (max,min).
@@ -468,24 +468,24 @@ class ChunkedGridComputer:
             # Deduplicate by canonical key so mirror entries in the list don't double-count.
             seen: set = set()
             groups: List[List[Tuple]] = []
-            for idx, (sf1, sf2, sp) in enumerate(self.custom_param_list):
-                sf1, sf2, sp = float(sf1), float(sf2), float(sp)
+            for idx, (sf1, sf2, idf) in enumerate(self.custom_param_list):
+                sf1, sf2, idf = float(sf1), float(sf2), float(idf)
                 if sf1 == sf2:
-                    key = (sf1, sf2, sp)
+                    key = (sf1, sf2, idf)
                     if key not in seen:
                         seen.add(key)
                         groups.append([
-                            (idx, idx, idx, sf1, sf2, sp, 0),
-                            (idx, idx, idx, sf1, sf2, sp, 1),
+                            (idx, idx, idx, sf1, sf2, idf, 0),
+                            (idx, idx, idx, sf1, sf2, idf, 1),
                         ])
                 else:
                     canon_sf1, canon_sf2 = min(sf1, sf2), max(sf1, sf2)
-                    key = (canon_sf1, canon_sf2, sp)
+                    key = (canon_sf1, canon_sf2, idf)
                     if key not in seen:
                         seen.add(key)
                         groups.append([
-                            (idx, idx, idx, canon_sf1, canon_sf2, sp, None),
-                            (idx, idx, idx, canon_sf2, canon_sf1, sp, None),
+                            (idx, idx, idx, canon_sf1, canon_sf2, idf, None),
+                            (idx, idx, idx, canon_sf2, canon_sf1, idf, None),
                         ])
             return groups
 
@@ -498,19 +498,19 @@ class ChunkedGridComputer:
             for j, sf2 in enumerate(param_vals):
                 if sf1 > sf2:
                     continue  # covered as the mirror in group (sf2, sf1)
-                for k, sp in enumerate(param_vals):
+                for k, idf in enumerate(param_vals):
                     if sf1 < sf2:
                         # Off-diagonal: canonical + mirror, no run_index needed
                         groups.append([
-                            (i, j, k, float(sf1), float(sf2), float(sp), None),
-                            (j, i, k, float(sf2), float(sf1), float(sp), None),
+                            (i, j, k, float(sf1), float(sf2), float(idf), None),
+                            (j, i, k, float(sf2), float(sf1), float(idf), None),
                         ])
                     else:
                         # Diagonal (sf1==sf2): two independent runs with different seeds
                         # so the averaged surface has the same sample count as off-diagonal.
                         groups.append([
-                            (i, j, k, float(sf1), float(sf2), float(sp), 0),
-                            (i, j, k, float(sf1), float(sf2), float(sp), 1),
+                            (i, j, k, float(sf1), float(sf2), float(idf), 0),
+                            (i, j, k, float(sf1), float(sf2), float(idf), 1),
                         ])
         return groups
 
@@ -524,7 +524,7 @@ class ChunkedGridComputer:
         try:
             with gzip.open(samples_file, 'rb') as f:
                 data = pickle.load(f)
-                return ('parameters' in data and ('mu1_samples' in data or 'mu2_samples' in data))
+                return ('parameters' in data and ('mu_feat_samples' in data or 'mu_idf_samples' in data))
         except (pickle.PickleError, EOFError, gzip.BadGzipFile):
             # Corrupt file — delete and recompute
             try:
@@ -540,7 +540,7 @@ class ChunkedGridComputer:
         return self.lock_backend.acquire(chunk_id, self.machine_id, self.lock_ttl)
 
     def _log_error(self, param_name: str, param_hash: str,
-                   sd_feat1: float, sd_feat2: float, sd_spat: float,
+                   sd_feat1: float, sd_feat2: float, sd_idf: float,
                    error: Exception) -> None:
         """Append a write-failure entry to the machine-specific error log (JSONL)."""
         log_file = self.output_dir / f"errors_{self.machine_id}.jsonl"
@@ -550,7 +550,7 @@ class ChunkedGridComputer:
             'param_hash': param_hash,
             'sd_feat1': sd_feat1,
             'sd_feat2': sd_feat2,
-            'sd_spat': sd_spat,
+            'sd_idf': sd_idf,
             'error': str(error),
         }
         with open(log_file, 'a') as f:
@@ -589,9 +589,9 @@ class ChunkedGridComputer:
             print(f"\n[{self.machine_id}] All {len(errors)} previously errored files "
                   f"are now present and correct.")
 
-    def _save_with_retry(self, output_dir: Path, mu1_bias_array, mu2_bias_array,
+    def _save_with_retry(self, output_dir: Path, mu_feat_bias_array, mu_idf_bias_array,
                          param_name: str, param_hash: str,
-                         sd_feat1: float, sd_feat2: float, sd_spat: float,
+                         sd_feat1: float, sd_feat2: float, sd_idf: float,
                          samples_time: float, samples_params: Dict,
                          run_index: Optional[int] = None,
                          full_results_combined=None) -> str:
@@ -609,8 +609,8 @@ class ChunkedGridComputer:
         for attempt in range(max_retries):
             try:
                 save_samples_checkpoint(
-                    output_dir, mu1_bias_array, mu2_bias_array,
-                    param_name, param_hash, sd_feat1, sd_feat2, sd_spat,
+                    output_dir, mu_feat_bias_array, mu_idf_bias_array,
+                    param_name, param_hash, sd_feat1, sd_feat2, sd_idf,
                     samples_time, self.machine_id,
                     n_simulations=samples_params['n_simulations'],
                     n_samples=samples_params['n_samples'],
@@ -632,7 +632,7 @@ class ChunkedGridComputer:
                 print(f"  [{self.machine_id}] File still absent, retrying write...")
 
         print(f"  [{self.machine_id}] All {max_retries} retries exhausted for {param_name}, logging error.")
-        self._log_error(param_name, param_hash, sd_feat1, sd_feat2, sd_spat, last_exc)
+        self._log_error(param_name, param_hash, sd_feat1, sd_feat2, sd_idf, last_exc)
         return 'error'
 
     def _get_completed_keys(self) -> set:
@@ -654,13 +654,13 @@ class ChunkedGridComputer:
             else:
                 import re
                 pat = re.compile(
-                    r"averaged_sf1_(?P<sf1>[\d.]+)_sf2_(?P<sf2>[\d.]+)_sp_(?P<sp>[\d.]+)\.pkl$"
+                    r"averaged_sf1_(?P<sf1>[\d.]+)_sf2_(?P<sf2>[\d.]+)_idf_(?P<idf>[\d.]+)\.pkl$"
                 )
                 for f in self.averaged_surfaces_dir.glob("averaged_sf1_*.pkl"):
                     m = pat.match(f.name)
                     if m:
                         completed.add(create_surface_identifier(
-                            float(m['sf1']), float(m['sf2']), float(m['sp'])
+                            float(m['sf1']), float(m['sf2']), float(m['idf'])
                         ))
             if self.completion_registry:
                 try:
@@ -701,12 +701,12 @@ class ChunkedGridComputer:
     def _group_is_complete(self, group: List[Tuple], completed_keys: set) -> bool:
         """Return True if all outputs for this group already exist."""
         if self.pipeline:
-            # Pipeline output is one averaged surface per group, keyed by canonical (sf1<=sf2, sp)
-            _, _, _, sf1, sf2, sp, _ = group[0]
-            return create_surface_identifier(sf1, sf2, sp) in completed_keys
+            # Pipeline output is one averaged surface per group, keyed by canonical (sf1<=sf2, idf)
+            _, _, _, sf1, sf2, idf, _ = group[0]
+            return create_surface_identifier(sf1, sf2, idf) in completed_keys
         # Standard mode: check all sample hashes
-        for (_, _, _, sf1, sf2, sp, run_index) in group:
-            _, param_hash = create_param_identifier(sf1, sf2, sp, run_index)
+        for (_, _, _, sf1, sf2, idf, run_index) in group:
+            _, param_hash = create_param_identifier(sf1, sf2, idf, run_index)
             if param_hash not in completed_keys:
                 return False
         return True
@@ -746,67 +746,67 @@ class ChunkedGridComputer:
 
         return None, None
 
-    def _compute_samples_for_entry(self, sd_feat1: float, sd_feat2: float, sd_spat: float,
+    def _compute_samples_for_entry(self, sd_feat1: float, sd_feat2: float, sd_idf: float,
                                     run_index: Optional[int], samples_params: Dict,
                                     feat_diff_vals) -> Tuple:
-        """Generate mu1/mu2 sample arrays for one parameter combination.
+        """Generate mu_feat/mu_idf sample arrays for one parameter combination.
 
-        Returns (mu1_bias_array, mu2_bias_array, full_results_combined).
+        Returns (mu_feat_bias_array, mu_idf_bias_array, full_results_combined).
         full_results_combined is None unless save_full_results is True.
         """
         num_scan_loops = 10
         num_sims_per_loop = samples_params['n_simulations'] // num_scan_loops
 
         def scan_fn(carry, inputs):
-            subkey, feat_diff, sf1, sf2, sp = inputs
+            subkey, feat_diff, sf1, sf2, idf = inputs
             if self.save_full_results:
                 b1, b2, full = jfm.simulate_dual_component_bias_distribution(
-                    subkey, sf1, sf2, sp, feat_diff, 42.0, num_sims_per_loop,
+                    subkey, sf1, sf2, idf, feat_diff, 42.0, num_sims_per_loop,
                     samples_params['n_samples'], return_full_results=True,
                     fix_weights=self.fix_weights, algorithm=self.algorithm,
                     diagonal_covariance=self.diagonal_covariance,
                 )
                 return carry, (b1, b2, full)
             b1, b2 = jfm.simulate_dual_component_bias_distribution(
-                subkey, sf1, sf2, sp, feat_diff, 42.0, num_sims_per_loop,
+                subkey, sf1, sf2, idf, feat_diff, 42.0, num_sims_per_loop,
                 samples_params['n_samples'], return_full_results=False,
                 fix_weights=self.fix_weights, algorithm=self.algorithm,
                 diagonal_covariance=self.diagonal_covariance,
             )
             return carry, (b1, b2)
 
-        _, param_hash = create_param_identifier(sd_feat1, sd_feat2, sd_spat, run_index)
+        _, param_hash = create_param_identifier(sd_feat1, sd_feat2, sd_idf, run_index)
         base_key = jax.random.PRNGKey(samples_params['random_seed'])
         param_key = jax.random.fold_in(base_key, int(param_hash, 16))
         key = jax.random.fold_in(param_key, run_index if run_index is not None else 0)
 
         sd1_arr = jnp.full(len(feat_diff_vals), sd_feat1)
         sd2_arr = jnp.full(len(feat_diff_vals), sd_feat2)
-        sp_arr  = jnp.full(len(feat_diff_vals), sd_spat)
+        sp_arr  = jnp.full(len(feat_diff_vals), sd_idf)
 
-        all_mu1, all_mu2, all_full = [], [], []
+        all_mu_feat, all_mu_idf, all_full = [], [], []
         for rep in range(num_scan_loops):
             key, *subkeys = jax.random.split(key, len(feat_diff_vals) + 1)
             tic = time.time()
             if self.save_full_results:
-                _, (mu1, mu2, full) = jax.lax.scan(
+                _, (mu_feat, mu_idf, full) = jax.lax.scan(
                     scan_fn, None,
                     (jnp.array(subkeys), feat_diff_vals, sd1_arr, sd2_arr, sp_arr)
                 )
                 all_full.append(full)
             else:
-                _, (mu1, mu2) = jax.lax.scan(
+                _, (mu_feat, mu_idf) = jax.lax.scan(
                     scan_fn, None,
                     (jnp.array(subkeys), feat_diff_vals, sd1_arr, sd2_arr, sp_arr)
                 )
             print(f"    Scan {rep + 1}/{num_scan_loops}: {time.time() - tic:.1f}s")
-            all_mu1.append(mu1)
-            all_mu2.append(mu2)
+            all_mu_feat.append(mu_feat)
+            all_mu_idf.append(mu_idf)
 
-        mu1_out = jnp.concatenate(all_mu1, axis=1)
-        mu2_out = jnp.concatenate(all_mu2, axis=1)
+        mu_feat_out = jnp.concatenate(all_mu_feat, axis=1)
+        mu_idf_out = jnp.concatenate(all_mu_idf, axis=1)
         full_out = jnp.concatenate(all_full, axis=1) if self.save_full_results else None
-        return mu1_out, mu2_out, full_out
+        return mu_feat_out, mu_idf_out, full_out
 
     def _process_group_pipeline(self, group: List[Tuple], samples_params: Dict,
                                  feat_diff_vals) -> str:
@@ -814,13 +814,13 @@ class ChunkedGridComputer:
 
         Returns 'saved', 'skipped', or 'error'.
         """
-        _, _, _, sf1_a, sf2_a, sp, run_index_a = group[0]
+        _, _, _, sf1_a, sf2_a, idf, run_index_a = group[0]
         _, _, _, sf1_b, sf2_b, _,  run_index_b = group[1]
 
         canon_sf1, canon_sf2 = min(sf1_a, sf2_a), max(sf1_a, sf2_a)
-        surface_id = create_surface_identifier(sf1_a, sf2_a, sp)
+        surface_id = create_surface_identifier(sf1_a, sf2_a, idf)
         surface_file = self.averaged_surfaces_dir / (
-            f"averaged_sf1_{canon_sf1:.1f}_sf2_{canon_sf2:.1f}_sp_{sp:.1f}.pkl"
+            f"averaged_sf1_{canon_sf1:.1f}_sf2_{canon_sf2:.1f}_idf_{idf:.1f}.pkl"
         )
 
         completed_remotely = False
@@ -836,14 +836,14 @@ class ChunkedGridComputer:
         if surface_file.exists() or completed_remotely:
             return 'skipped'
 
-        print(f"  [{self.machine_id}] Pipeline: sf1={sf1_a:.1f} sf2={sf2_a:.1f} sp={sp:.1f}")
+        print(f"  [{self.machine_id}] Pipeline: sf1={sf1_a:.1f} sf2={sf2_a:.1f} idf={idf:.1f}")
 
         try:
-            mu1_a, mu2_a, full_a = self._compute_samples_for_entry(
-                sf1_a, sf2_a, sp, run_index_a, samples_params, feat_diff_vals
+            mu_feat_a, mu_idf_a, full_a = self._compute_samples_for_entry(
+                sf1_a, sf2_a, idf, run_index_a, samples_params, feat_diff_vals
             )
-            mu1_b, mu2_b, full_b = self._compute_samples_for_entry(
-                sf1_b, sf2_b, sp, run_index_b, samples_params, feat_diff_vals
+            mu_feat_b, mu_idf_b, full_b = self._compute_samples_for_entry(
+                sf1_b, sf2_b, idf, run_index_b, samples_params, feat_diff_vals
             )
         except Exception as e:
             print(f"  [{self.machine_id}] Simulation error: {e}")
@@ -851,19 +851,19 @@ class ChunkedGridComputer:
 
         # Optionally persist sample files
         if self.save_samples:
-            for (sf1, sf2, sp_, ri, mu1, mu2, full) in [
-                (sf1_a, sf2_a, sp, run_index_a, mu1_a, mu2_a, full_a),
-                (sf1_b, sf2_b, sp, run_index_b, mu1_b, mu2_b, full_b),
+            for (sf1, sf2, sp_, ri, mu_feat, mu_idf, full) in [
+                (sf1_a, sf2_a, idf, run_index_a, mu_feat_a, mu_idf_a, full_a),
+                (sf1_b, sf2_b, idf, run_index_b, mu_feat_b, mu_idf_b, full_b),
             ]:
                 pname, phash = create_param_identifier(sf1, sf2, sp_, ri)
                 self._save_with_retry(
-                    self.output_dir, mu1, mu2, pname, phash,
+                    self.output_dir, mu_feat, mu_idf, pname, phash,
                     sf1, sf2, sp_, 0.0, samples_params, ri, full,
                 )
 
         try:
             averaged = average_sample_pair(
-                mu1_a, mu2_a, mu1_b, mu2_b, sf1_a, sf2_a, self.avg_fns
+                mu_feat_a, mu_idf_a, mu_feat_b, mu_idf_b, sf1_a, sf2_a, self.avg_fns
             )
         except Exception as e:
             print(f"  [{self.machine_id}] Averaging error: {e}")
@@ -875,7 +875,7 @@ class ChunkedGridComputer:
         with open(tmp, 'wb') as f:
             _pickle.dump({
                 'parameters': {
-                    'sd_feat1': canon_sf1, 'sd_feat2': canon_sf2, 'sd_spat': sp,
+                    'sd_feat1': canon_sf1, 'sd_feat2': canon_sf2, 'sd_idf': idf,
                     'machine_id': self.machine_id,
                     'n_simulations': samples_params['n_simulations'],
                     'n_samples': samples_params['n_samples'],
@@ -904,11 +904,11 @@ class ChunkedGridComputer:
 
     def _surface_info_for_group(self, group: List[Tuple]) -> Tuple[str, Path]:
         """Return the canonical surface ID and expected local path for a group."""
-        _, _, _, sf1, sf2, sp, _ = group[0]
+        _, _, _, sf1, sf2, idf, _ = group[0]
         canon_sf1, canon_sf2 = min(sf1, sf2), max(sf1, sf2)
-        surface_id = create_surface_identifier(sf1, sf2, sp)
+        surface_id = create_surface_identifier(sf1, sf2, idf)
         surface_file = self.averaged_surfaces_dir / (
-            f"averaged_sf1_{canon_sf1:.1f}_sf2_{canon_sf2:.1f}_sp_{sp:.1f}.pkl"
+            f"averaged_sf1_{canon_sf1:.1f}_sf2_{canon_sf2:.1f}_idf_{idf:.1f}.pkl"
         )
         return surface_id, surface_file
 
@@ -1030,9 +1030,9 @@ class ChunkedGridComputer:
                     surfaces_skipped += 1
             else:
                 # Standard mode: process each combination independently
-                for (i, j, k, sd_feat1, sd_feat2, sd_spat, run_index) in group:
+                for (i, j, k, sd_feat1, sd_feat2, sd_idf, run_index) in group:
                     param_name, param_hash = create_param_identifier(
-                        sd_feat1, sd_feat2, sd_spat, run_index
+                        sd_feat1, sd_feat2, sd_idf, run_index
                     )
                     if self._samples_exist(param_name, param_hash):
                         surfaces_skipped += 1
@@ -1041,15 +1041,15 @@ class ChunkedGridComputer:
                     samples_start = time.time()
                     print(f"  [{self.machine_id}] Computing {surfaces_computed + 1}: "
                           f"sd_feat1={sd_feat1:.1f}, sd_feat2={sd_feat2:.1f}, "
-                          f"sd_spat={sd_spat:.1f}")
+                          f"sd_idf={sd_idf:.1f}")
 
-                    mu1, mu2, full = self._compute_samples_for_entry(
-                        sd_feat1, sd_feat2, sd_spat, run_index, samples_params, feat_diff_vals
+                    mu_feat, mu_idf, full = self._compute_samples_for_entry(
+                        sd_feat1, sd_feat2, sd_idf, run_index, samples_params, feat_diff_vals
                     )
                     samples_time = time.time() - samples_start
                     result = self._save_with_retry(
-                        self.output_dir, mu1, mu2, param_name, param_hash,
-                        sd_feat1, sd_feat2, sd_spat, samples_time, samples_params,
+                        self.output_dir, mu_feat, mu_idf, param_name, param_hash,
+                        sd_feat1, sd_feat2, sd_idf, samples_time, samples_params,
                         run_index, full,
                     )
                     if result == 'saved':
@@ -1099,23 +1099,23 @@ class ChunkedGridComputer:
         with open(summary_file, 'w') as f:
             json.dump(summary, f, indent=2)
 
-    def compute_grid(self, feat_diff_step: int = 2, mu1_bias_step: int = 2, mu2_bias_step: int = 6,
+    def compute_grid(self, feat_diff_step: int = 2, mu_feat_bias_step: int = 2, mu_idf_bias_step: int = 6,
                      feat_diff_range: Tuple[int, int] = (4, 180),
-                     mu1_bias_range: Tuple[int, int] = (-180, 180),
-                     mu2_bias_range: Tuple[int, int] = (-498, 498),
+                     mu_feat_bias_range: Tuple[int, int] = (-180, 180),
+                     mu_idf_bias_range: Tuple[int, int] = (-498, 498),
                      n_simulations: int = 1000, n_samples: int = 100, random_seed: int = 42,
                      max_chunks: Optional[int] = None) -> Dict:
         """Main computation loop with dynamic chunking."""
 
         samples_params = {
-            'feat_diff_step': feat_diff_step, 'mu1_bias_step': mu1_bias_step,
-            'mu2_bias_step': mu2_bias_step, 'feat_diff_range': feat_diff_range,
-            'mu1_bias_range': mu1_bias_range, 'mu2_bias_range': mu2_bias_range,
+            'feat_diff_step': feat_diff_step, 'mu_feat_bias_step': mu_feat_bias_step,
+            'mu_idf_bias_step': mu_idf_bias_step, 'feat_diff_range': feat_diff_range,
+            'mu_feat_bias_range': mu_feat_bias_range, 'mu_idf_bias_range': mu_idf_bias_range,
             'n_simulations': n_simulations, 'n_samples': n_samples, 'random_seed': random_seed
         }
 
         print(f"\n[{self.machine_id}] Starting dynamic chunked computation")
-        print(f"Surface parameters: steps=({feat_diff_step},{mu1_bias_step},{mu2_bias_step}), "
+        print(f"Surface parameters: steps=({feat_diff_step},{mu_feat_bias_step},{mu_idf_bias_step}), "
               f"sims={n_simulations}×{n_samples}")
 
         session_start = time.time()
@@ -1240,12 +1240,12 @@ def get_grid_status(grid_level: int = None) -> Dict:
 
     # Strict pattern: only canonical filenames with 8-char hex hash and .pkl.gz extension.
     # Excludes OneDrive conflict copies, .tmp files, and other spurious matches.
-    pattern = re.compile(r"samples_sf1_(?P<sf1>[\d.]+)_sf2_(?P<sf2>[\d.]+)_sp_(?P<sp>[\d.]+)(?:_r\d+)?_[a-f0-9]{8}\.pkl\.gz$")
+    pattern = re.compile(r"samples_sf1_(?P<sf1>[\d.]+)_sf2_(?P<sf2>[\d.]+)_idf_(?P<idf>[\d.]+)(?:_r\d+)?_[a-f0-9]{8}\.pkl\.gz$")
 
     if grid_level == 1:
         # Level 1: count surfaces at coarse step intervals
         param_vals = np.arange(config.param_range_low, config.param_range_high + config.param_step, config.param_step)
-        for samples_file in output_dir.glob("samples_sf1_*_sf2_*_sp_*.pkl.gz"):
+        for samples_file in output_dir.glob("samples_sf1_*_sf2_*_idf_*.pkl.gz"):
             try:
                 match = pattern.match(samples_file.name)
                 if not match:
@@ -1253,10 +1253,10 @@ def get_grid_status(grid_level: int = None) -> Dict:
 
                 sf1 = float(match.group("sf1"))
                 sf2 = float(match.group("sf2"))
-                sp = float(match.group("sp"))
+                idf = float(match.group("idf"))
 
                 # Check if this surface belongs to Level 1 (coarse grid)
-                if (sf1 in param_vals and sf2 in param_vals and sp in param_vals):
+                if (sf1 in param_vals and sf2 in param_vals and idf in param_vals):
                     level_surfaces += 1
 
             except (ValueError, IndexError):
@@ -1268,7 +1268,7 @@ def get_grid_status(grid_level: int = None) -> Dict:
         fine_param_vals = np.arange(fine_start, config.param_range_high + step_size, step_size)
         coarse_param_vals = np.arange(config.param_range_low, config.param_range_high + config.param_step, config.param_step)
         
-        for samples_file in output_dir.glob("samples_sf1_*_sf2_*_sp_*.pkl.gz"):
+        for samples_file in output_dir.glob("samples_sf1_*_sf2_*_idf_*.pkl.gz"):
             try:
                 match = pattern.match(samples_file.name)
                 if not match:
@@ -1276,11 +1276,11 @@ def get_grid_status(grid_level: int = None) -> Dict:
 
                 sf1 = float(match.group("sf1"))
                 sf2 = float(match.group("sf2"))
-                sp = float(match.group("sp"))
+                idf = float(match.group("idf"))
 
                 # Check if this surface belongs to Level 2 (fine grid excluding coarse grid)
-                in_fine_grid = (sf1 in fine_param_vals and sf2 in fine_param_vals and sp in fine_param_vals)
-                in_coarse_grid = (sf1 in coarse_param_vals and sf2 in coarse_param_vals and sp in coarse_param_vals)
+                in_fine_grid = (sf1 in fine_param_vals and sf2 in fine_param_vals and idf in fine_param_vals)
+                in_coarse_grid = (sf1 in coarse_param_vals and sf2 in coarse_param_vals and idf in coarse_param_vals)
                 
                 if in_fine_grid and not in_coarse_grid:
                     level_surfaces += 1
@@ -1470,13 +1470,13 @@ def run_chunked_computation(machine_id: str = "PC1", grid_level: int = 1,
         if avg_dir.exists():
             import re
             pat = re.compile(
-                r"averaged_sf1_(?P<sf1>[\d.]+)_sf2_(?P<sf2>[\d.]+)_sp_(?P<sp>[\d.]+)\.pkl$"
+                r"averaged_sf1_(?P<sf1>[\d.]+)_sf2_(?P<sf2>[\d.]+)_idf_(?P<idf>[\d.]+)\.pkl$"
             )
             for surface_file in avg_dir.glob('averaged_sf1_*.pkl'):
                 match = pat.match(surface_file.name)
                 if match:
                     completed_keys.add(create_surface_identifier(
-                        float(match['sf1']), float(match['sf2']), float(match['sp'])
+                        float(match['sf1']), float(match['sf2']), float(match['idf'])
                     ))
 
         level1_ids = create_pipeline_surface_ids_for_level(1)
@@ -1768,11 +1768,11 @@ def extract_params_from_csv_dir(csv_dir: str = './csv_samples') -> List[Tuple[fl
     Parameters:
     -----------
     csv_dir : str
-        Directory containing CSV files with naming: samples_sf1_X_sf2_Y_sp_Z.csv
+        Directory containing CSV files with naming: samples_sf1_X_sf2_Y_idf_Z.csv
 
     Returns:
     --------
-    List of (sd_feat1, sd_feat2, sd_spat) tuples
+    List of (sd_feat1, sd_feat2, sd_idf) tuples
     """
     import re
     from pathlib import Path
@@ -1782,7 +1782,7 @@ def extract_params_from_csv_dir(csv_dir: str = './csv_samples') -> List[Tuple[fl
         print(f"Warning: CSV directory {csv_dir} does not exist")
         return []
 
-    pattern = re.compile(r'samples_sf1_([\d.]+)_sf2_([\d.]+)_sp_([\d.]+)\.csv')
+    pattern = re.compile(r'samples_sf1_([\d.]+)_sf2_([\d.]+)_idf_([\d.]+)\.csv')
     param_combos = []
 
     for csv_file in csv_path.glob('samples_sf1_*.csv'):
@@ -1790,33 +1790,33 @@ def extract_params_from_csv_dir(csv_dir: str = './csv_samples') -> List[Tuple[fl
         if match:
             sd_feat1 = float(match.group(1))
             sd_feat2 = float(match.group(2))
-            sd_spat = float(match.group(3))
-            param_combos.append((sd_feat1, sd_feat2, sd_spat))
+            sd_idf = float(match.group(3))
+            param_combos.append((sd_feat1, sd_feat2, sd_idf))
 
     # Sort for consistent ordering
     param_combos = sorted(set(param_combos))
 
     print(f"Found {len(param_combos)} parameter combinations in {csv_dir}")
     for params in param_combos:
-        print(f"  sf1={params[0]:.1f}, sf2={params[1]:.1f}, sp={params[2]:.1f}")
+        print(f"  sf1={params[0]:.1f}, sf2={params[1]:.1f}, idf={params[2]:.1f}")
 
     return param_combos
 
 
 def extract_params_from_csv_file(csv_file: str) -> List[Tuple[float, float, float]]:
-    """Read a scenario manifest with sd_feat1, sd_feat2, and sd_spat columns."""
+    """Read a scenario manifest with sd_feat1, sd_feat2, and sd_idf columns."""
     path = Path(csv_file)
     if not path.is_file():
         raise FileNotFoundError(f"Parameter manifest not found: {path}")
     with path.open(newline='') as handle:
         reader = csv.DictReader(handle)
-        required = {'sd_feat1', 'sd_feat2', 'sd_spat'}
+        required = {'sd_feat1', 'sd_feat2', 'sd_idf'}
         if not reader.fieldnames or not required.issubset(reader.fieldnames):
             raise ValueError(
                 f"{path} must contain columns {sorted(required)}; "
                 f"found {reader.fieldnames}")
         params = sorted({
-            (float(row['sd_feat1']), float(row['sd_feat2']), float(row['sd_spat']))
+            (float(row['sd_feat1']), float(row['sd_feat2']), float(row['sd_idf']))
             for row in reader
         })
     if not params:
@@ -1835,7 +1835,7 @@ def format_count_suffix(value: int) -> str:
 def build_samples_folder_name(n_simulations: int, n_samples: int, algorithm: str,
                               diagonal_covariance: bool, fix_weights: bool) -> str:
     """Construct descriptive folder name based on runtime parameters."""
-    geometry = 'circular' if jf.wrap_1st else 'linear'
+    geometry = 'circular' if jf.wrap_feat else 'linear'
     sim_part = format_count_suffix(n_simulations)
     algorithm_part = algorithm.lower()
     covariance_part = 'diagcov' if diagonal_covariance else 'fullcov'
@@ -1932,7 +1932,7 @@ def parse_arguments():
                         help='Run only for parameter combinations found in CSV files in this directory (e.g., ./csv_samples)')
     parser.add_argument('--param-file', type=str,
                         help='Run only parameter rows in a CSV manifest with '
-                             'sd_feat1, sd_feat2, and sd_spat columns')
+                             'sd_feat1, sd_feat2, and sd_idf columns')
     parser.add_argument('--save-full-results', action='store_true',
                         help='Save full simulation results in addition to biases')
     parser.add_argument('--save-csv', action='store_true',
@@ -2057,7 +2057,7 @@ def parse_arguments():
                 **shared_kwargs,
                 n_simulations=active_n_simulations,
                 n_samples=active_n_samples,
-                feat_diff_step=4, mu1_bias_step=4, mu2_bias_step=12,
+                feat_diff_step=4, mu_feat_bias_step=4, mu_idf_bias_step=12,
             )
         else:
             print("Running full computation")

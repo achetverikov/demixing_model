@@ -29,7 +29,7 @@ def main() -> int:
         return 2
 
     store = SurfaceObjectStore(config)
-    filename = "averaged_sf1_999.0_sf2_999.0_sp_999.0.pkl"
+    filename = "averaged_sf1_999.0_sf2_999.0_idf_999.0.pkl"
 
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / filename

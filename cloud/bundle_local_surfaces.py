@@ -5,7 +5,7 @@ The grid workers in ``surface_computation/simulated_samples_grid.py`` write
 surfaces as ``surface_bundle_<chunk_id>.pkl.gz`` plus a ``.manifest.json``
 sidecar, but that writer is wired into the worker's param groups and completion
 registry, so it cannot repack a directory that already holds loose
-``averaged_sf1_*_sf2_*_sp_*.pkl`` files.  This script produces byte-identical
+``averaged_sf1_*_sf2_*_idf_*.pkl`` files.  This script produces byte-identical
 payloads in that same format from such a directory, so both distribution sets
 can be shipped (and consumed) the same way.
 
@@ -30,7 +30,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple
 
-SURFACE_RE = re.compile(r"^averaged_sf1_([\d.]+)_sf2_([\d.]+)_sp_([\d.]+)\.pkl$")
+SURFACE_RE = re.compile(r"^averaged_sf1_([\d.]+)_sf2_([\d.]+)_idf_([\d.]+)\.pkl$")
 
 
 def _parse(name: str) -> Tuple[str, str, str]:
@@ -41,8 +41,8 @@ def _parse(name: str) -> Tuple[str, str, str]:
 
 
 def collect_surfaces(input_dir: Path) -> List[Path]:
-    """Return surface files ordered by (sf1, sf2, sp) so chunking is deterministic."""
-    files = [p for p in input_dir.glob("averaged_sf1_*_sf2_*_sp_*.pkl")
+    """Return surface files ordered by (sf1, sf2, idf) so chunking is deterministic."""
+    files = [p for p in input_dir.glob("averaged_sf1_*_sf2_*_idf_*.pkl")
              if SURFACE_RE.match(p.name)]
     return sorted(files, key=lambda p: tuple(float(v) for v in _parse(p.name)))
 
@@ -105,7 +105,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Repack loose averaged surfaces into chunk bundles.")
     parser.add_argument("--input-dir", required=True, type=Path,
-                        help="Directory holding loose averaged_sf1_*_sf2_*_sp_*.pkl files")
+                        help="Directory holding loose averaged_sf1_*_sf2_*_idf_*.pkl files")
     parser.add_argument("--output-dir", required=True, type=Path,
                         help="Directory to write bundles and manifests into")
     parser.add_argument("--chunk-size", type=int, default=50,

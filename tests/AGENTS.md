@@ -47,6 +47,6 @@ Calibration sweeps and negative controls used while designing a fixture normally
 
 Persistent reader/parser tests may deliberately receive malformed artifacts when a real trust boundary justifies it. Do not invent impossible states for pure functions, and keep one corruption test per meaningful persistent boundary rather than many hand-edited variants no supported writer can produce.
 
-Do not use source-grep tests by default. Source inspection is allowed only when behavior cannot enforce a repository-wide rule, such as the dedicated mu1-axis lint.
+Do not use source-grep tests by default. Source inspection is allowed only when behavior cannot enforce a repository-wide rule, such as the dedicated mu_feat-axis lint.
 
 Do not add transition-history guards to the maintained baseline. Once a migration is complete, preserve the supported behavior, not the implementation path that was used to reach it.

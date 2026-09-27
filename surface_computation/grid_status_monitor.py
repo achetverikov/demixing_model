@@ -63,7 +63,7 @@ def _resolve_samples_dir(args) -> Path:
     """Return the samples output directory, honouring --samples-dir if given."""
     if args.samples_dir:
         return Path(args.samples_dir)
-    geometry = 'circular' if jf.wrap_1st else 'linear'
+    geometry = 'circular' if jf.wrap_feat else 'linear'
     folder_name = build_samples_folder_name(
         n_simulations=args.n_simulations,
         n_samples=args.n_samples,

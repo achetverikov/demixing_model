@@ -24,19 +24,19 @@ class Config:
     
     # Grid parameters for likelihood surface computation
     feat_diff_step: int = 2
-    mu1_bias_step: int = 2  
-    mu2_bias_step: int = 6
+    mu_feat_bias_step: int = 2
+    mu_idf_bias_step: int = 6
     feat_diff_range: Tuple[int, int] = (2, 180)
-    mu1_bias_range: Tuple[int, int] = (-180, 180)
-    mu2_bias_range: Tuple[int, int] = (-498, 498)
+    mu_feat_bias_range: Tuple[int, int] = (-180, 180)
+    mu_idf_bias_range: Tuple[int, int] = (-498, 498)
 
     n_samples: int = 100
 
-    #: Force the pre-fix *inclusive* mu1_bias axis (181 points, both ±180).
-    #: Only ``shared.mu1_axis.legacy_mu1_axis()`` should ever set this, and only
+    #: Force the pre-fix *inclusive* mu_feat_bias axis (181 points, both ±180).
+    #: Only ``shared.mu_feat_axis.legacy_mu_feat_axis()`` should ever set this, and only
     #: to run a legacy checkpoint at the row count it was trained on before its
     #: output is trimmed.  Never set it to persist data.
-    mu1_inclusive_legacy: bool = False
+    mu_feat_inclusive_legacy: bool = False
 
     @property
     def data_range(self):
@@ -49,28 +49,28 @@ class Config:
         return (self.feat_diff_range[1] - self.feat_diff_range[0]) // self.feat_diff_step + 1
     
     @property
-    def mu1_bias_grid_size(self) -> int:
-        """Number of mu1 bias grid points.
+    def mu_feat_bias_grid_size(self) -> int:
+        """Number of mu_feat bias grid points.
 
-        The mu1_bias axis is **circular**, so it is represented half-open: no
-        ``+1``, because ``mu1_bias_range[1]`` (+180°) is the same angle as
-        ``mu1_bias_range[0]`` (-180°) and must not occupy a second cell.  The
+        The mu_feat_bias axis is **circular**, so it is represented half-open: no
+        ``+1``, because ``mu_feat_bias_range[1]`` (+180°) is the same angle as
+        ``mu_feat_bias_range[0]`` (-180°) and must not occupy a second cell.  The
         range tuple keeps its inclusive-looking ``(-180, 180)`` — it describes
-        the period, not an inclusive endpoint list.  See ``shared/mu1_axis.py``.
+        the period, not an inclusive endpoint list.  See ``shared/mu_feat_axis.py``.
         """
-        n = (self.mu1_bias_range[1] - self.mu1_bias_range[0]) // self.mu1_bias_step
-        return n + 1 if self.mu1_inclusive_legacy else n
+        n = (self.mu_feat_bias_range[1] - self.mu_feat_bias_range[0]) // self.mu_feat_bias_step
+        return n + 1 if self.mu_feat_inclusive_legacy else n
 
     def create_grid(self, param_name: str):
         """Create grid using arange with step size for given parameter.
 
         Args:
-            param_name: One of 'feat_diff', 'mu1_bias', 'mu2_bias'
+            param_name: One of 'feat_diff', 'mu_feat_bias', 'mu_idf_bias'
 
-        ``mu1_bias`` is special-cased as **stop-exclusive** because it is the one
+        ``mu_feat_bias`` is special-cased as **stop-exclusive** because it is the one
         genuinely circular axis: including both ±180 would give one physical
         angle two cells and break the FFT period of the motor-noise convolution.
-        ``feat_diff`` and ``mu2_bias`` are bounded intervals and stay inclusive.
+        ``feat_diff`` and ``mu_idf_bias`` are bounded intervals and stay inclusive.
         """
         import jax.numpy as jnp
         
@@ -79,12 +79,12 @@ class Config:
         step_attr = f"{param_name}_step"
         
         if not hasattr(self, range_attr) or not hasattr(self, step_attr):
-            raise ValueError(f"Unknown parameter name: {param_name}. Must be one of 'feat_diff', 'mu1_bias', 'mu2_bias'")
+            raise ValueError(f"Unknown parameter name: {param_name}. Must be one of 'feat_diff', 'mu_feat_bias', 'mu_idf_bias'")
         
         param_range = getattr(self, range_attr)
         param_step = getattr(self, step_attr)
 
-        if param_name == 'mu1_bias' and not self.mu1_inclusive_legacy:
+        if param_name == 'mu_feat_bias' and not self.mu_feat_inclusive_legacy:
             # Circular axis: stop-exclusive, so +180 is not a second copy of -180.
             return jnp.arange(param_range[0], param_range[1], param_step)
 
@@ -109,9 +109,9 @@ class Config:
         return self.param_step / 2
 
     @property
-    def mu1_surface_shape(self) -> Tuple[int, int]:
-        """Shape of mu1 surfaces: (mu1_bias_points, feat_diff_points)."""
-        return (self.mu1_bias_grid_size, self.feat_diff_grid_size)
+    def mu_feat_surface_shape(self) -> Tuple[int, int]:
+        """Shape of mu_feat surfaces: (mu_feat_bias_points, feat_diff_points)."""
+        return (self.mu_feat_bias_grid_size, self.feat_diff_grid_size)
 
 config = Config()
 

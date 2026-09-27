@@ -46,7 +46,7 @@ def create_sidebar(data_manager, app_state=None):
         st.write(f"**Coverage:**")
         st.write(f"- sd_feat1: {stats['unique_sd_feat1']} unique values")
         st.write(f"- sd_feat2: {stats['unique_sd_feat2']} unique values") 
-        st.write(f"- sd_spat: {stats['unique_sd_spat']} unique values")
+        st.write(f"- sd_idf: {stats['unique_sd_idf']} unique values")
         st.write(f"- Loaded surfaces: {stats['cache_size']}")
         
         # Show surface type breakdown if available
@@ -110,7 +110,7 @@ def create_sidebar(data_manager, app_state=None):
     filter_ranges = {}
     saved_filter_ranges = app_state.get('filter_ranges', {})
 
-    for param in ['sd_feat1', 'sd_feat2', 'sd_spat']:
+    for param in ['sd_feat1', 'sd_feat2', 'sd_idf']:
         if param in param_ranges:
             min_val, max_val = param_ranges[param]
 
@@ -163,21 +163,21 @@ def show_surface_info(params, title="Surface Parameters"):
     with col2:
         st.metric("sd_feat2", f"{params['sd_feat2']:.1f}")
     with col3:
-        st.metric("sd_spat", f"{params['sd_spat']:.1f}")
+        st.metric("sd_idf", f"{params['sd_idf']:.1f}")
 
 
 def show_debug_info(surface_data):
     """Show debug information about surface data."""
-    feat_diff_grid, mu1_error_grid, log_likelihood_surface, likelihood_surface = surface_data
+    feat_diff_grid, mu_feat_error_grid, log_likelihood_surface, likelihood_surface = surface_data
 
     st.write("**Debug Information:**")
     st.write(f"- feat_diff_grid shape: {feat_diff_grid.shape}")
-    st.write(f"- mu1_error_grid shape: {mu1_error_grid.shape}")
+    st.write(f"- mu_feat_error_grid shape: {mu_feat_error_grid.shape}")
     st.write(f"- log_likelihood_surface shape: {log_likelihood_surface.shape}")
     st.write(f"- likelihood_surface shape: {likelihood_surface.shape}")
     st.write(f"- Resolution: {log_likelihood_surface.shape[1]} × {log_likelihood_surface.shape[0]} points")
     st.write(f"- feat_diff range: {feat_diff_grid[0, :].min():.1f} to {feat_diff_grid[0, :].max():.1f}")
-    st.write(f"- mu1_error range: {mu1_error_grid[:, 0].min():.1f} to {mu1_error_grid[:, 0].max():.1f}")
+    st.write(f"- mu_feat_error range: {mu_feat_error_grid[:, 0].min():.1f} to {mu_feat_error_grid[:, 0].max():.1f}")
 
 
 def show_loading_performance(loading_time, n_surfaces):

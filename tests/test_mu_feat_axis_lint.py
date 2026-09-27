@@ -1,6 +1,6 @@
-"""Lint: nobody may reconstruct the mu1_bias axis by hand.
+"""Lint: nobody may reconstruct the mu_feat_bias axis by hand.
 
-The accessor in ``shared/mu1_axis.py`` is only "unfakeable" if something
+The accessor in ``shared/mu_feat_axis.py`` is only "unfakeable" if something
 enforces it.  Six audit rounds of the circularity fix each found sites the
 previous round had missed (1 -> 5 -> 6 -> 12 -> 19+ -> 23+), and the count never
 converged, because the failure mode is invisible: code that keeps running and
@@ -27,50 +27,50 @@ SEARCH_DIRS = [
 
 # (name, regex, why it is dangerous)
 PATTERNS = [
-    ("inclusive_mu1_arange",
+    ("inclusive_mu_feat_arange",
      re.compile(r"arange\(\s*-180[^)]*180\s*\+"),
-     "an inclusive arange over the mu1 range duplicates ±180 (histogram EDGES "
+     "an inclusive arange over the mu_feat range duplicates ±180 (histogram EDGES "
      "are the one legitimate exception — n+1 edges for n bins)"),
-    ("mu1_linspace",
-     re.compile(r"linspace\(\s*-?\s*(180|max_diss|mu1_error_min|mu1_bias_range)"),
+    ("mu_feat_linspace",
+     re.compile(r"linspace\(\s*-?\s*(180|max_diss|mu_feat_error_min|mu_feat_bias_range)"),
      "reconstructing the angular axis with linspace gives an inclusive grid "
      "(2.0112° step, phantom +180 sample)"),
     ("inclusive_step_formula",
-     re.compile(r"/\s*\(\s*n_mu1_points\s*-\s*1\s*\)"),
+     re.compile(r"/\s*\(\s*n_mu_feat_points\s*-\s*1\s*\)"),
      "(max-min)/(n-1) is the inclusive-grid cell width; the periodic one is "
-     "period/n (use mu1_cell_width())"),
-    ("mu1_trapezoid",
-     re.compile(r"trapezoid\([^)]*x\s*=\s*mu1_bias_grid"),
-     "trapezoid over the mu1 axis spans 358° of the 360° period and "
+     "period/n (use mu_feat_cell_width())"),
+    ("mu_feat_trapezoid",
+     re.compile(r"trapezoid\([^)]*x\s*=\s*mu_feat_bias_grid"),
+     "trapezoid over the mu_feat axis spans 358° of the 360° period and "
      "half-weights the ends (use periodic_integral())"),
-    ("mu1_sign_split",
-     re.compile(r"mu1_bias_grid\s*[<>]\s*0"),
+    ("mu_feat_sign_split",
+     re.compile(r"mu_feat_bias_grid\s*[<>]\s*0"),
      "a bare sign mask counts the antipode (-180) as negative (use sign_masks())"),
-    ("mu1_bin_clip",
+    ("mu_feat_bin_clip",
      re.compile(r"clip\([^)]*(bias_indices|bias_bin)"),
      "clipping the circular bias axis sends (179, 180) onto the last row "
      "instead of wrapping to bin 0 (use bin_indices())"),
-    # Only in mu1/surface context: 181 is also a legitimate inclusive bound on
+    # Only in mu_feat/surface context: 181 is also a legitimate inclusive bound on
     # unrelated bounded axes (e.g. arange(0, 181, 5) over feat distances).
     ("literal_181",
      re.compile(r"(?<![\w.])181(?![\w.])"),
      "a hardcoded legacy row count"),
 ]
 
-LITERAL_181_CONTEXT = re.compile(r"mu1|bias|surface|shape|grid", re.IGNORECASE)
+LITERAL_181_CONTEXT = re.compile(r"mu_feat|bias|surface|shape|grid", re.IGNORECASE)
 
 # Deliberate, reviewed exceptions: path suffix -> pattern names allowed in it.
 ALLOWED = {
     # Defines the axis and the legacy constant; talks about both conventions.
-    "shared/mu1_axis.py": {"literal_181", "mu1_linspace", "inclusive_mu1_arange",
-                           "mu1_sign_split", "inclusive_step_formula",
-                           "mu1_trapezoid", "mu1_bin_clip"},
+    "shared/mu_feat_axis.py": {"literal_181", "mu_feat_linspace", "inclusive_mu_feat_arange",
+                           "mu_feat_sign_split", "inclusive_step_formula",
+                           "mu_feat_trapezoid", "mu_feat_bin_clip"},
     "shared/config.py": {"literal_181"},
     # Migration script: its whole job is the legacy representation.
-    "cloud/migrate_surfaces_to_periodic_mu1.py": {"literal_181"},
+    "cloud/migrate_surfaces_to_periodic_mu_feat.py": {"literal_181"},
     # Histogram EDGES, not grid points: the closing +180 edge is correct there.
-    "shared/averaging.py": {"inclusive_mu1_arange"},
-    # mu2_bias is a linear, bounded axis — inclusive quadrature is right for it.
+    "shared/averaging.py": {"inclusive_mu_feat_arange"},
+    # mu_idf_bias is a linear, bounded axis — inclusive quadrature is right for it.
     "surface_simulator_for_predictions/surface_simulator.py": set(),
     "surface_browser/core/data_manager.py": {"literal_181"},
 }
@@ -107,14 +107,14 @@ def _violations():
     return found
 
 
-def test_no_hand_rolled_mu1_axis_arithmetic():
+def test_no_hand_rolled_mu_feat_axis_arithmetic():
     found = _violations()
     if found:
         report = "\n".join(
             f"  {rel}:{lineno}  [{name}] {why}\n      {line}"
             for rel, lineno, name, why, line in found)
         pytest.fail(
-            "The mu1_bias axis must come from shared/mu1_axis.py, never be "
+            "The mu_feat_bias axis must come from shared/mu_feat_axis.py, never be "
             "reconstructed:\n" + report)
 
 
