@@ -174,11 +174,10 @@ The companion [bias_model_comparison](https://github.com/achetverikov/bias_model
 
 The code is distributed under the [MIT License](LICENSE).
 
-If you use the model or demo, cite the relevant work:
+If you use the model, cite the relevant work:
 
 - <a href="https://doi.org/10.1101/2023.03.26.534226" title="Chetverikov, A. (2023). Demixing model: A normative explanation for inter-item biases in memory and perception. bioRxiv. https://doi.org/10.1101/2023.03.26.534226">Chetverikov, A. (2023). Demixing model: A normative explanation for inter-item biases in memory and perception. <em>bioRxiv</em>.</a>
 - <a href="https://doi.org/10.7554/eLife.111380.1" title="Chetverikov, A., &amp; Hansmann-Roth, S. (2026). Noise in competing representations determines the direction of memory biases. eLife, 15, RP111380. https://doi.org/10.7554/eLife.111380.1">Chetverikov, A., &amp; Hansmann-Roth, S. (2026). Noise in competing representations determines the direction of memory biases. <em>eLife, 15</em>, RP111380.</a>
-- <a href="https://doi.org/10.1038/nn.3689" title="Fischer, J., &amp; Whitney, D. (2014). Serial dependence in visual perception. Nature Neuroscience, 17(5), 738–743. https://doi.org/10.1038/nn.3689">Fischer, J., &amp; Whitney, D. (2014). Serial dependence in visual perception. <em>Nature Neuroscience, 17</em>(5), 738–743.</a>
 
 The code and documentation are provided as-is without warranty. Some project documentation was produced with AI assistance and may contain errors.
 
