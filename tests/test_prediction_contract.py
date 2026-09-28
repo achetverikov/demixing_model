@@ -225,6 +225,32 @@ def test_cell_probabilities_are_jittable_and_differentiable(predictor):
 
 
 @needs_artifact
+def test_cell_chunks_preserve_rows_custom_edges_and_gradients(predictor):
+    """Prediction contract: chunking must preserve cell order and motor gradients."""
+    # Eleven unequal cells exercise both a full chunk and its remainder.
+    edges = jnp.asarray([-180., -90., -35., -12., -2., 0., 1., 9., 30., 75., 120., 180.])
+    weights = jnp.linspace(-1., 1., len(PARAMS) * (len(edges) - 1)).reshape(len(PARAMS), -1)
+
+    def reference(rows, motor):
+        dist = predictor.distribution(rows, validate=False, sd_motor=motor)
+        components = jax.vmap(lambda lo, hi: wm.wrapped_normal_interval_probability(
+            dist['mu'], dist['sigma'], lo, hi, predictor.arc_wraps),
+            out_axes=-1)(edges[:-1], edges[1:])
+        return jnp.sum(jnp.exp(dist['log_pi'])[..., None] * components, axis=-2)
+
+    def chunked(rows, motor):
+        return predictor.cell_probabilities(rows, edges, validate=False, sd_motor=motor)
+
+    np.testing.assert_allclose(chunked(PARAMS, 12.), reference(PARAMS, 12.),
+                               rtol=2e-6, atol=2e-7)
+    gradients = [jax.jit(jax.grad(
+        lambda rows, motor: jnp.sum(fn(rows, motor) * weights), argnums=(0, 1)))(
+            PARAMS, 12.) for fn in (chunked, reference)]
+    for actual, expected in zip(*gradients):
+        np.testing.assert_allclose(actual, expected, rtol=2e-5, atol=2e-6)
+
+
+@needs_artifact
 def test_grid_density_integrates_to_one(predictor):
     density = np.exp(np.asarray(predictor.grid_log_density(PARAMS)))
     np.testing.assert_allclose(density.sum(axis=-1) * mu_feat_cell_width(), 1.0, atol=1e-3)

@@ -225,9 +225,14 @@ def test_smoothed_exp_pools_complex_moments_on_the_observed_design(
     assert float(got) == pytest.approx(float(expected), rel=1e-6)
 
 
-@pytest.mark.parametrize("method", ["density", "smoothed_exp"])
+@pytest.mark.parametrize("method,fit_motor", [
+    ("density", False), ("smoothed_exp", False),
+    ("balanced_crps", False), ("bias_weighted_crps", False),
+    ("balanced_crps", True), ("bias_weighted_crps", True),
+])
 def test_packed_exact_loss_matches_condition_loop_without_padding(
-        method, predictor, datasets, d_circ):
+        method, fit_motor, predictor, datasets, d_circ):
+    """Scoring contract: packed conditions preserve losses and parameter gradients."""
     exact = build_fitting_targets(
         {name: jnp.asarray(values) for name, values in datasets.items()},
         feat_diff_grid=config.create_grid('feat_diff'), d_circ_matrix=d_circ,
@@ -239,13 +244,31 @@ def test_packed_exact_loss_matches_condition_loop_without_padding(
         feature_coordinate_mode="exact")
     target = (exact.matched_density_target if method == "density"
               else exact.target_bias_curve)
-    packed = S.packed_curve_loss(
-        method, predictor, jnp.asarray(PARAMS), exact.prediction_coordinates,
-        exact.prediction_condition_index, exact.feature_operator, target,
-        exact.smoothed_support, jnp.asarray(exact.density_bandwidth),
-        curve_losses=_compute_curve_losses)
-    loop = _score(method, predictor, exact, d_circ, PARAMS)
-    assert float(packed) == pytest.approx(float(loop), rel=2e-6, abs=2e-6)
+    support = exact.smoothed_support
+    if method in ("balanced_crps", "bias_weighted_crps"):
+        target = exact.target_d
+        support = exact.fd_weights if method == "balanced_crps" else exact.bias_fd_weights
+    params = jnp.asarray(PARAMS + ([12.0] if fit_motor else []))
+
+    def packed(parameters):
+        return S.packed_curve_loss(
+            method, predictor, parameters, exact.prediction_coordinates,
+            exact.prediction_condition_index, exact.feature_operator, target,
+            support, jnp.asarray(exact.density_bandwidth),
+            curve_losses=_compute_curve_losses, energy_score=bwcrps_energy_score,
+            d_circ_matrix=d_circ, fit_motor=fit_motor)
+
+    def loop(parameters):
+        return S.score_all_conditions(
+            method, predictor, exact, parameters, curve_losses=_compute_curve_losses,
+            energy_score=bwcrps_energy_score, d_circ_matrix=d_circ,
+            feat_diff_grid=config.create_grid('feat_diff'),
+            emp_density_weights_sd=20.0, fit_motor=fit_motor)
+
+    packed_value, packed_gradient = jax.value_and_grad(packed)(params)
+    loop_value, loop_gradient = jax.value_and_grad(loop)(params)
+    np.testing.assert_allclose(packed_value, loop_value, rtol=2e-6, atol=2e-6)
+    np.testing.assert_allclose(packed_gradient, loop_gradient, rtol=2e-5, atol=2e-6)
 
 
 def test_exact_padding_has_zero_effect(predictor, datasets, d_circ):

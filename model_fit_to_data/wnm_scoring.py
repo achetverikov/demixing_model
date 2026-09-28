@@ -113,7 +113,8 @@ def predicted_matched_mean_bias(predictor, sd_feat1, sd_feat2, sd_idf,
 
 def packed_curve_loss(method, predictor, parameters, coordinates, condition_index,
                       feature_operator, target, support, density_bandwidth, *,
-                      curve_losses, fit_motor=False):
+                      curve_losses, fit_motor=False, energy_score=None,
+                      d_circ_matrix=None):
     """Joint exact-coordinate loss with all participant data passed dynamically.
 
     The operator has shape ``(conditions, feature_bins, capacity)``. Padding
@@ -121,7 +122,7 @@ def packed_curve_loss(method, predictor, parameters, coordinates, condition_inde
     Keeping these arrays as explicit arguments lets one compiled optimizer serve
     every group in the same workload-derived capacity bucket.
     """
-    if method not in ("density", "smoothed_exp"):
+    if method not in ("density", "smoothed_exp", "balanced_crps", "bias_weighted_crps"):
         raise ValueError(f"packed curve loss does not implement {method!r}")
     n_conditions = feature_operator.shape[0]
     shared_idf = parameters[2 * n_conditions]
@@ -132,6 +133,16 @@ def packed_curve_loss(method, predictor, parameters, coordinates, condition_inde
         coordinates,
     ))
     fitted_motor = parameters[2 * n_conditions + 1] if fit_motor else None
+
+    if method in ("balanced_crps", "bias_weighted_crps"):
+        probabilities = predictor.cell_probabilities(
+            rows, validate=False, sd_motor=fitted_motor)
+        pooled = jnp.einsum("cfu,uk->ckf", feature_operator, probabilities)
+        floor = None if method == "balanced_crps" else 1e-10
+        losses = jax.vmap(lambda p, t, w: energy_score(
+            p[None, :, :], t[None, :, :], w[None, :], d_circ_matrix,
+            norm_floor=floor)[0, 0])(pooled, target, support)
+        return jnp.sum(losses)
 
     if method == "smoothed_exp":
         moment = predictor.first_moment(rows, validate=False, sd_motor=fitted_motor)

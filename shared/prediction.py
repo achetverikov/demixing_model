@@ -498,11 +498,18 @@ class WrappedMixturePredictor(BiasPredictor):
         dist = self.distribution(params, validate, sd_motor)
         weights = jnp.exp(dist['log_pi'])
 
-        per_component = jax.vmap(
-            lambda lo, hi: self._wm.wrapped_normal_interval_probability(
-                dist['mu'], dist['sigma'], lo, hi, self.arc_wraps),
-            out_axes=-1)(edges[:-1], edges[1:])
-        return jnp.sum(weights[..., None] * per_component, axis=-2)
+        def cell_mass(pair):
+            per_component = self._wm.wrapped_normal_interval_probability(
+                dist['mu'], dist['sigma'], pair[0], pair[1], self.arc_wraps)
+            return jnp.sum(weights * per_component, axis=-1)
+
+        # A full vmap fuses cells × wraps × components × optimizer starts into
+        # enormous GPU kernels. Bound that work and recompute chunk intermediates
+        # during differentiation instead of retaining them for every cell.
+        masses = jax.lax.map(
+            jax.checkpoint(cell_mass), jnp.stack((edges[:-1], edges[1:]), axis=-1),
+            batch_size=10)
+        return jnp.moveaxis(masses, 0, -1)
 
     def mean_and_resultant(self, params, validate: bool = True, sd_motor=None):
         return self._wm.mean_and_resultant(self.distribution(params, validate, sd_motor))

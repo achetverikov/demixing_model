@@ -97,7 +97,8 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
                           motor_bounds=tuple(sd_motor_bounds) if fit_motor else None)
 
     packed = (targets.feature_coordinate_mode == "exact"
-              and objective in ("density", "smoothed_exp"))
+              and objective in ("density", "smoothed_exp", "balanced_crps",
+                                "bias_weighted_crps"))
     if packed:
         if objective == "density" and np.any(targets.matched_density_degenerate):
             names_ = [targets.condition_names[index] for index in
@@ -107,19 +108,25 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
                 "objective cannot be fit against it")
         packed_target = (targets.matched_density_target if objective == "density"
                          else targets.target_bias_curve)
+        support = targets.smoothed_support
+        if objective in ("balanced_crps", "bias_weighted_crps"):
+            packed_target = targets.target_d
+            support = (targets.fd_weights if objective == "balanced_crps"
+                       else targets.bias_fd_weights)
         objective_args = (
             targets.prediction_coordinates,
             targets.prediction_condition_index,
             targets.feature_operator,
             packed_target,
-            targets.smoothed_support,
+            support,
             jnp.asarray(targets.density_bandwidth, dtype=jnp.float32),
         )
 
         def objective_fn(parameters, *data):
             return packed_curve_loss(
                 objective, predictor, parameters, *data,
-                curve_losses=curve_losses, fit_motor=fit_motor)
+                curve_losses=curve_losses, fit_motor=fit_motor,
+                energy_score=energy_score, d_circ_matrix=d_circ_matrix)
 
         solver_key = (
             objective, n_conditions, targets.prediction_capacity, fit_motor,
