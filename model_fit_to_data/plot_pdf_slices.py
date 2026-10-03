@@ -11,7 +11,7 @@ Run from the repo root:
         --output-dir results/<dataset>
 
 The run fingerprint selects and verifies the surrogate that produced the fit,
-and the saved results provide the study's circular period. Use --checkpoint-path
+and the saved results provide each condition's circular period. Use --checkpoint-path
 or --circ-space only as explicit overrides/validation when necessary.
 """
 
@@ -27,7 +27,6 @@ sys.path.insert(0, str(REPO_ROOT / "model_fit_to_data"))
 
 import jax
 from model_fit_to_data.create_unified_subject_plots import (
-    _resolve_plot_circ_space,
     create_pdf_slice_plots,
     load_extended_results,
 )
@@ -64,7 +63,6 @@ def main():
     args = parser.parse_args()
 
     results = load_extended_results(args.results_path)
-    circ_space = _resolve_plot_circ_space(results, args.circ_space)
 
     # The stored parameters were produced by a particular surrogate, so use that
     # one rather than today's production artifact; --checkpoint-path overrides and
@@ -84,7 +82,7 @@ def main():
     with jax.default_matmul_precision(matmul_precision):
         create_pdf_slice_plots(
             results, prediction_backend, args.output_dir,
-            circ_space=circ_space,
+            circ_space=args.circ_space,
             optimizer_names=[args.optimizer],
             n_subjects=args.n_subjects,
             feat_diffs_data=args.feat_diffs,

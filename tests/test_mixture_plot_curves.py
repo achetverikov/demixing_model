@@ -360,3 +360,30 @@ def test_standard_pipeline_pools_report_orders_from_exact_wnm_cell_masses(
         np.minimum(difference, 360.0 - difference), 20.0)
     assert got_first == pytest.approx(expected)
     assert got_second == pytest.approx(expected)
+
+
+def test_one_experiment_may_mix_circular_periods_across_conditions(
+        predictor, feat_grid, tmp_path):
+    """andriushchenko fits orientation (GK, 180) and TK (360) conditions of one
+    experiment. Each condition must be drawn in its own period, through every
+    plot the driver makes, rather than the whole file being refused."""
+    orientation = _stored_result(feat_grid, np.array([25.0, 40.0, 30.0, 12.0]))
+    orientation["circ_space"] = 180.0
+    other = _stored_result(feat_grid, np.array([10.0, 60.0, 20.0, 0.0]))
+    other["circ_space"] = 360.0
+    subjects = {"S": {"exp": [
+        {"noise_condition": "GK", "result": orientation},
+        {"noise_condition": "TK", "result": other},
+    ]}}
+    spec = {"emp_density_weights_sd": 20.0, "density_smoothing_sigma": None}
+    prepared = subject_plots.prepare_all_subjects_data(subjects, predictor, spec)
+    assert prepared["S"]["experiments"]["exp"]["circ_space"] == {"GK": 180, "TK": 360}
+    with pytest.raises(ValueError, match="disagrees"):
+        subject_plots.prepare_all_subjects_data(subjects, predictor, spec, circ_space=360)
+
+    subject_plots.create_unified_subject_plot(prepared["S"], tmp_path)
+    subject_plots.create_extended_summary_plots(prepared, tmp_path)
+    subject_plots.create_pdf_slice_plots(
+        {"S#exp#GK": orientation, "S#exp#TK": other}, predictor, tmp_path,
+        optimizer_names=["density"], n_subjects=1)
+    assert len(list((tmp_path / "pdf_slice_plots").glob("*.png"))) == 2

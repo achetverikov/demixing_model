@@ -67,22 +67,17 @@ def test_legacy_plot_identity_fallback_is_unchanged():
 
 
 def test_plot_circular_period_is_inferred_and_conflicts_raise():
-    results = {
-        "opaque-a": {"circ_space": 180},
-        "opaque-b": {"circ_space": 180.0},
-    }
-    assert _resolve_plot_circ_space(results) == 180
-    assert _resolve_plot_circ_space(results, 180) == 180
+    periods = [180, 180.0, None]
+    assert _resolve_plot_circ_space(periods) == 180
+    assert _resolve_plot_circ_space(periods, 180) == 180
+    assert _resolve_plot_circ_space([None]) == 360
     with pytest.raises(ValueError, match="disagrees"):
-        _resolve_plot_circ_space(results, 360)
+        _resolve_plot_circ_space(periods, 360)
 
 
-def test_plot_circular_period_rejects_mixed_result_sets():
+def test_plot_circular_period_rejects_mixed_periods_within_one_condition():
     with pytest.raises(ValueError, match="one circular period"):
-        _resolve_plot_circ_space({
-            "a": {"circ_space": 180},
-            "b": {"circ_space": 360},
-        })
+        _resolve_plot_circ_space([180, 360])
 
 
 
@@ -149,5 +144,6 @@ def test_standalone_pdf_plot_uses_wnm_backend_from_run_identity(monkeypatch, tmp
     assert calls["backend"] is predictor
     assert calls["output_dir"] == str(tmp_path)
     assert calls["kwargs"]["optimizer_names"] == ["bias_weighted_crps"]
-    assert calls["kwargs"]["circ_space"] == 180
+    # Periods are resolved per condition inside the plotter; only the override passes.
+    assert calls["kwargs"]["circ_space"] is None
     assert calls["kwargs"]["weights_sd_model"] == 15.0

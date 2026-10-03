@@ -342,17 +342,18 @@ def load_extended_results(results_path: str) -> Dict:
     return results
 
 
-def _resolve_plot_circ_space(extended_results: Dict,
-                             requested: Optional[int] = None) -> int:
-    """Use the circular period recorded by the fit, validating any CLI override."""
-    stored = {
-        float(result['circ_space'])
-        for result in extended_results.values()
-        if result is not None and result.get('circ_space') is not None
-    }
+def _resolve_plot_circ_space(periods, requested: Optional[int] = None) -> int:
+    """Circular period of one plotted panel group, validating any CLI override.
+
+    A dataset may mix periods across conditions (andriushchenko: orientation
+    GK/GM at 180, TK/TM at 360), so the period is resolved per condition, and
+    only the results drawn on a common axis must agree. ``None`` marks a legacy
+    result without a recorded period.
+    """
+    stored = {float(period) for period in periods if period is not None}
     if len(stored) > 1:
         raise ValueError(
-            "plotting requires one circular period per result set, but the fitted "
+            "one plotted condition requires one circular period, but its fitted "
             f"results contain {sorted(stored)}")
     if stored:
         recorded = stored.pop()
@@ -447,6 +448,7 @@ def prepare_all_subjects_data(
     subjects_data: Dict,
     prediction_backend,
     density_curve_spec: Optional[Dict] = None,
+    circ_space: Optional[int] = None,
 ) -> Dict:
     """
     Batch data preparation routine - processes all subjects at once for maximum efficiency.
@@ -815,6 +817,12 @@ def prepare_all_subjects_data(
                 'available_optimizers': available_optimizers,
                 'feat_vals': feat_vals,
                 'noise_conditions': list(noise_conditions.keys()),
+                'circ_space': {
+                    noise_cond: _resolve_plot_circ_space(
+                        (cd['result'].get('circ_space') for cd in cond_data_list),
+                        circ_space)
+                    for noise_cond, cond_data_list in noise_conditions.items()
+                },
                 'surrogate_identity': surrogate_identity,
             }
 
@@ -828,7 +836,6 @@ def prepare_all_subjects_data(
 def create_unified_subject_plot(
     prepared_data: Dict,
     output_dir: str = 'model_fit_to_data_results_v2',
-    circ_space: int = 360,
 ) -> None:
     """
     Create unified plot for a single subject using precomputed data.
@@ -854,9 +861,6 @@ def create_unified_subject_plot(
         empirical_curves = experiment_data['empirical_curves']
         parameters = experiment_data['parameters']
 
-        angle_display_scale = _angle_display_scale(circ_space)
-        display_feat_vals = np.array(feat_vals) * angle_display_scale
-
         n_conditions = len(noise_conditions)
         if n_conditions == 0:
             continue
@@ -876,6 +880,9 @@ def create_unified_subject_plot(
         # NOW JUST PLOT THE PRECOMPUTED RESULTS
         for col, noise_cond in enumerate(sorted(noise_conditions)):
             print(f"    Plotting condition: {noise_cond}")
+            angle_display_scale = _angle_display_scale(
+                experiment_data['circ_space'][noise_cond])
+            display_feat_vals = np.array(feat_vals) * angle_display_scale
 
             # Get precomputed curves for this condition
             condition_optimizer_curves = optimizer_curves.get(noise_cond, {})
@@ -1066,8 +1073,7 @@ def organize_preprocessed_results_by_experiment(prepared_all_subjects: Dict) -> 
 
 
 def create_extended_summary_plots(prepared_all_subjects: Dict,
-                                 output_dir: str = 'model_fit_to_data_results_v2',
-                                 circ_space: int = 360) -> None:
+                                 output_dir: str = 'model_fit_to_data_results_v2') -> None:
     """Create extended summary plots using preprocessed data.
 
     Only optimizers present in every prepared result of an
@@ -1121,7 +1127,9 @@ def create_extended_summary_plots(prepared_all_subjects: Dict,
 
             first_subject_data = prepared_results_list[0]['experiment_data']
             feat_vals = first_subject_data['feat_vals']
-            angle_display_scale = _angle_display_scale(circ_space)
+            angle_display_scale = _angle_display_scale(_resolve_plot_circ_space(
+                entry['experiment_data']['circ_space'][noise_cond]
+                for entry in prepared_results_list))
             display_feat_vals = np.array(feat_vals) * angle_display_scale
 
             # Only aggregate optimizers every subject in this condition actually
@@ -1463,7 +1471,7 @@ def create_pdf_slice_plots(
     extended_results: Dict,
     prediction_backend,
     output_dir: str,
-    circ_space: int = 360,
+    circ_space: Optional[int] = None,
     optimizer_names=None,
     n_subjects: int = 3,
     feat_diffs_data: Optional[List[float]] = None,
@@ -1479,21 +1487,9 @@ def create_pdf_slice_plots(
     plots_dir = Path(output_dir) / 'pdf_slice_plots'
     plots_dir.mkdir(exist_ok=True, parents=True)
 
-    angle_display_scale = _angle_display_scale(circ_space)
     mu_feat_grid  = np.array(config.create_grid('mu_feat_bias'))
     feat_grid = np.array(config.create_grid('feat_diff'))  # model space
-    bias_limit_data = circ_space / 2
-    bias_plot_grid = np.linspace(-bias_limit_data, bias_limit_data, 361)
-    bias_plot_grid_model = bias_plot_grid / angle_display_scale
-
-    # Default feat_diffs in data space: four values spanning ~5–50 % of range
-    if feat_diffs_data is None:
-        fd_max = circ_space / 2
-        feat_diffs_data = [round(fd / 2) * 2
-                           for fd in np.linspace(fd_max * 0.05, fd_max * 0.50, 4)]
-
-    # Convert to model space for surrogate evaluation
-    feat_diffs_model = [fd / angle_display_scale for fd in feat_diffs_data]
+    requested_feat_diffs = feat_diffs_data
     weights_sd_model = float(weights_sd_model)
 
     # Auto-detect available methods if not specified
@@ -1520,6 +1516,20 @@ def create_pdf_slice_plots(
         for (exp_name, noise_cond), subject_list in sorted(by_exp_cond.items()):
             print(f"  PDF slices: {exp_name} / {noise_cond}  ({len(subject_list)} subjects)"
                   f"  [{optimizer_name}]")
+            group_circ_space = _resolve_plot_circ_space(
+                (result.get('circ_space') for _, result in subject_list), circ_space)
+            angle_display_scale = _angle_display_scale(group_circ_space)
+            bias_limit_data = group_circ_space / 2
+            bias_plot_grid = np.linspace(-bias_limit_data, bias_limit_data, 361)
+            bias_plot_grid_model = bias_plot_grid / angle_display_scale
+
+            # Default feat_diffs in data space: four values spanning ~5–50 % of range
+            feat_diffs_data = requested_feat_diffs
+            if feat_diffs_data is None:
+                feat_diffs_data = [round(fd / 2) * 2 for fd in np.linspace(
+                    bias_limit_data * 0.05, bias_limit_data * 0.50, 4)]
+            # Convert to model space for surrogate evaluation
+            feat_diffs_model = [fd / angle_display_scale for fd in feat_diffs_data]
 
             # Score each subject by |E| at the smallest feat_diff to prefer informative ones;
             # break ties by picking dissociation cases (E and asym have opposite signs).
@@ -1688,9 +1698,8 @@ def create_unified_plots_with_summaries(
     # print(f'Reading {resolved_results_path}')
     """Create unified subject, group-summary, and optional PDF-slice plots."""
 
-    # Load results and recover the physical circular period recorded by the fit.
+    # Each condition's physical circular period is read from its fitted results.
     extended_results = load_extended_results(str(resolved_results_path))
-    circ_space = _resolve_plot_circ_space(extended_results, circ_space)
 
     print("Initializing prediction backend...")
     prediction_backend = predictor_from_surrogate(
@@ -1711,13 +1720,14 @@ def create_unified_plots_with_summaries(
 
     with jax.default_matmul_precision(matmul_precision):
         prepared_all_subjects = prepare_all_subjects_data(
-            limited_subjects_data, prediction_backend, density_curve_spec)
+            limited_subjects_data, prediction_backend, density_curve_spec,
+            circ_space=circ_space)
 
     # Create plots for each subject using prepared data
     if create_individual_plots:
         subjects_processed = 0
         for subject_id, prepared_data in prepared_all_subjects.items():
-            create_unified_subject_plot(prepared_data, resolved_output_dir, circ_space=circ_space)
+            create_unified_subject_plot(prepared_data, resolved_output_dir)
             subjects_processed += 1
 
         print(f"\\nCompleted unified plots for {subjects_processed} subjects")
@@ -1726,9 +1736,7 @@ def create_unified_plots_with_summaries(
     # Create summary plots if requested
     if create_summary_plots:
         print("\n=== Creating Summary Plots ===")
-        create_extended_summary_plots(
-            prepared_all_subjects, resolved_output_dir, circ_space=circ_space,
-        )
+        create_extended_summary_plots(prepared_all_subjects, resolved_output_dir)
 
     if create_pdf_slices:
         print("\n=== Creating PDF Slice Plots ===")
