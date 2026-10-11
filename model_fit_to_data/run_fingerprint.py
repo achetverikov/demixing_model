@@ -194,7 +194,7 @@ def compute_compiled_run_fingerprint(
 ) -> Dict[str, Any]:
     """Identify a WNM run whose complete empirical contract is a compiled bundle."""
     bundle_path = Path(bundle_path)
-    if bundle_manifest["population"] != "signed_bias":
+    if bundle_manifest["population"] not in ("signed_bias", "signed_bias_with_outliers"):
         raise ValueError("production DM-WNM fits require a signed_bias bundle")
     motor = ({"mode": "skip"} if skip_motor_noise else {
         "mode": "enabled",

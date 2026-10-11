@@ -1,8 +1,11 @@
 from types import SimpleNamespace
+from pathlib import Path
+
+import pytest
 
 import numpy as np
 
-from model_fit_to_data.compiled_bundle import fitting_targets_from_compiled
+from model_fit_to_data.compiled_bundle import fitting_targets_from_compiled, load_compiled_wnm_bundle
 
 
 def test_compiled_targets_select_the_group_cells_without_reconstruction():
@@ -33,3 +36,21 @@ def test_compiled_targets_select_the_group_cells_without_reconstruction():
     assert targets.density_bandwidth == (14.0,)
     assert targets.prediction_coordinate_count == 2
     assert targets.prediction_capacity == 3
+
+
+# Cross-repository contract: consumers must accept both production populations.
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('variant', ['united', 'report_separate'])
+def test_inclusive_bundle_supplies_every_scored_row_and_target(variant):
+    database = Path(__file__).resolve().parents[2] / 'contextual_biases_database'
+    path = database / 'data/bundles/chr2026' / f'chr2026_{variant}_with_outliers_signed_v1'
+    groups, shared, assignments, manifest = load_compiled_wnm_bundle(path)
+    assert manifest['population'] == 'signed_bias_with_outliers'
+    assert sum(len(group.row_id) for group in groups) == len(assignments)
+    for group in groups:
+        targets = fitting_targets_from_compiled(group, shared)
+        np.testing.assert_array_equal(targets.target_bias_curve,
+                                      shared['smoothed_bias_deg'][group.analysis_cell_index])
+        assert np.isfinite(group.bias_model_deg).all()

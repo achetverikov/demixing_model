@@ -283,3 +283,30 @@ def test_a_missing_or_spurious_continuous_spec_raises():
         rf.compute_run_fingerprint(search_backend="hierarchical",
                                    surrogate_family="wnm", continuous_spec=CONTINUOUS,
                                    **_common())
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('population', ['signed_bias', 'signed_bias_with_outliers'])
+def test_compiled_outlier_population_cannot_resume_other_flavor(run_files, tmp_path, population):
+    """Contract: an inclusive bundle must reach resume validation and be refused."""
+    _, checkpoint, _ = run_files
+    bundle = tmp_path / 'bundle'
+    bundle.mkdir()
+    (bundle / 'bundle.yaml').write_text('bundle_id: example\n')
+    manifest = {
+        'bundle_id': 'b1', 'population': population,
+        'canonical_trial_sha256': 'canonical', 'analysis_spec_sha256': 'analysis',
+        'ordered_scored_row_id_sha256': 'rows', 'objective_versions': {},
+        'products': {'shared_empirical_targets': {'sha256': 'targets'}},
+    }
+    payload = rf.compute_compiled_run_fingerprint(
+        bundle_path=bundle, bundle_manifest=manifest, checkpoint_path=checkpoint,
+        continuous_spec={}, skip_motor_noise=True, evaluation_methods=['density'],
+        corr_weight=0.25, density_curve_spec={})
+    other = dict(payload, population=('signed_bias_with_outliers'
+                 if population == 'signed_bias' else 'signed_bias'))
+    assert rf.fingerprint_digest(payload) != rf.fingerprint_digest(other)
+    assert any('population' in field for field in rf.fingerprint_diff(payload, other))
+    rf.write_fingerprint_sidecar(tmp_path / 'results', other)
+    with pytest.raises(rf.StaleResultsError, match='population'):
+        rf.enforce_fingerprint(tmp_path / 'results', payload, results_present=True)

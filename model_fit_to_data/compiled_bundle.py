@@ -65,7 +65,7 @@ def load_compiled_wnm_bundle(path):
     from contextual_biases_database import read_compiled_bundle
 
     products, assignments, manifest = read_compiled_bundle(path)
-    if manifest["population"] != "signed_bias":
+    if manifest["population"] not in ("signed_bias", "signed_bias_with_outliers"):
         raise ValueError("DM-WNM production objectives require the signed_bias population")
     if manifest["coordinate_policy"] != "exact_bounded_extrapolation":
         raise ValueError("DM-WNM requires exact_bounded_extrapolation coordinates")
