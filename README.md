@@ -156,10 +156,7 @@ For direct inspection of simulated distributions or predictions in the identifia
 
 ## Compare models and reproduce project analyses
 
-For analyses that compare model families or datasets, use a compiled `contextual_biases_database` bundle. It fixes trial selection, angular geometry, bandwidths, and empirical targets for all models. The [fitting guide](model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md#fit-a-compiled-bundle) shows how to use one. Outlier-inclusive analyses use a distinct
-`signed_bias_with_outliers` bundle. The bundle controls scoring membership and
-targets; its population and checksums are part of the run fingerprint, so a
-filtered fit cannot resume as an inclusive fit.
+For analyses that compare model families or datasets, use a compiled `contextual_biases_database` bundle. It fixes trial selection, angular geometry, bandwidths, and empirical targets for all models. The [fitting guide](model_fit_to_data/Batch_Fit_Analysis_Pipeline_Documentation.md#fit-a-compiled-bundle) shows how to use one.
 
 The companion [bias_model_comparison](https://github.com/achetverikov/bias_model_comparison) repository coordinates dataset preparation, fitting, comparison, and report generation. Follow its README for the required sibling repositories, datasets, and reproduction commands.
 
