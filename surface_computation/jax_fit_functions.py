@@ -15,6 +15,7 @@ import pandas as pd
 import itertools
 from typing import Optional
 from jax.sharding import PartitionSpec as P, NamedSharding
+from surface_computation import likelihood_em
 
 # Set pandas display options for better readability
 pd.set_option('display.float_format', '{:.2f}'.format)
@@ -685,139 +686,26 @@ def train_em_jax_diag_common(key, observed, num_comp=2, n_init=400, rtol=1e-6, m
 
 EM_N_INIT = 225
 EM_RTOL = 1e-6
-EM_MAX_ITER = 5000
+EM_MAX_ITER = likelihood_em.MAX_ITER
 
 
-def _em_init(key, observed, num_comp=2, n_init=EM_N_INIT):
-    pi_init = jnp.full((n_init, num_comp), 1.0 / num_comp)
-
-    key, idx_key = jax.random.split(key)
-    idxs = jax.random.randint(idx_key, (n_init, num_comp), 0, observed.shape[0])
-    mu_init = observed[idxs]  # (n_init, K, D)
-    mu_feat_init = mu_init[..., 0]
-    mu_idf_init = mu_init[..., 1]
-
-    if wrap_feat:
-        mu_feat_init = jnp.mod(mu_feat_init + 180, 360.0) - 180
-    if wrap_idf:
-        mu_idf_init = jnp.mod(mu_idf_init + 180, 360.0) - 180
-
-    key, subkey = jax.random.split(key)
-    data_sd = observed.std(0)
-    sigma_init = jax.random.uniform(
-        subkey,
-        minval=data_sd[None, None, :] * 0.3,
-        maxval=data_sd[None, None, :] * 2.0,
-        shape=(n_init, num_comp, observed.shape[-1])
-    )
-    sigma_feat_init = sigma_init[..., 0]
-    sigma_idf_init = sigma_init[..., 1]
-
-    # Compare the first update with its actual starting objective. An -inf
-    # sentinel makes the first relative change inf/inf and stops EM on NaN.
-    loss_init = initial_em_vlb(observed,
-        (pi_init, mu_feat_init, mu_idf_init, sigma_feat_init, sigma_idf_init),
-        circular=True)
-    loss_upd_init = jnp.ones([n_init]) * jnp.inf
-
-    init_val = (jnp.zeros([n_init], jnp.int32),
-                (pi_init, mu_feat_init, mu_idf_init, sigma_feat_init, sigma_idf_init),
-                loss_init,
-                loss_upd_init)
-    return key, init_val
-
-
-def _em_cond(state, *, rtol=EM_RTOL, max_iter=EM_MAX_ITER):
-    i, _, _, loss_diff = state
-    return jnp.any((i < max_iter) & (loss_diff > rtol))
-
-
-@partial(jax.jit, static_argnames=['min_val'])
-def _project_em_weights(x, min_val=0.01):
-    """
-    Projects a 2-element array onto the probability simplex while ensuring
-    each element is at least `min_val` and the sum remains 1.
-
-    :param x: Input array.
-    :param min_val: Minimum value for each element.
-    :return: Projected array.
-    """
-    x = jnp.maximum(x, min_val)  # Ensure minimum value
-    excess = jnp.sum(x) - 1.0  # Compute excess amount
-    x -= excess * (x - min_val) / jnp.sum(x - min_val + 1e-8)  # Adjust
-    return x
-
-
-def _em_step(observed, state, *, fix_weights=False, debug=False):
-    """
-    Performs one step of the EM algorithm.
-
-    :param state: Current state of the EM algorithm.
-    :param debug: Boolean indicating whether to plot debug information.
-    :return: Updated state of the EM algorithm.
-    """
-    i, (pi, mu_feat, mu_idf, sigma_feat, sigma_idf), loss_i, loss_diff_i = state
-    membership_weight = e_step_circ(observed, pi, mu_feat, mu_idf, sigma_feat, sigma_idf)
-
-    if debug:
-        plot_X(observed, jnp.vstack([mu_feat, mu_idf]).T, sigma_true=jnp.vstack([sigma_feat, sigma_idf]),
-               est_weights=membership_weight, title=f'step {i}')
-
-    pi_upd, mu_feat_upd, mu_idf_upd, sigma_feat_upd, sigma_idf_upd = m_step_circ(observed, membership_weight, debug = debug)
-
-    if fix_weights:
-        # Keep weights pinned at their initial equal value (1/num_comp); skip the update.
-        pi_upd = pi
-    else:
-        pi_upd = _project_em_weights(pi_upd, 0.1)
-
-    membership_weight_upd = e_step_circ(
-        observed, pi_upd, mu_feat_upd, mu_idf_upd, sigma_feat_upd, sigma_idf_upd
-        )
-
-    loss_upd = compute_vlb_circ(observed, pi_upd, mu_feat_upd, mu_idf_upd, sigma_feat_upd, sigma_idf_upd, membership_weight_upd)
-    loss_diff_upd = jnp.abs(loss_upd - loss_i) / (1e-12 + jnp.abs(loss_i))
-    new_state = (i + 1,
-                 (pi_upd, mu_feat_upd, mu_idf_upd, sigma_feat_upd, sigma_idf_upd),
-                 loss_upd,
-                 loss_diff_upd)
-    if debug:
-        format_state_change(state, new_state)
-
-    return new_state
-
-
-def _em_result(state, *, rtol=EM_RTOL, return_diagnostics=False):
-    num_iter, est_pars, losses, loss_diff = state
-    index = jnp.argmax(jnp.nan_to_num(losses, nan=-jnp.inf))
-    result = jax.tree.map(lambda x: x[index], est_pars + (losses,))
-    if return_diagnostics:
-        converged = jnp.isfinite(losses) & jnp.isfinite(loss_diff) & (loss_diff <= rtol)
-        tied = jnp.isfinite(losses) & (losses == losses[index])
-        return result + ({'iterations': num_iter[index],
-                          'relative_change': loss_diff[index],
-                          'converged': converged[index],
-                          'any_best_converged': jnp.any(tied & converged),
-                          'best_tie_count': jnp.sum(tied)},)
-    return result
-
-
-@partial(jax.jit, static_argnames=['num_comp', 'n_init', 'rtol', 'max_iter', 'fix_weights', 'return_diagnostics'])
+@partial(jax.jit, static_argnames=['num_comp', 'n_init', 'rtol', 'max_iter', 'fix_weights', 'return_diagnostics', 'parameter_tol'])
 def train_em_jax(key, observed, num_comp=2, n_init=EM_N_INIT, rtol=EM_RTOL,
-                 max_iter=EM_MAX_ITER, fix_weights=False, return_diagnostics=False):
-    """Fit the circular diagonal mixture, optionally returning stopping diagnostics.
+                 max_iter=EM_MAX_ITER, fix_weights=False, return_diagnostics=False,
+                 parameter_tol=likelihood_em.PARAMETER_TOL):
+    """Fit the constrained wrapped mixture by likelihood-consistent EM.
 
-    ``converged`` describes the first selected maximum, preserving tie-breaking.
-    ``any_best_converged`` reports whether any exactly tied best start converged.
-    The default return remains the six fitted parameters/objective arrays.
+    All starts receive up to 5000 updates. A capped selected winner continues
+    from its cached state up to ``max_iter`` (default 25000); losing starts are
+    counted in diagnostics. Both LL and parameter changes must stabilize.
+    Component ordering and the default six-value return are preserved.
+    Scientific data generation uses the checked batched API to reject cap hits.
     """
-    _, initial = _em_init(key, observed, num_comp, n_init)
-    cond = partial(_em_cond, rtol=rtol, max_iter=max_iter)
-    step = partial(_em_step, observed, fix_weights=fix_weights)
-    state = jax.vmap(lambda s: jax.lax.while_loop(cond, step, s))(initial)
-    return _em_result(state, rtol=rtol, return_diagnostics=return_diagnostics)
-
-
+    if num_comp != 2:
+        raise NotImplementedError('Likelihood EM currently supports two components')
+    fitted = likelihood_em.fit(key, observed, n_init, rtol, parameter_tol,
+                               max_iter, (wrap_feat, wrap_idf), fix_weights)
+    return fitted if return_diagnostics else fitted[:6]
 
 
 @partial(jax.jit, static_argnames=['n_samples', 'weights'])
@@ -862,10 +750,10 @@ def jax_jax_mixture(key, mu_feat_true, mu_idf_true, sigma_feat_true, sigma_idf_t
 
     return full_sample
 
-@partial(jax.jit, static_argnames=['weights', 'n_samples', 'algorithm', 'fix_weights', 'diagonal_covariance'])
+@partial(jax.jit, static_argnames=['weights', 'n_samples', 'algorithm', 'fix_weights', 'diagonal_covariance', 'return_diagnostics'])
 def jax_generate_and_fit(key, mu_feat_true, mu_idf_true, sigma_feat_true, sigma_idf_true,
                          weights=0.5, n_samples=100, algorithm='EM',
-                         fix_weights=False, diagonal_covariance: bool = True):
+                         fix_weights=False, diagonal_covariance: bool = True, return_diagnostics=False):
     """
     Generate samples from a Gaussian mixture model and fit the model using EM algorithm.
 
@@ -898,7 +786,8 @@ def jax_generate_and_fit(key, mu_feat_true, mu_idf_true, sigma_feat_true, sigma_
     # Generate observed samples
     observed = jax_jax_mixture(key, mu_feat_true, mu_idf_true, sigma_feat_true, sigma_idf_true, weights, n_samples)
 
-    out = train_em_jax(subkey, observed, num_comp=2, fix_weights=fix_weights)
+    out = train_em_jax(subkey, observed, num_comp=2, fix_weights=fix_weights,
+                       return_diagnostics=return_diagnostics)
 
     # Rearrange components to match true component order based on mu_idf
     res = rearrange_components(out[:5], mu_idf_true)
@@ -921,7 +810,7 @@ def jax_generate_and_fit(key, mu_feat_true, mu_idf_true, sigma_feat_true, sigma_
     result = result.at[:, ResCol.n_samples].set(n_samples)
     # Sample statistics / VBEM_MIX fields are unavailable in this routine; remain zero-filled
 
-    return result
+    return (result, out[-1]) if return_diagnostics else result
 
 def plot_X(X, mu_true=None, mu_est=None, sigma_true=None, est_weights=None, title=None):
     """

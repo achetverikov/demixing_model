@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "surface_computation"))
 
 from lock_backend import load_env, make_lock_backend
 from surface_computation.object_store import ObjectStoreConfig, SurfaceObjectStore
+from surface_computation.em_identity import add_reader_arguments, resolve_reader
 
 
 def main() -> int:
@@ -26,6 +27,7 @@ def main() -> int:
                         help="Remove Redis IDs that are not present in storage manifests")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print changes without mutating Redis")
+    add_reader_arguments(parser)
     args = parser.parse_args()
 
     if not args.registry:
@@ -36,6 +38,7 @@ def main() -> int:
     if config is None:
         print("Missing S3_BUCKET or OBJECT_STORE_BUCKET in the environment.", file=sys.stderr)
         return 2
+    resolve_reader(args, config)
 
     store = SurfaceObjectStore(config)
     storage_ids = store.list_completed_surface_ids()

@@ -20,7 +20,38 @@ python -m surface_computation.generate_wnm_training_data \
 
 The NPZ stores the parameter design, raw feature-bias outcomes for both items, and generation metadata. The [training tools](../surrogate_training/wnm/README.md) use these outcomes to fit a conditional wrapped-normal mixture (WNM).
 
+The observer uses likelihood EM with soft component and winding probabilities,
+225 starts, SDs bounded below by 1 and component weights bounded below by 0.1.
+Both likelihood and parameter changes must stabilize. All starts receive up to
+5,000 updates; a capped selected winner continues from its cached state up to
+25,000. Capped losing starts remain counted. Generation refuses unresolved
+selected fits, nonfinite starts, or material likelihood decreases before saving.
+The fit is a multistart local search; it does not certify a global optimum.
+
+Each shard and final NPZ includes per-trial `em_*` diagnostics and selected
+`em_parameters` of shape `(rows, trials, 5, 2)`, in raw fit order, with fields
+`(weight, feature mean, identifying mean, feature SD, identifying SD)`.
+These parameters allow inspection of floor-bound spikes and nearly uniform
+components; convergence alone does not establish that a circular mean is well
+identified. No trials are silently excluded. The source
+fingerprint includes the likelihood kernel and density helper; old simulation
+shards cannot resume under the new estimator. Bundled NN checkpoints are
+unchanged and require new simulation data and retraining to reflect this fitter.
+
 The generator saves simulation chunks beside the output so interrupted runs can resume. Keep simulation and Python caches under `/tmp`, and run one GPU job at a time on a shared device.
+
+`--block-rows` batches different parameter combinations on the GPU. The total
+trial batch is `block_rows × simulation_chunk`; increase it with attention to
+memory and measured throughput. Optional `--em-stages 50 250 1000 5000` pools
+unfinished starts across those rows at the specified cumulative iteration caps.
+Data and cached Fourier bases are stored once per trial. With no
+`--continuation-batch`, all active starts use one padded bucket. An explicit
+limit bounds continuation memory and can improve throughput for large batches;
+smaller chunks add serial calls, so measure throughput. Staging remains optional because
+its packing and synchronization costs can outweigh the benefit. Row grouping
+preserves random keys; float32 compilation context can change arithmetic by a
+few ULPs and change selection among nearly tied optima. Simulation chunk size
+and row batch size are recorded in the resume fingerprint.
 
 ## Generate averaged surfaces
 
@@ -40,6 +71,10 @@ python -m surface_computation.create_averaged_surfaces_from_samples \
 `combine_mirrored_surfaces.py` supports old, uncombined raw-surface folders;
 the current averaging command already combines mirrored samples.
 A complete grid requires substantial GPU time and storage.
+New grid outputs use an estimator namespace for sample/surface directories,
+object-store prefixes, locks and completion registries, including explicit
+destinations. Grid outputs also retain checked EM diagnostics. Existing moment
+estimator files remain in their original directories.
 
 ## Notes for developers
 

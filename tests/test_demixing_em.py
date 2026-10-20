@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from surface_computation.jax_fit_functions import _em_result, train_em_jax
+from surface_computation.jax_fit_functions import train_em_jax
 
 
 @pytest.fixture
@@ -52,16 +52,3 @@ def test_em_variants_improve_beyond_first_update(module_name, function_name, obs
     assert len(fitted) == 6
     assert all(np.isfinite(value).all() for value in fitted)
     assert float(fitted[-1]) > float(first[-1]) + 1e-3
-
-
-def test_tie_diagnostic_preserves_selected_start():
-    # First-index argmax selects the capped start; its equally good peer converged.
-    parameters=tuple(jnp.array([[1., 2.], [3., 4.]]) for _ in range(5))
-    state=(jnp.array([5000, 4]), parameters, jnp.array([-10., -10.]),
-           jnp.array([1e-3, 1e-7]))
-    fitted=_em_result(state,return_diagnostics=True)
-    np.testing.assert_array_equal(fitted[0],parameters[0][0])
-    assert not bool(fitted[-1]['converged'])
-    assert bool(fitted[-1]['any_best_converged'])
-    assert int(fitted[-1]['best_tie_count'])==2
-    assert len(_em_result(state))==6

@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "surface_computation"))
 
 from surface_computation.object_store import ObjectStoreConfig, SurfaceObjectStore
+from surface_computation.em_identity import add_reader_arguments, resolve_reader
 
 
 def main() -> int:
@@ -20,12 +21,14 @@ def main() -> int:
                         help="Overwrite existing local files")
     parser.add_argument("--dry-run", action="store_true",
                         help="List what would be downloaded without writing files")
+    add_reader_arguments(parser)
     args = parser.parse_args()
 
     config = ObjectStoreConfig.from_env()
     if config is None:
         print("Missing S3_BUCKET or OBJECT_STORE_BUCKET in the environment.", file=sys.stderr)
         return 2
+    resolve_reader(args, config)
 
     store = SurfaceObjectStore(config)
     names = store.list_bundle_object_names()

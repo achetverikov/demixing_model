@@ -26,6 +26,25 @@ DX = 0.05
 SIGMAS = [0.5, 2.0, 10.0, 45.0, 120.0, 300.0, 600.0, 1000.0]
 
 
+@pytest.mark.parametrize('sd', [1., 59.999, 60., 60.001, 200., 1000.])
+def test_conditional_winding_moments_match_independent_sum(sd):
+    from scipy.special import logsumexp
+    from surface_computation import likelihood_em as em
+
+    x = np.array([-180., -179.99, 0., 179.99])
+    mean = np.array([-170., 37.])
+    z = (x[:, None]-mean+180)%360-180
+    z = z[:, :, None]+np.arange(-40,41)*360
+    logw = -.5*(z/sd)**2
+    normalizer = logsumexp(logw, axis=-1)
+    q = np.exp(logw-normalizer[:, :, None])
+    expected = (normalizer-np.log(sd)-.5*np.log(2*np.pi), (q*z).sum(-1), (q*z*z).sum(-1))
+    xx = jnp.column_stack((jnp.asarray(x), jnp.zeros(4)))
+    actual = jax.jit(em.wrapped_stats)(xx[:,0], jnp.asarray(mean), jnp.full(2,sd), em.prepare(xx)[0])
+    for a,b in zip(actual,expected):
+        np.testing.assert_allclose(a,b,rtol=2e-5,atol=2e-3)
+
+
 def test_reporting_cell_normal_interval_retains_extreme_tails():
     """The export helper must retain representable mass beyond CDF saturation."""
     from scipy.integrate import quad

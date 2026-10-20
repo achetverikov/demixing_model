@@ -17,7 +17,7 @@ Usage (run from repo root):
 """
 
 import os
-os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'true'
+os.environ.setdefault('XLA_PYTHON_CLIENT_PREALLOCATE', 'true')
 
 import time
 import csv
@@ -30,8 +30,10 @@ import hashlib
 from typing import Tuple, Dict, List, Optional
 import platform
 import json
+from dataclasses import replace
 from datetime import datetime
 from jax import Array
+from functools import partial
 
 # Load .env before any other local imports so REDIS_* vars are available
 from lock_backend import load_env, make_lock_backend, FileLockBackend, LockBackend
@@ -47,8 +49,39 @@ from shared.config import Config
 from shared.averaging import make_averaging_functions, average_sample_pair
 import jax_fit_functions as jf  # Import module to access diagonal_covariance flag
 import jax_fit_main as jfm
+from surface_computation import likelihood_em, em_batch
+from surface_computation import em_identity
 config = Config()
 config.n_samples = 100
+
+
+def estimator_name(name):
+    return em_identity.qualify_name(name, likelihood_em.ESTIMATOR_ID)
+
+
+def estimator_path(path):
+    return em_identity.qualify_path(path, likelihood_em.ESTIMATOR_ID)
+
+
+def run_registry(name):
+    return em_identity.qualify_name(name, Path(config.samples_folder).name)
+
+
+def run_path(path):
+    return em_identity.qualify_path(path, Path(config.samples_folder).name)
+
+
+@partial(jax.jit,static_argnames=('n_simulations','n_samples','full','fix_weights','algorithm','diagonal_covariance'))
+def _scan_entry(inputs,n_simulations,n_samples,full,fix_weights,algorithm,diagonal_covariance):
+    """Cache one scan per shape/options, rather than per parameter combination."""
+    def step(carry,values):
+        key,d,sf1,sf2,idf=values
+        result=jfm.simulate_dual_component_bias_distribution(key,sf1,sf2,idf,d,42.,
+            n_simulations=n_simulations,n_samples=n_samples,return_full_results=full,
+            fix_weights=fix_weights,algorithm=algorithm,diagonal_covariance=diagonal_covariance,
+            return_diagnostics=True)
+        return carry,result
+    return jax.lax.scan(step,None,inputs)[1]
 
 
 class ChunkConflict(Exception):
@@ -183,7 +216,8 @@ def save_samples_checkpoint(output_dir: Path,
                             sd_idf: float, computation_time: float, machine_id: str,
                             n_simulations: int = 0, n_samples: int = 0,
                             random_seed: int = 0,
-                            full_results: Optional[Array] = None, save_csv: bool = False) -> None:
+                            full_results: Optional[Array] = None, save_csv: bool = False,
+                            em_diagnostics=None) -> None:
     """Save EM sample arrays and provenance metadata to a compressed pickle.
 
     Provenance fields stored under 'parameters': machine_id, platform,
@@ -202,12 +236,17 @@ def save_samples_checkpoint(output_dir: Path,
             'n_samples': n_samples,
             'random_seed': random_seed,
             'git_commit': get_git_commit(),
+            'estimator': likelihood_em.ESTIMATOR_ID,
+            'em_checked': em_diagnostics is not None,
         },
         'mu_feat_samples': mu_feat_samples.astype(jnp.float16),
         'mu_idf_samples': mu_idf_samples.astype(jnp.float16),
         'computation_time': computation_time,
         'timestamp': time.time()
     }
+    if em_diagnostics is not None:
+        checkpoint_data['em_diagnostics'] = jax.device_get(em_diagnostics)
+        checkpoint_data['parameters']['em_summary'] = em_batch.summarize(checkpoint_data['em_diagnostics'])
 
     # Add full results if provided
     if full_results is not None:
@@ -335,7 +374,8 @@ class ChunkedGridComputer:
         self.platform = platform.node()
         self.grid_level = grid_level
         self.grid_info = get_grid_level_info(grid_level)
-        self.output_dir = Path(config.samples_folder)
+        self.output_dir = estimator_path(config.samples_folder)
+        config.samples_folder = self.output_dir
         self.custom_param_list = custom_param_list
         self.save_full_results = save_full_results
         self.save_csv = save_csv
@@ -368,7 +408,7 @@ class ChunkedGridComputer:
         # Averaged surfaces directory (pipeline mode)
         if pipeline:
             if averaged_surfaces_dir is not None:
-                self.averaged_surfaces_dir = Path(averaged_surfaces_dir)
+                self.averaged_surfaces_dir = run_path(averaged_surfaces_dir)
             else:
                 folder_name = Path(config.samples_folder).name
                 parent = Path(config.samples_folder).parent
@@ -378,7 +418,7 @@ class ChunkedGridComputer:
             self.averaged_surfaces_dir.mkdir(parents=True, exist_ok=True)
             if bundle_output:
                 if bundle_dir is not None:
-                    self.bundle_dir = Path(bundle_dir)
+                    self.bundle_dir = run_path(bundle_dir)
                 else:
                     self.bundle_dir = self.averaged_surfaces_dir.parent / (
                         self.averaged_surfaces_dir.name + "_bundles"
@@ -387,12 +427,15 @@ class ChunkedGridComputer:
             else:
                 self.bundle_dir = None
             object_store_config = ObjectStoreConfig.from_env()
+            if object_store_config:
+                object_store_config = replace(object_store_config,
+                    prefix=em_identity.qualify_prefix(object_store_config.prefix,self.output_dir.name))
             self.object_store = (
                 SurfaceObjectStore(object_store_config) if object_store_config else None
             )
             self.completion_registry = (
-                completion_registry
-                or (self.averaged_surfaces_dir.name if self.object_store else None)
+                run_registry(completion_registry) if completion_registry else
+                (self.averaged_surfaces_dir.name if self.object_store else None)
             )
 
             print("Compiling KDE averaging functions (pipeline mode)...")
@@ -404,7 +447,7 @@ class ChunkedGridComputer:
             self._reconcile_object_store_completion()
         else:
             self.averaged_surfaces_dir = None
-            self.completion_registry = completion_registry
+            self.completion_registry = run_registry(completion_registry) if completion_registry else None
             self.object_store = None
             self.bundle_dir = None
             self.avg_fns = None
@@ -537,7 +580,7 @@ class ChunkedGridComputer:
             return False
 
     def _acquire_chunk_lock(self, chunk_id: str) -> bool:
-        return self.lock_backend.acquire(chunk_id, self.machine_id, self.lock_ttl)
+        return self.lock_backend.acquire(run_registry(chunk_id), self.machine_id, self.lock_ttl)
 
     def _log_error(self, param_name: str, param_hash: str,
                    sd_feat1: float, sd_feat2: float, sd_idf: float,
@@ -594,7 +637,7 @@ class ChunkedGridComputer:
                          sd_feat1: float, sd_feat2: float, sd_idf: float,
                          samples_time: float, samples_params: Dict,
                          run_index: Optional[int] = None,
-                         full_results_combined=None) -> str:
+                         full_results_combined=None, em_diagnostics=None) -> str:
         """Save samples with retry logic for OneDrive/network filesystem conflicts.
 
         Returns 'saved' or 'error'.
@@ -617,6 +660,7 @@ class ChunkedGridComputer:
                     random_seed=samples_params['random_seed'],
                     full_results=full_results_combined,
                     save_csv=self.save_csv,
+                    em_diagnostics=em_diagnostics,
                 )
                 return 'saved'
             except OSError as e:
@@ -751,29 +795,13 @@ class ChunkedGridComputer:
                                     feat_diff_vals) -> Tuple:
         """Generate mu_feat/mu_idf sample arrays for one parameter combination.
 
-        Returns (mu_feat_bias_array, mu_idf_bias_array, full_results_combined).
-        full_results_combined is None unless save_full_results is True.
+        Returns (mu_feat_bias_array, mu_idf_bias_array, full_results_combined,
+        em_diagnostics). The full-results entry is None unless requested.
         """
-        num_scan_loops = 10
-        num_sims_per_loop = samples_params['n_simulations'] // num_scan_loops
-
-        def scan_fn(carry, inputs):
-            subkey, feat_diff, sf1, sf2, idf = inputs
-            if self.save_full_results:
-                b1, b2, full = jfm.simulate_dual_component_bias_distribution(
-                    subkey, sf1, sf2, idf, feat_diff, 42.0, num_sims_per_loop,
-                    samples_params['n_samples'], return_full_results=True,
-                    fix_weights=self.fix_weights, algorithm=self.algorithm,
-                    diagonal_covariance=self.diagonal_covariance,
-                )
-                return carry, (b1, b2, full)
-            b1, b2 = jfm.simulate_dual_component_bias_distribution(
-                subkey, sf1, sf2, idf, feat_diff, 42.0, num_sims_per_loop,
-                samples_params['n_samples'], return_full_results=False,
-                fix_weights=self.fix_weights, algorithm=self.algorithm,
-                diagonal_covariance=self.diagonal_covariance,
-            )
-            return carry, (b1, b2)
+        num_scan_loops = min(10, samples_params['n_simulations'])
+        if num_scan_loops < 1:
+            raise ValueError('n_simulations must be positive')
+        num_sims_per_loop, remainder = divmod(samples_params['n_simulations'], num_scan_loops)
 
         _, param_hash = create_param_identifier(sd_feat1, sd_feat2, sd_idf, run_index)
         base_key = jax.random.PRNGKey(samples_params['random_seed'])
@@ -784,21 +812,22 @@ class ChunkedGridComputer:
         sd2_arr = jnp.full(len(feat_diff_vals), sd_feat2)
         sp_arr  = jnp.full(len(feat_diff_vals), sd_idf)
 
-        all_mu_feat, all_mu_idf, all_full = [], [], []
+        all_mu_feat, all_mu_idf, all_full, all_diagnostics = [], [], [], []
+        base_simulations = num_sims_per_loop
         for rep in range(num_scan_loops):
+            num_sims_per_loop = base_simulations+int(rep < remainder)
             key, *subkeys = jax.random.split(key, len(feat_diff_vals) + 1)
             tic = time.time()
+            result = _scan_entry((jnp.array(subkeys),feat_diff_vals,sd1_arr,sd2_arr,sp_arr),
+                num_sims_per_loop,samples_params['n_samples'],self.save_full_results,
+                self.fix_weights,self.algorithm,self.diagonal_covariance)
             if self.save_full_results:
-                _, (mu_feat, mu_idf, full) = jax.lax.scan(
-                    scan_fn, None,
-                    (jnp.array(subkeys), feat_diff_vals, sd1_arr, sd2_arr, sp_arr)
-                )
+                mu_feat, mu_idf, full, diagnostic = result
                 all_full.append(full)
             else:
-                _, (mu_feat, mu_idf) = jax.lax.scan(
-                    scan_fn, None,
-                    (jnp.array(subkeys), feat_diff_vals, sd1_arr, sd2_arr, sp_arr)
-                )
+                mu_feat, mu_idf, diagnostic = result
+            em_batch.check_results((diagnostic,))
+            all_diagnostics.append(diagnostic)
             print(f"    Scan {rep + 1}/{num_scan_loops}: {time.time() - tic:.1f}s")
             all_mu_feat.append(mu_feat)
             all_mu_idf.append(mu_idf)
@@ -806,7 +835,8 @@ class ChunkedGridComputer:
         mu_feat_out = jnp.concatenate(all_mu_feat, axis=1)
         mu_idf_out = jnp.concatenate(all_mu_idf, axis=1)
         full_out = jnp.concatenate(all_full, axis=1) if self.save_full_results else None
-        return mu_feat_out, mu_idf_out, full_out
+        diagnostics = jax.tree.map(lambda *v:jnp.concatenate(v, axis=1), *all_diagnostics)
+        return mu_feat_out, mu_idf_out, full_out, diagnostics
 
     def _process_group_pipeline(self, group: List[Tuple], samples_params: Dict,
                                  feat_diff_vals) -> str:
@@ -839,26 +869,28 @@ class ChunkedGridComputer:
         print(f"  [{self.machine_id}] Pipeline: sf1={sf1_a:.1f} sf2={sf2_a:.1f} idf={idf:.1f}")
 
         try:
-            mu_feat_a, mu_idf_a, full_a = self._compute_samples_for_entry(
+            mu_feat_a, mu_idf_a, full_a, diag_a = self._compute_samples_for_entry(
                 sf1_a, sf2_a, idf, run_index_a, samples_params, feat_diff_vals
             )
-            mu_feat_b, mu_idf_b, full_b = self._compute_samples_for_entry(
+            mu_feat_b, mu_idf_b, full_b, diag_b = self._compute_samples_for_entry(
                 sf1_b, sf2_b, idf, run_index_b, samples_params, feat_diff_vals
             )
+        except em_batch.EMValidationError:
+            raise
         except Exception as e:
             print(f"  [{self.machine_id}] Simulation error: {e}")
             return 'error'
 
         # Optionally persist sample files
         if self.save_samples:
-            for (sf1, sf2, sp_, ri, mu_feat, mu_idf, full) in [
-                (sf1_a, sf2_a, idf, run_index_a, mu_feat_a, mu_idf_a, full_a),
-                (sf1_b, sf2_b, idf, run_index_b, mu_feat_b, mu_idf_b, full_b),
+            for (sf1, sf2, sp_, ri, mu_feat, mu_idf, full, diagnostic) in [
+                (sf1_a, sf2_a, idf, run_index_a, mu_feat_a, mu_idf_a, full_a, diag_a),
+                (sf1_b, sf2_b, idf, run_index_b, mu_feat_b, mu_idf_b, full_b, diag_b),
             ]:
                 pname, phash = create_param_identifier(sf1, sf2, sp_, ri)
                 self._save_with_retry(
                     self.output_dir, mu_feat, mu_idf, pname, phash,
-                    sf1, sf2, sp_, 0.0, samples_params, ri, full,
+                    sf1, sf2, sp_, 0.0, samples_params, ri, full, diagnostic,
                 )
 
         try:
@@ -881,6 +913,8 @@ class ChunkedGridComputer:
                     'n_samples': samples_params['n_samples'],
                     'random_seed': samples_params['random_seed'],
                     'git_commit': get_git_commit(),
+                    'estimator': likelihood_em.ESTIMATOR_ID,
+                    'em_summary': em_batch.summarize(jax.tree.map(lambda a,b:jnp.concatenate([a,b]), diag_a, diag_b)),
                 },
                 'surface': averaged,
                 'creation_timestamp': str(jnp.datetime64('now') if False else __import__('datetime').datetime.now().isoformat()),
@@ -1043,14 +1077,14 @@ class ChunkedGridComputer:
                           f"sd_feat1={sd_feat1:.1f}, sd_feat2={sd_feat2:.1f}, "
                           f"sd_idf={sd_idf:.1f}")
 
-                    mu_feat, mu_idf, full = self._compute_samples_for_entry(
+                    mu_feat, mu_idf, full, diagnostic = self._compute_samples_for_entry(
                         sd_feat1, sd_feat2, sd_idf, run_index, samples_params, feat_diff_vals
                     )
                     samples_time = time.time() - samples_start
                     result = self._save_with_retry(
                         self.output_dir, mu_feat, mu_idf, param_name, param_hash,
                         sd_feat1, sd_feat2, sd_idf, samples_time, samples_params,
-                        run_index, full,
+                        run_index, full, diagnostic,
                     )
                     if result == 'saved':
                         surfaces_computed += 1
@@ -1138,7 +1172,7 @@ class ChunkedGridComputer:
 
             chunk_id = f"L{self.grid_level}_chunk_{chunk_start:05d}_{min(chunk_start + chunk_size, self.total_groups):05d}"
             interrupted = False
-            with self.lock_backend.maintain(chunk_id, self.machine_id, self.lock_ttl):
+            with self.lock_backend.maintain(run_registry(chunk_id), self.machine_id, self.lock_ttl):
                 try:
                     surfaces_computed, surfaces_skipped, chunk_time = self._process_chunk(
                         chunk_start, chunk_size, samples_params
@@ -1426,6 +1460,10 @@ def run_chunked_computation(machine_id: str = "PC1", grid_level: int = 1,
         Surface computation parameters passed to compute_grid()
     """
 
+    config.samples_folder = estimator_path(config.samples_folder)
+    averaged_surfaces_dir = str(run_path(averaged_surfaces_dir)) if averaged_surfaces_dir else None
+    bundle_dir = str(run_path(bundle_dir)) if bundle_dir else None
+    completion_registry = run_registry(completion_registry) if completion_registry else None
     coordination_backend = make_lock_backend(lock_backend,
                                              lock_dir=Path(config.samples_folder))
 
@@ -1835,12 +1873,8 @@ def format_count_suffix(value: int) -> str:
 def build_samples_folder_name(n_simulations: int, n_samples: int, algorithm: str,
                               diagonal_covariance: bool, fix_weights: bool) -> str:
     """Construct descriptive folder name based on runtime parameters."""
-    geometry = 'circular' if jf.wrap_feat else 'linear'
-    sim_part = format_count_suffix(n_simulations)
-    algorithm_part = algorithm.lower()
-    covariance_part = 'diagcov' if diagonal_covariance else 'fullcov'
-    weights_part = 'fix_weights' if fix_weights else 'free_weights'
-    return f"sim_samples_{sim_part}_{n_samples}samples_{geometry}_{algorithm_part}_{covariance_part}_{weights_part}"
+    return em_identity.grid_namespace(n_simulations,n_samples,algorithm,
+        diagonal_covariance,fix_weights,jf.wrap_feat)
 
 
 def configure_samples_folder(n_simulations: int, n_samples: int, algorithm: str,

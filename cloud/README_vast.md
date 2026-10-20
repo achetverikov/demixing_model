@@ -274,6 +274,17 @@ instances continue unless they finish, fail, or are destroyed separately. While
 it runs, use `cloud/cloud_status.py` to independently check Redis and object
 storage progress.
 
+New likelihood-EM runs append the full run identity (trial count, sample count,
+model flags and estimator ID) to the configured object-store prefix and Redis
+registry. The status, reconciliation, bundle-sync and monitor commands resolve
+the same identity: pass matching `--n-simulations` and `--n-samples` when reading
+a run. `--run-namespace` selects an exact run identity; `--legacy-estimator`
+reads the original unsuffixed locations. The monitor only permits legacy or
+nonmatching custom namespaces with `--dry-run`, since its workers launch the
+current estimator. Existing monitor throughput and cost estimates come from
+the previous estimator and require recalibration before using them to manage
+new cloud runs.
+
 ## Manual One-Off Launch
 
 Find offers, then choose one offer ID:

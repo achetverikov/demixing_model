@@ -29,11 +29,11 @@ import matplotlib.pyplot as plt
 
 
 @partial(jax.jit, static_argnames=['n_simulations', 'n_samples', 'return_full_results',
-                                   'fix_weights', 'algorithm', 'diagonal_covariance'])
+                                   'fix_weights', 'algorithm', 'diagonal_covariance', 'return_diagnostics'])
 def simulate_dual_component_bias_distribution(key, sd_feat1, sd_feat2, sd_idf, feat_diff, idf_diff,
                                               n_simulations=1000, n_samples=100, return_full_results=False,
                                               fix_weights=False, algorithm='EM',
-                                              diagonal_covariance: bool = True):
+                                              diagonal_covariance: bool = True, return_diagnostics=False):
     """
     Simulate bias distributions for both components in a dual-component Gaussian mixture model.
 
@@ -49,6 +49,8 @@ def simulate_dual_component_bias_distribution(key, sd_feat1, sd_feat2, sd_idf, f
         return_full_results: If True, return full results array in addition to biases
         fix_weights: If True, constrain mixture weights to be equal during fitting (default False)
         algorithm: Which fitting algorithm to use ('EM', 'VBEM' for MAP, or 'VBEM_MIX' to use mixture-of-modes means)
+        return_diagnostics: append per-trial EM stopping/numerical diagnostics.
+            Scientific sample writers must validate these before persistence.
 
     Returns:
         If return_full_results is False:
@@ -73,11 +75,14 @@ def simulate_dual_component_bias_distribution(key, sd_feat1, sd_feat2, sd_idf, f
         return jf.jax_generate_and_fit(
             single_key, mu_feat_true, mu_idf_true, sigma_feat_true, sigma_idf_true,
             weights=0.5, n_samples=n_samples, algorithm=algorithm,
-            fix_weights=fix_weights, diagonal_covariance=diagonal_covariance
+            fix_weights=fix_weights, diagonal_covariance=diagonal_covariance,
+            return_diagnostics=return_diagnostics
         )
 
     # Vmap over all simulations -> results shape: (n_simulations, 2, len(jf.RESULT_COLUMNS))
     results = jax.vmap(single_simulation)(keys)
+    if return_diagnostics:
+        results, diagnostics = results
 
     # Extract fitted and true parameters using named column indices (zero overhead)
     if algorithm == 'VBEM_MIX':
@@ -96,9 +101,10 @@ def simulate_dual_component_bias_distribution(key, sd_feat1, sd_feat2, sd_idf, f
 
     if return_full_results:
         results = jnp.concatenate([results, mu_feat_bias[..., None], mu_idf_bias[..., None]], axis = -1)  # Append biases as last two columns
-        return mu_feat_bias, mu_idf_bias, results
+        output = mu_feat_bias, mu_idf_bias, results
     else:
-        return mu_feat_bias, mu_idf_bias
+        output = mu_feat_bias, mu_idf_bias
+    return output+(diagnostics,) if return_diagnostics else output
 
 
 def estimate_probability_density(bias_samples, query_bias, bandwidth=None, method='kde'):

@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "surface_computation"))
 
 from lock_backend import load_env, make_lock_backend
 from surface_computation.object_store import ObjectStoreConfig, SurfaceObjectStore
+from surface_computation.em_identity import add_reader_arguments, resolve_reader
 
 
 def _expected_counts() -> dict:
@@ -31,18 +32,20 @@ def _redis_completed(registry: str) -> set:
 
 
 def main() -> int:
+    load_env()
     parser = argparse.ArgumentParser(description="Show cloud bundle/Redis status.")
     parser.add_argument("--registry", default=os.getenv("COMPLETION_REGISTRY"),
                         help="Redis completion registry name")
     parser.add_argument("--no-redis", action="store_true",
                         help="Skip Redis status even if REDIS_HOST is configured")
+    add_reader_arguments(parser)
     args = parser.parse_args()
 
-    load_env()
     config = ObjectStoreConfig.from_env()
     if config is None:
         print("Missing S3_BUCKET or OBJECT_STORE_BUCKET in the environment.", file=sys.stderr)
         return 2
+    resolve_reader(args, config)
 
     store = SurfaceObjectStore(config)
     objects = store.list_bundle_objects()

@@ -29,6 +29,7 @@ import numpy as np
 
 from surface_computation import wnm_design as design_mod
 from surface_computation import wnm_simulation
+from surface_computation import likelihood_em, em_batch
 
 
 def _save_npz(path: Path, compress: bool, **arrays):
@@ -54,6 +55,10 @@ def _code_digest(paths=None) -> str:
         root / 'surface_computation' / 'wnm_simulation.py',
         root / 'surface_computation' / 'jax_fit_main.py',
         root / 'surface_computation' / 'jax_fit_functions.py',
+        root / 'surface_computation' / 'likelihood_em.py',
+        root / 'surface_computation' / 'em_batch.py',
+        root / 'surface_computation' / 'em_identity.py',
+        root / 'shared' / 'wnm.py',
     )
     digest = hashlib.sha256()
     for path in sorted(map(Path, paths), key=lambda item: str(item.resolve())):
@@ -78,7 +83,15 @@ def _valid_shard(path: Path, expected_design: np.ndarray, n_simulations: int,
     try:
         with np.load(path) as blob:
             valid = (np.array_equal(blob['design'], expected_design)
-                     and blob['bias'].shape == (len(expected_design), n_simulations, 2))
+                     and blob['bias'].shape == (len(expected_design), n_simulations, 2)
+                     and np.isfinite(blob['bias']).all()
+                     and blob['em_converged'].shape == (len(expected_design), n_simulations)
+                     and blob['em_converged'].all())
+            valid = valid and all(blob['em_'+name].shape == (len(expected_design), n_simulations)
+                and np.isfinite(blob['em_'+name]).all() for name in likelihood_em.DIAGNOSTIC_FIELDS)
+            valid = valid and not (blob['em_nonfinite_starts'].any() or blob['em_material_decreases'].any())
+            valid = valid and blob['em_parameters'].shape == (len(expected_design),n_simulations,5,2)
+            valid = valid and np.isfinite(blob['em_parameters']).all()
             if expected_coordinates is not None:
                 valid = (valid and 'coordinates' in blob
                          and np.array_equal(blob['coordinates'], expected_coordinates))
@@ -87,13 +100,19 @@ def _valid_shard(path: Path, expected_design: np.ndarray, n_simulations: int,
         return False
 
 
-def _assemble_chunks(records, n_rows: int, n_simulations: int):
+def _assemble_chunks(records, n_rows: int, n_simulations: int, return_diagnostics=False):
     """Assemble verified two-axis chunks with only the final array in memory."""
     bias = np.empty((n_rows, n_simulations, 2), dtype=np.float32)
+    diagnostics = {}
     for path, row_start, row_stop, sim_start, sim_stop in records:
         with np.load(path) as blob:
             bias[row_start:row_stop, sim_start:sim_stop] = blob['bias']
-    return bias
+            if return_diagnostics:
+                for name in ('em_'+k for k in (*likelihood_em.DIAGNOSTIC_FIELDS,'parameters')):
+                    if name not in diagnostics:
+                        diagnostics[name] = np.empty((n_rows, n_simulations)+blob[name].shape[2:], dtype=blob[name].dtype)
+                    diagnostics[name][row_start:row_stop, sim_start:sim_stop] = blob[name]
+    return (bias, diagnostics) if return_diagnostics else bias
 
 
 def _load_design_file(path: Path) -> tuple[np.ndarray, list[str] | None]:
@@ -131,7 +150,7 @@ def main():
     p.add_argument('--n-simulations', type=int, default=200,
                    help='EM runs per design point')
     p.add_argument('--n-samples', type=int, default=100,
-                   help="observer's internal evidence samples per trial (20 or 100)")
+                   help="observer's total internal evidence samples per trial")
     p.add_argument('--validation', action='store_true',
                    help='use an off-grid validation design instead of training Sobol')
     p.add_argument('--validation-design',
@@ -155,6 +174,12 @@ def main():
                    help='design rows simultaneously processed on device')
     p.add_argument('--simulation-chunk', type=int, default=250,
                    help='maximum EM runs per device call; bounds GPU memory')
+    p.add_argument('--em-stages', type=int, nargs='+',
+                   help='pool unfinished starts across parameter rows at these cumulative caps; end at 5000')
+    p.add_argument('--continuation-batch', type=int,
+                   help='maximum pooled starts per continuation call; default pools all active starts')
+    p.add_argument('--em-max-iter', type=int, default=likelihood_em.MAX_ITER,
+                   help='total iteration cap for continuation of a selected capped winner')
     p.add_argument('--shard-rows', type=int, default=16,
                    help='design rows per resumable disk shard')
     p.add_argument('--resume', action='store_true',
@@ -179,6 +204,13 @@ def main():
         p.error('--block-rows cannot exceed --shard-rows')
     if args.crn and args.crn_within_trajectories:
         p.error('--crn and --crn-within-trajectories are mutually exclusive')
+    if args.em_max_iter < 1:
+        p.error('--em-max-iter must be positive')
+    if args.em_stages and (args.em_stages[-1] != min(likelihood_em.FIRST_CAP, args.em_max_iter)
+            or args.em_stages[0] < 1 or any(a >= b for a,b in zip(args.em_stages,args.em_stages[1:]))):
+        p.error('--em-stages must strictly increase and end at min(5000, --em-max-iter)')
+    if args.continuation_batch is not None and (args.continuation_batch < 1 or not args.em_stages):
+        p.error('--continuation-batch must be positive and requires --em-stages')
 
     strata = None
     if args.design_file is not None:
@@ -229,7 +261,8 @@ def main():
     shard_dir = args.out.with_suffix(args.out.suffix + '.shards')
     shard_dir.mkdir(parents=True, exist_ok=True)
     signature = {
-        'format_version': 2,
+        'format_version': 3,
+        'estimator': likelihood_em.ESTIMATOR_ID,
         'simulation_code_sha256': _code_digest(),
         'design_sha256': _design_digest(design),
         'n_rows': len(design), 'n_simulations': args.n_simulations,
@@ -238,6 +271,10 @@ def main():
         'crn_within_trajectories': args.crn_within_trajectories,
         'shard_rows': args.shard_rows,
         'simulation_chunk': args.simulation_chunk,
+        'block_rows': args.block_rows,
+        'em_stages': args.em_stages,
+        'continuation_batch': args.continuation_batch,
+        'em_max_iter': args.em_max_iter,
     }
     manifest = shard_dir / 'manifest.json'
     if manifest.exists():
@@ -263,17 +300,18 @@ def main():
                     path, expected, n_chunk, coordinates):
                 action = 'reused'
             else:
-                chunk_bias = np.asarray(wnm_simulation.simulate(
+                chunk_bias, diagnostic = wnm_simulation.simulate(
                     base_key, expected, n_simulations=n_chunk,
                     n_samples=args.n_samples, fix_weights=args.fix_weights,
                     common_random_numbers=args.crn,
                     block_rows=min(args.block_rows, len(expected)), progress=False,
                     row_offset=row_start, simulation_offset=sim_start,
                     common_random_groups=(None if crn_groups is None else
-                                          crn_groups[row_start:row_stop])),
-                    dtype=np.float32)
-                _save_npz(path, args.compress, design=expected, bias=chunk_bias,
-                          coordinates=coordinates)
+                                          crn_groups[row_start:row_stop]),
+                    em_stages=args.em_stages, continuation_batch=args.continuation_batch,
+                    em_max_iter=args.em_max_iter, return_diagnostics=True)
+                _save_npz(path, args.compress, design=expected, bias=np.asarray(chunk_bias),
+                          coordinates=coordinates, **{'em_'+k:np.asarray(v) for k,v in diagnostic.items()})
                 action = 'saved'
             records.append((path, row_start, row_stop, sim_start, sim_stop))
             completed_chunks += 1
@@ -283,12 +321,14 @@ def main():
                 print(f'  chunks {completed_chunks}/{total_chunks}; '
                       f'{action} {path.name}', flush=True)
     simulation_elapsed = time.time() - t0
-    bias = _assemble_chunks(records, len(design), args.n_simulations)
+    bias, diagnostics = _assemble_chunks(records, len(design), args.n_simulations, return_diagnostics=True)
     n_bad = int(np.sum(~np.isfinite(bias)))
     elapsed = time.time() - t0
     meta = dict(vars(args) | {'elapsed_s': elapsed,
                               'simulation_elapsed_s': simulation_elapsed,
                               'n_nonfinite': n_bad,
+                              'estimator': likelihood_em.ESTIMATOR_ID,
+                              'em_summary': em_batch.summarize({k.removeprefix('em_'):v for k,v in diagnostics.items()}),
                               'effective_design_seed': design_seed,
                               'idf_diff': wnm_simulation.IDF_DIFF,
                               'dprime_definition': 'idf_diff / sd_idf',
@@ -297,7 +337,7 @@ def main():
             for key, value in meta.items()}
     _save_npz(args.out, args.compress, design=design, bias=bias,
               strata=np.asarray(strata if strata else [], dtype=object),
-              meta=json.dumps(meta))
+              meta=json.dumps(meta), **diagnostics)
     print(f"Done in {elapsed:.1f}s ({elapsed / design.shape[0]:.2f}s/point); "
           f"{n_bad} non-finite biases")
     print(f"Saved {args.out} ({args.out.stat().st_size / 1e6:.1f} MB)")

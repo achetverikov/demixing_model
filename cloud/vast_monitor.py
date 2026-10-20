@@ -33,6 +33,7 @@ from typing import Optional
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "surface_computation"))
+from surface_computation.em_identity import add_reader_arguments, reader_namespace, qualify_prefix, qualify_name, grid_namespace
 
 # ── Pipeline constants ──────────────────────────────────────────────────────
 N_SURFACES   = 32_800
@@ -674,6 +675,7 @@ def run_loop(args: argparse.Namespace) -> None:
                         'BUNDLE_DIR':          bundle_dir,
                         'N_SIMULATIONS':       str(args.n_simulations),
                         'N_SAMPLES':           str(args.n_samples),
+                        'SIMULATION_NAMESPACE': args.run_namespace or '',
                         'VAST_GPU_HINT':        gpu,
                     }
                     onstart = (
@@ -758,7 +760,15 @@ def main() -> int:
                     help='Apply kill logic to all instances, not just ones spawned by this monitor')
     ap.add_argument('--dry-run', action='store_true',
                     help='Report actions without executing them')
+    add_reader_arguments(ap, counts=False)
     args = ap.parse_args()
+    namespace = reader_namespace(args)
+    if not args.dry_run and namespace != grid_namespace(args.n_simulations,args.n_samples):
+        ap.error('Legacy/custom namespaces require --dry-run; current workers use the counts-derived namespace')
+    if namespace:
+        args.run_namespace = namespace
+        args.s3_prefix = qualify_prefix(args.s3_prefix, namespace)
+        args.registry = qualify_name(args.registry or 'averaged_surfaces_vast', namespace)
 
     # Activate vastai API key from env
     key = os.environ.get('VASTAPIKEY') or os.environ.get('VAST_API_KEY', '')
