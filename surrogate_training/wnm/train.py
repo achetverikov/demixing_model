@@ -231,8 +231,8 @@ def main():
         args.source, corpus_files=args.corpus_files, corpus_sims=args.corpus_sims,
         seed=args.seed, progress=True)
     n_samples = source_meta.get("n_samples")
-    if n_samples not in (20, 100):
-        raise ValueError("Training source must declare n_samples=20 or 100")
+    if not isinstance(n_samples, int) or n_samples < 1:
+        raise ValueError("Training source must declare a positive integer n_samples")
     source_strata = source_meta.pop('strata', None)
     if source_strata:
         source_meta['n_trajectory_labels'] = len(set(source_strata))

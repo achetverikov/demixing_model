@@ -14,6 +14,10 @@ python -m surface_computation.generate_wnm_training_data \
 
 Choose the internal sample count for the observer you want to model. See the [simulation guide](../../surface_computation/README.md) for design size, repetitions, and output details.
 
+Custom training and packaging accept any positive integer sample count, including
+500. Packaged defaults remain 20 and 100; use an explicit checkpoint path for
+other counts, and validate that predictor independently before fitting data.
+
 ## 2. Train the mixture
 
 ```bash

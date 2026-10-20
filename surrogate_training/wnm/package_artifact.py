@@ -328,7 +328,7 @@ def main():
     parser.add_argument("--corpus-stage", type=Path,
                         help="Stage directory whose corpus trained the fit, e.g. "
                              "results/wnm_4.1p.")
-    parser.add_argument("--n-samples", type=int, required=True, choices=[20, 100],
+    parser.add_argument("--n-samples", type=int, required=True,
                         help="Observer evidence samples per trial the corpus was simulated at.")
     parser.add_argument("--out", type=Path, required=True,
                         help="Destination artifact path.")
