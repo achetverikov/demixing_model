@@ -379,6 +379,18 @@ def compute_vlb(X, pi, mu_feat, mu_idf, sigma_feat, sigma_idf, membership_weight
 
     return jnp.sum(vlb)
 
+def initial_em_vlb(observed, params, *, circular):
+    """Evaluate each start's actual VLB before measuring relative change."""
+    e_step_fn = e_step_circ if circular else e_step
+    vlb_fn = compute_vlb_circ if circular else compute_vlb
+
+    def initial_loss(*theta):
+        membership = e_step_fn(observed, *theta)
+        return vlb_fn(observed, *theta, membership)
+
+    return jax.vmap(initial_loss)(*params)
+
+
 @jax.jit
 def m_step(X, membership_weight):
     """
@@ -594,7 +606,9 @@ def train_em_jax_Lk_B(key, observed, num_comp=2, n_init=400, rtol=1e-6, max_iter
         mu_init[:, :, 1],
         sigma_feat_init,
         sigma_idf_init,
-        -jnp.ones((n_init,)) * jnp.inf,
+        jax.vmap(partial(compute_loglike_diag_common, observed))(
+            pi_init, mu_init[:, :, 0], mu_init[:, :, 1],
+            sigma_feat_init, sigma_idf_init),
         jnp.ones((n_init,)) * jnp.inf,
     )
 
@@ -652,7 +666,9 @@ def train_em_jax_diag_common(key, observed, num_comp=2, n_init=400, rtol=1e-6, m
         mu_init[:, :, 1],
         sigma_init[:, 0],
         sigma_init[:, 1],
-        -jnp.ones((n_init,)) * jnp.inf,
+        jax.vmap(partial(compute_loglike_diag_common, observed))(
+            pi_init, mu_init[:, :, 0], mu_init[:, :, 1],
+            sigma_init[:, 0], sigma_init[:, 1]),
         jnp.ones((n_init,)) * jnp.inf,
     )
 
@@ -667,205 +683,141 @@ def train_em_jax_diag_common(key, observed, num_comp=2, n_init=400, rtol=1e-6, m
     return weights, mu_feat_best, mu_idf_best, sigma_feat_arr, sigma_idf_arr, loss_best
 
 
-@partial(jax.jit, static_argnames=['num_comp', 'n_init', 'rtol', 'max_iter', 'fix_weights'])
-def train_em_jax(key, observed, num_comp=2, n_init=225, rtol=1e-6, max_iter=5000,
-                 fix_weights=False):
+EM_N_INIT = 225
+EM_RTOL = 1e-6
+EM_MAX_ITER = 5000
+
+
+def _em_init(key, observed, num_comp=2, n_init=EM_N_INIT):
+    pi_init = jnp.full((n_init, num_comp), 1.0 / num_comp)
+
+    key, idx_key = jax.random.split(key)
+    idxs = jax.random.randint(idx_key, (n_init, num_comp), 0, observed.shape[0])
+    mu_init = observed[idxs]  # (n_init, K, D)
+    mu_feat_init = mu_init[..., 0]
+    mu_idf_init = mu_init[..., 1]
+
+    if wrap_feat:
+        mu_feat_init = jnp.mod(mu_feat_init + 180, 360.0) - 180
+    if wrap_idf:
+        mu_idf_init = jnp.mod(mu_idf_init + 180, 360.0) - 180
+
+    key, subkey = jax.random.split(key)
+    data_sd = observed.std(0)
+    sigma_init = jax.random.uniform(
+        subkey,
+        minval=data_sd[None, None, :] * 0.3,
+        maxval=data_sd[None, None, :] * 2.0,
+        shape=(n_init, num_comp, observed.shape[-1])
+    )
+    sigma_feat_init = sigma_init[..., 0]
+    sigma_idf_init = sigma_init[..., 1]
+
+    # Compare the first update with its actual starting objective. An -inf
+    # sentinel makes the first relative change inf/inf and stops EM on NaN.
+    loss_init = initial_em_vlb(observed,
+        (pi_init, mu_feat_init, mu_idf_init, sigma_feat_init, sigma_idf_init),
+        circular=True)
+    loss_upd_init = jnp.ones([n_init]) * jnp.inf
+
+    init_val = (jnp.zeros([n_init], jnp.int32),
+                (pi_init, mu_feat_init, mu_idf_init, sigma_feat_init, sigma_idf_init),
+                loss_init,
+                loss_upd_init)
+    return key, init_val
+
+
+def _em_cond(state, *, rtol=EM_RTOL, max_iter=EM_MAX_ITER):
+    i, _, _, loss_diff = state
+    return jnp.any((i < max_iter) & (loss_diff > rtol))
+
+
+@partial(jax.jit, static_argnames=['min_val'])
+def _project_em_weights(x, min_val=0.01):
     """
-    Trains a mixture model using the Expectation-Maximization algorithm in JAX.
+    Projects a 2-element array onto the probability simplex while ensuring
+    each element is at least `min_val` and the sum remains 1.
 
-    :param key: PRNG key for random number generation.
-    :param observed: The observed data.
-    :param num_comp: The number of components in the mixture model.
-    :param n_init: The number of initializations for the algorithm.
-    :param rtol: The relative tolerance for convergence.
-    :param max_iter: The maximum number of iterations for the algorithm.
-    :param fix_weights: If True, hold the mixture weights fixed at 1/num_comp (equal
-        proportions) throughout — the M-step weight update is skipped. If False (default),
-        weights are estimated and projected onto the simplex with a 0.1 floor each step.
-    :return: A tuple containing the estimated parameters: pi_best, mu_best, sigma_best.
+    :param x: Input array.
+    :param min_val: Minimum value for each element.
+    :return: Projected array.
     """
+    x = jnp.maximum(x, min_val)  # Ensure minimum value
+    excess = jnp.sum(x) - 1.0  # Compute excess amount
+    x -= excess * (x - min_val) / jnp.sum(x - min_val + 1e-8)  # Adjust
+    return x
 
-    def cond_fn(state):
-        """
-        Condition function for the EM loop. Checks if the maximum number of iterations
-        is reached or if the relative change in loss is below the tolerance.
 
-        :param state: Current state of the EM algorithm.
-        :return: Boolean indicating whether to continue the loop.
-        """
-        i, thetas, loss, loss_diff = state
-        return jnp.any((i < max_iter) & (loss_diff > rtol))
+def _em_step(observed, state, *, fix_weights=False, debug=False):
+    """
+    Performs one step of the EM algorithm.
 
-    @partial(jax.jit, static_argnames=['min_val'])
-    def project_to_simplex_with_min(x, min_val=0.01):
-        """
-        Projects a 2-element array onto the probability simplex while ensuring
-        each element is at least `min_val` and the sum remains 1.
+    :param state: Current state of the EM algorithm.
+    :param debug: Boolean indicating whether to plot debug information.
+    :return: Updated state of the EM algorithm.
+    """
+    i, (pi, mu_feat, mu_idf, sigma_feat, sigma_idf), loss_i, loss_diff_i = state
+    membership_weight = e_step_circ(observed, pi, mu_feat, mu_idf, sigma_feat, sigma_idf)
 
-        :param x: Input array.
-        :param min_val: Minimum value for each element.
-        :return: Projected array.
-        """
-        x = jnp.maximum(x, min_val)  # Ensure minimum value
-        excess = jnp.sum(x) - 1.0  # Compute excess amount
-        x -= excess * (x - min_val) / jnp.sum(x - min_val + 1e-8)  # Adjust
-        return x
-
-    def generate_inits(key):
-        pi_init = jnp.full((n_init, num_comp), 1.0 / num_comp)
-
-        key, idx_key = jax.random.split(key)
-        idxs = jax.random.randint(idx_key, (n_init, num_comp), 0, observed.shape[0])
-        mu_init = observed[idxs]  # (n_init, K, D)
-        mu_feat_init = mu_init[..., 0]
-        mu_idf_init = mu_init[..., 1]
-
-        if wrap_feat:
-            mu_feat_init = jnp.mod(mu_feat_init + 180, 360.0) - 180
-        if wrap_idf:
-            mu_idf_init = jnp.mod(mu_idf_init + 180, 360.0) - 180
-
-        key, subkey = jax.random.split(key)
-        data_sd = observed.std(0)
-        sigma_init = jax.random.uniform(
-            subkey,
-            minval=data_sd[None, None, :] * 0.3,
-            maxval=data_sd[None, None, :] * 2.0,
-            shape=(n_init, num_comp, observed.shape[-1])
-        )
-        sigma_feat_init = sigma_init[..., 0]
-        sigma_idf_init = sigma_init[..., 1]
-
-        loss_init = -jnp.ones([n_init]) * jnp.inf
-        loss_upd_init = jnp.ones([n_init]) * jnp.inf
-
-        init_val = (jnp.zeros([n_init], jnp.int32),
-                    (pi_init, mu_feat_init, mu_idf_init, sigma_feat_init, sigma_idf_init),
-                    loss_init,
-                    loss_upd_init)
-        return key, init_val
-
-    def one_step(state, debug=False):
-        """
-        Performs one step of the EM algorithm.
-
-        :param state: Current state of the EM algorithm.
-        :param debug: Boolean indicating whether to plot debug information.
-        :return: Updated state of the EM algorithm.
-        """
-        i, (pi, mu_feat, mu_idf, sigma_feat, sigma_idf), loss_i, loss_diff_i = state
-        membership_weight = e_step_circ(observed, pi, mu_feat, mu_idf, sigma_feat, sigma_idf)
-
-        if debug:
-            plot_X(observed, jnp.vstack([mu_feat, mu_idf]).T, sigma_true=jnp.vstack([sigma_feat, sigma_idf]),
-                   est_weights=membership_weight, title=f'step {i}')
-
-        pi_upd, mu_feat_upd, mu_idf_upd, sigma_feat_upd, sigma_idf_upd = m_step_circ(observed, membership_weight, debug = debug)
-
-        if fix_weights:
-            # Keep weights pinned at their initial equal value (1/num_comp); skip the update.
-            pi_upd = pi
-        else:
-            pi_upd = project_to_simplex_with_min(pi_upd, 0.1)
-
-        membership_weight_upd = e_step_circ(
-            observed, pi_upd, mu_feat_upd, mu_idf_upd, sigma_feat_upd, sigma_idf_upd
-            )
-
-        loss_upd = compute_vlb_circ(observed, pi_upd, mu_feat_upd, mu_idf_upd, sigma_feat_upd, sigma_idf_upd, membership_weight_upd)
-        loss_diff_upd = jnp.abs(loss_upd - loss_i) / (1e-12 + jnp.abs(loss_i))
-        new_state = (i + 1,
-                     (pi_upd, mu_feat_upd, mu_idf_upd, sigma_feat_upd, sigma_idf_upd),
-                     loss_upd,
-                     loss_diff_upd)
-        if debug:
-            format_state_change(state, new_state)
-
-        return new_state
-
-    def one_step_norm(state, debug=False):
-        """
-        Performs one step of the EM algorithm for the normal distribution.
-
-        :param state: Current state of the EM algorithm.
-        :param debug: Boolean indicating whether to plot debug information.
-        :return: Updated state of the EM algorithm.
-        """
-        i, (pi, mu_feat, mu_idf, sigma_feat, sigma_idf), loss_i, loss_diff_i = state
-        membership_weight = e_step(observed, pi, mu_feat, mu_idf, sigma_feat, sigma_idf)
-
-        if debug:
-            plot_X(observed, jnp.vstack([mu_feat, mu_idf]).T, sigma_true=jnp.vstack([sigma_feat, sigma_idf]),
-                   est_weights=membership_weight, title=f'step {i}')
-
-        pi_upd, mu_feat_upd, mu_idf_upd, sigma_feat_upd, sigma_idf_upd = m_step(observed, membership_weight)
-
-        pi_upd = project_to_simplex_with_min(pi_upd, 0.1)
-        membership_weight_upd = e_step(
-            observed, pi_upd, mu_feat_upd, mu_idf_upd, sigma_feat_upd, sigma_idf_upd
-        )
-        loss_upd = compute_vlb(observed, pi_upd, mu_feat_upd, mu_idf_upd, sigma_feat_upd, sigma_idf_upd, membership_weight_upd)
-        loss_diff_upd = jnp.abs(loss_upd - loss_i) / (1e-12 + jnp.abs(loss_i))
-        new_state = (i + 1,
-                     (pi_upd, mu_feat_upd, mu_idf_upd, sigma_feat_upd, sigma_idf_upd),
-                     loss_upd,
-                     loss_diff_upd)
-        if debug:
-            format_state_change(state, new_state)
-
-        return new_state
-
-    def em_loop(state):
-        """
-        Runs the EM loop until convergence.
-
-        :param state: Initial state of the EM algorithm.
-        :return: Final state of the EM algorithm.
-        """
-        return jax.lax.while_loop(cond_fn, one_step, state)
-
-    one_step_parallel = jax.vmap(one_step)
-
-    key, init_val = generate_inits(key)
-    em_loop_parallel = jax.vmap(em_loop)
-
-    num_iter, est_pars, loss, loss_diff = em_loop_parallel(init_val)
-    weights, mu_feat_est, mu_idf_est, sigma_feat_est, sigma_idf_est = est_pars
-
-    index = jnp.argmax(jnp.nan_to_num(loss, nan=-jnp.inf))
-
-    debug = False
     if debug:
-        pi_init, mu_feat_init, mu_idf_init, sigma_feat_init, sigma_idf_init = init_val[1]
-        state = (1,
-                 (pi_init[index], mu_feat_init[index], mu_idf_init[index], sigma_feat_init[index], sigma_idf_init[index]),
-                 -jnp.inf,
-                 jnp.inf)
-        # state_norm = (1,
-        #               (pi_init[index], mu_feat_init[index], mu_idf_init[index], sigma_feat_init[index] ** 2, sigma_idf_init[index] ** 2),
-        #               -jnp.inf, jnp.inf)
-        for _ in range(max_iter):
-            new_state = one_step(state, debug=True)
-            # new_state_norm = one_step_norm(state_norm, debug=True)
+        plot_X(observed, jnp.vstack([mu_feat, mu_idf]).T, sigma_true=jnp.vstack([sigma_feat, sigma_idf]),
+               est_weights=membership_weight, title=f'step {i}')
 
-            i, pars, loss_i, loss_diff_i = new_state
-            state = new_state
-            # state_norm = new_state_norm
-            if not cond_fn(state):
-                i, thetas, loss, loss_diff = state
-                print(i < max_iter)
-                print(loss_diff > rtol)
+    pi_upd, mu_feat_upd, mu_idf_upd, sigma_feat_upd, sigma_idf_upd = m_step_circ(observed, membership_weight, debug = debug)
 
-                break
+    if fix_weights:
+        # Keep weights pinned at their initial equal value (1/num_comp); skip the update.
+        pi_upd = pi
+    else:
+        pi_upd = _project_em_weights(pi_upd, 0.1)
 
-        i, (pi, mu_feat, mu_idf, sigma_feat, sigma_idf), loss_i, loss_diff_i = state
-        membership_weight = e_step_circ(observed, pi, mu_feat, mu_idf, sigma_feat, sigma_idf)
-        plot_X(observed, jnp.vstack([mu_feat, mu_idf]).T, sigma_true=jnp.vstack([sigma_feat, sigma_idf]), est_weights=membership_weight)
+    membership_weight_upd = e_step_circ(
+        observed, pi_upd, mu_feat_upd, mu_idf_upd, sigma_feat_upd, sigma_idf_upd
+        )
 
-    weights, mu_feat_est, mu_idf_est, sigma_feat_est, sigma_idf_est, loss = jax.tree.map(
-        lambda x: x[index], (weights, mu_feat_est, mu_idf_est, sigma_feat_est, sigma_idf_est, loss))
+    loss_upd = compute_vlb_circ(observed, pi_upd, mu_feat_upd, mu_idf_upd, sigma_feat_upd, sigma_idf_upd, membership_weight_upd)
+    loss_diff_upd = jnp.abs(loss_upd - loss_i) / (1e-12 + jnp.abs(loss_i))
+    new_state = (i + 1,
+                 (pi_upd, mu_feat_upd, mu_idf_upd, sigma_feat_upd, sigma_idf_upd),
+                 loss_upd,
+                 loss_diff_upd)
+    if debug:
+        format_state_change(state, new_state)
 
-    return weights, mu_feat_est, mu_idf_est, sigma_feat_est, sigma_idf_est, loss
+    return new_state
+
+
+def _em_result(state, *, rtol=EM_RTOL, return_diagnostics=False):
+    num_iter, est_pars, losses, loss_diff = state
+    index = jnp.argmax(jnp.nan_to_num(losses, nan=-jnp.inf))
+    result = jax.tree.map(lambda x: x[index], est_pars + (losses,))
+    if return_diagnostics:
+        converged = jnp.isfinite(losses) & jnp.isfinite(loss_diff) & (loss_diff <= rtol)
+        tied = jnp.isfinite(losses) & (losses == losses[index])
+        return result + ({'iterations': num_iter[index],
+                          'relative_change': loss_diff[index],
+                          'converged': converged[index],
+                          'any_best_converged': jnp.any(tied & converged),
+                          'best_tie_count': jnp.sum(tied)},)
+    return result
+
+
+@partial(jax.jit, static_argnames=['num_comp', 'n_init', 'rtol', 'max_iter', 'fix_weights', 'return_diagnostics'])
+def train_em_jax(key, observed, num_comp=2, n_init=EM_N_INIT, rtol=EM_RTOL,
+                 max_iter=EM_MAX_ITER, fix_weights=False, return_diagnostics=False):
+    """Fit the circular diagonal mixture, optionally returning stopping diagnostics.
+
+    ``converged`` describes the first selected maximum, preserving tie-breaking.
+    ``any_best_converged`` reports whether any exactly tied best start converged.
+    The default return remains the six fitted parameters/objective arrays.
+    """
+    _, initial = _em_init(key, observed, num_comp, n_init)
+    cond = partial(_em_cond, rtol=rtol, max_iter=max_iter)
+    step = partial(_em_step, observed, fix_weights=fix_weights)
+    state = jax.vmap(lambda s: jax.lax.while_loop(cond, step, s))(initial)
+    return _em_result(state, rtol=rtol, return_diagnostics=return_diagnostics)
+
+
 
 
 @partial(jax.jit, static_argnames=['n_samples', 'weights'])
