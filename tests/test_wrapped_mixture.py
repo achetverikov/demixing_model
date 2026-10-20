@@ -26,6 +26,72 @@ DX = 0.05
 SIGMAS = [0.5, 2.0, 10.0, 45.0, 120.0, 300.0, 600.0, 1000.0]
 
 
+def test_reporting_cell_normal_interval_retains_extreme_tails():
+    """The export helper must retain representable mass beyond CDF saturation."""
+    from scipy.integrate import quad
+    from scipy.stats import norm
+    from model_fit_to_data.wnm_likelihood import _normal_interval_probability
+
+    lower = np.array([-21., -1., 19.])
+    upper = np.array([-19., 1., 21.])
+    expected = np.array([quad(norm.pdf, lo, hi, epsabs=1e-100, epsrel=1e-12)[0]
+                         for lo, hi in zip(lower, upper)])
+    actual = _normal_interval_probability(lower, upper)
+    assert actual[2] > 0
+    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=0)
+
+
+@pytest.mark.parametrize('mu,sigma,bias', [
+    (0., 1., [20., -20.]),
+    (0., 30., [0., 20., -20.]),
+    (179., 5., [-180., 180., -178., 178.]),
+])
+def test_reporting_cell_likelihood_matches_wrapped_pdf_integral(mu, sigma, bias):
+    """Exercise native observation bins, tail routing, and the circular seam."""
+    from scipy.integrate import quad
+    from scipy.stats import norm
+    from shared.mu_feat_axis import bin_indices_np, mu_feat_grid_np, mu_feat_cell_width
+    from model_fit_to_data.wnm_likelihood import exact_cell_log_probability
+
+    class FixedPredictor:
+        def distribution(self, rows, validate=False, sd_motor=0.):
+            shape = (len(rows), 1)
+            return dict(mu=jnp.full(shape, mu), sigma=jnp.full(shape, sigma),
+                        log_pi=jnp.zeros(shape))
+
+    bias = np.array(bias)
+    half = mu_feat_cell_width() / 2
+    centers = mu_feat_grid_np()[bin_indices_np(bias)]
+    expected = np.array([
+        quad(lambda x: sum(norm.pdf(x + shift, loc=mu, scale=sigma)
+                           for shift in (-360., 0., 360.)),
+             center - half, center + half, epsabs=1e-100, epsrel=1e-12)[0]
+        for center in centers])
+    log_probability = exact_cell_log_probability(
+        FixedPredictor(), [20., 30., 40., 0.], np.full(len(bias), 45.), bias)
+    np.testing.assert_allclose(log_probability, np.log(expected), rtol=1e-12, atol=1e-12)
+
+
+def test_reporting_cell_likelihood_retains_tiny_component_weights():
+    """A tiny mixture component can dominate the observation's tail probability."""
+    from scipy.integrate import quad
+    from scipy.stats import norm
+    from model_fit_to_data.wnm_likelihood import exact_cell_log_probability
+
+    class FixedPredictor:
+        def distribution(self, rows, validate=False, sd_motor=0.):
+            return dict(mu=np.array([[0., 20.]], dtype=np.float32),
+                        sigma=np.ones((1, 2), dtype=np.float32),
+                        log_pi=np.array([[0., -120.]], dtype=np.float32))
+
+    tail = quad(norm.pdf, 19., 21., epsabs=1e-100, epsrel=1e-12)[0]
+    central = quad(norm.pdf, -1., 1., epsabs=1e-100, epsrel=1e-12)[0]
+    expected = tail + np.exp(-120.) * central
+    actual = exact_cell_log_probability(
+        FixedPredictor(), [20., 30., 40., 0.], [45.], [20.])
+    np.testing.assert_allclose(actual, np.log(expected), rtol=1e-12, atol=1e-12)
+
+
 def _fourier_wn_pdf(b, mu, sigma):
     """Independent wrapped-normal reference via its Fourier series, in float64.
 

@@ -27,6 +27,13 @@ def _parameters(values):
     return values[:4]
 
 
+def _normal_interval_probability(lower, upper):
+    """Avoid cancellation when both normal CDF values round to one."""
+    return np.where(
+        lower >= 0, norm.sf(lower) - norm.sf(upper),
+        norm.cdf(upper) - norm.cdf(lower))
+
+
 def exact_cell_log_probability(predictor, parameters, feat_diff_deg, bias_deg):
     """Float64 log probability of each observation's reporting cell."""
     sd_feat1, sd_feat2, sd_idf, sd_motor = _parameters(parameters)
@@ -46,7 +53,7 @@ def exact_cell_log_probability(predictor, parameters, feat_diff_deg, bias_deg):
 
     mu = np.asarray(dist["mu"], dtype=np.float64)
     sigma = np.asarray(dist["sigma"], dtype=np.float64)
-    weights = np.asarray(jnp.exp(dist["log_pi"]), dtype=np.float64)
+    weights = np.exp(np.asarray(dist["log_pi"], dtype=np.float64))
 
     centres = np.asarray(mu_feat_grid())
     half = mu_feat_cell_width() / 2.0
@@ -58,7 +65,7 @@ def exact_cell_log_probability(predictor, parameters, feat_diff_deg, bias_deg):
     for shift in shifts:
         upper = (highs + shift - mu) / sigma
         lower = (lows + shift - mu) / sigma
-        mass += np.sum(weights * (norm.cdf(upper) - norm.cdf(lower)), axis=-1)
+        mass += np.sum(weights * _normal_interval_probability(lower, upper), axis=-1)
 
     floored = int(np.sum(mass <= 0.0))
     if floored:
