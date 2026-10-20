@@ -25,6 +25,26 @@ runtime utilities without requiring the comparison workspace.
 
 The fit integration tests exercise the packaged WNM and its continuous search.
 
+## R and Julia linear EM references
+
+`test_linear_em_references.py` compares a common-start EM update and converged
+linear, free-diagonal-covariance fits against Rmixmod (`Gaussian_pk_Lk_Bk`) and
+GaussianMixtures.jl. The overlapping fixture requires soft assignments; SD and
+weight bounds remain inactive. These are compiled integration checks, excluded
+from the default suite. They require R with Rmixmod and Julia 1.13:
+
+```bash
+export JULIA_DEPOT_PATH=/tmp/demixing_julia_depot
+julia --project=tests/references/julia -e 'using Pkg; Pkg.instantiate()'
+PYTHONPATH=. python -m pytest -m integration tests/test_linear_em_references.py
+```
+
+The Julia environment pins GaussianMixtures.jl and its dependencies. Rmixmod
+2.1.12 and Julia 1.13.2 are the validated runtime versions. The test defaults to
+the `/tmp` Julia depot above and respects `JULIA_DEPOT_PATH`. It runs the
+production JAX implementation on the available GPU. Missing
+reference runtimes or packages fail this explicitly selected suite.
+
 ## Smoke pipelines
 
 Four shell workflows exercise the public/model-generation paths:
