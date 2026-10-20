@@ -212,8 +212,11 @@ def minimize_continuous(objective: Callable, bounds: Sequence[tuple],
         return objective(jnp.exp(log_params), *data)
 
     array_dtype = jnp.float32
-    if solver_cache is not None and solver_key is not None and solver_key in solver_cache:
-        solver = solver_cache[solver_key]
+    # Bounds and stopping settings are captured by the compiled solver.
+    cache_key = (solver_key, tuple(map(tuple, bounds)), max_iterations,
+                 tolerance, gradient_tolerance)
+    if solver_cache is not None and solver_key is not None and cache_key in solver_cache:
+        solver = solver_cache[cache_key]
     else:
         solver = BatchedLbfgsb(
             in_log,
@@ -221,7 +224,7 @@ def minimize_continuous(objective: Callable, bounds: Sequence[tuple],
             jnp.asarray(np.log(bounds[:, 1]), dtype=array_dtype),
             maxiter=max_iterations, ftol=tolerance, gtol=gradient_tolerance)
         if solver_cache is not None and solver_key is not None:
-            solver_cache[solver_key] = solver
+            solver_cache[cache_key] = solver
     starts = dispersed_starts(bounds, n_starts, seed)
     outcomes = []
     with jax.default_matmul_precision(matmul_precision):

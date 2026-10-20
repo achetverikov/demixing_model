@@ -309,3 +309,25 @@ def test_empty_and_mismatched_bounds_are_refused():
         minimize_continuous(lambda p: jnp.sum(p), [(200.0, 2.5)], ["a"], n_starts=1)
     with pytest.raises(ValueError, match="names for"):
         minimize_continuous(lambda p: jnp.sum(p), [(2.5, 200.0)], ["a", "b"], n_starts=1)
+
+
+def test_cached_solver_respects_changing_group_bounds():
+    """Optimizer contract: a shared cache must preserve each group's box."""
+    cache = {}
+
+    def objective(parameters, truth):
+        return jnp.sum((jnp.log(parameters) - jnp.log(truth)) ** 2)
+
+    def fit(bounds, truth):
+        return minimize_continuous(objective, bounds, ["sd"], n_starts=2,
+            batch_size=2, objective_args=(jnp.asarray([truth], jnp.float32),),
+            solver_cache=cache, solver_key="same-objective")
+
+    fit([(1., 2.)], 1.5)
+    changed = fit([(50., 100.)], 60.)
+    np.testing.assert_allclose(changed.parameters, [60.], rtol=1e-5)
+    assert all(start.loss < 1e-8 for start in changed.starts)
+    assert len(cache) == 2
+    repeated = fit([(50., 100.)], 70.)
+    np.testing.assert_allclose(repeated.parameters, [70.], rtol=1e-5)
+    assert len(cache) == 2
