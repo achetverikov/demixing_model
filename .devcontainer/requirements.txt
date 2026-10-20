@@ -1,0 +1,40 @@
+# Direct dependencies; CUDA libraries come from the base image.
+jax==0.11.2
+jaxlib==0.11.2
+filelock==4.0.12
+flax==0.12.10
+optax==0.2.8
+numpy==2.5.3
+scipy==1.18.1
+# SymPy 1.14 requires mpmath<1.4.
+mpmath==1.3.0
+sympy==1.14.0
+pandas==3.0.6
+matplotlib==3.11.2
+seaborn==0.13.2
+# Streamlit 1.65 requires pyarrow<26 and excludes 25.0.0.
+pyarrow==25.0.1
+streamlit==1.65.0
+plotly==7.1.0
+boto3==1.43.110
+redis==8.1.0
+vastai==1.8.3
+PyYAML==6.0.3
+jaxopt==0.8.5
+jaxtyping==0.3.11
+equinox==0.13.8
+lineax==0.1.1
+optimistix==0.1.0
+GPyReg==1.4.0
+PyBADS==1.5.1
+numdifftools==0.11.1
+pytest==9.1.1
+pytest-mock==3.16.0
+pytest-rerunfailures==16.7
+pytest-xdist==3.8.0
+pypdf==6.19.0
+py-spy==0.4.2
+git-filter-repo==2.47.0
+setuptools==84.0.0
+wheel==0.48.0
+jax-lbfgsb @ git+https://github.com/achetverikov/JAX_L-BFGS-B_port.git@0350da1

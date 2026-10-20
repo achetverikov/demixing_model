@@ -1,6 +1,6 @@
 # Installation
 
-The Demixing Model requires Python 3.11 or newer. An NVIDIA GPU is strongly recommended for fitting and required for practical full-surface generation. The repository provides GPU and CPU development containers as well as a manual installation route.
+The Demixing Model requires Python 3.12 or newer. An NVIDIA GPU is strongly recommended for fitting and required for practical full-surface generation. The repository provides GPU and CPU development containers as well as a manual installation route.
 
 For a ready-to-use Python and CUDA environment, choose the development container. A development container is a prepared workspace that installs the correct software versions for you when the repository opens in VS Code.
 
@@ -37,15 +37,17 @@ git clone https://github.com/achetverikov/demixing_model.git
 cd demixing_model
 ```
 
-Open the resulting folder in VS Code and run **Dev Containers: Reopen in Container**. The first opening downloads the prepared environment and can take several minutes.
+Open the resulting folder in VS Code and run **Dev Containers: Reopen in Container**. The first opening downloads the base image and builds the environment, which can take several minutes.
 
-The default configuration, `.devcontainer/devcontainer.json`, uses `andreychetverikov/demixing-jax-r:latest`. It installs the project dependencies, R packages, and selects `/workspaces/.venv/bin/python`. Confirm that JAX sees the GPU:
+The default configuration, `.devcontainer/devcontainer.json`, builds `.devcontainer/Dockerfile.jax-r`: NVIDIA JAX 26.09 with CUDA 13.4.1, JAX 0.11.2, and R 4.6.1. Python dependencies are pinned in `.devcontainer/requirements.txt`; fresh Python and R volumes keep earlier environments available for rollback. The selected interpreter is `/workspaces/.venv/bin/python`. Confirm that JAX sees the GPU:
 
 ```bash
 /workspaces/.venv/bin/python -c "import jax; print(jax.devices())"
 ```
 
 At least one reported device should have `platform='gpu'`.
+
+The GPU development profile sets `JAX_DEFAULT_MATMUL_PRECISION=highest` so reduced-precision matrix products do not introduce batch-dependent prediction differences. This can cost some throughput. For manual GPU runs that need the same numerical behavior, export this variable before starting Python.
 
 ## CPU development container
 
@@ -56,7 +58,7 @@ devcontainer up --workspace-folder . \
   --config .devcontainer/cpu/devcontainer.json
 ```
 
-This configuration uses `andreychetverikov/demixing-jax-r:cpu` and supports both amd64 and arm64 hosts. It is suitable for editing, tests, R analysis, and small prediction batches. Model fitting is substantially slower: a measured one-model, `density`-only fit of the five demo participant groups took 74m37s on an Intel Core Ultra 9 285 CPU and 6m5s on an RTX 5080 GPU. The complete demo does more work than this benchmark because it runs two checkpoints and five objectives.
+This configuration builds `.devcontainer/Dockerfile.jax-r-cpu` for amd64 or arm64 hosts, using separate Python and R volumes from the GPU environment. It is suitable for editing, tests, R analysis, and small prediction batches. Model fitting is substantially slower: a measured one-model, `density`-only fit of the five demo participant groups took 74m37s on an Intel Core Ultra 9 285 CPU and 6m5s on an RTX 5080 GPU. The complete demo does more work than this benchmark because it runs two checkpoints and five objectives.
 
 ## Manual Python installation
 

@@ -1,6 +1,6 @@
-FROM ghcr.io/nvidia/jax:jax-2026-05-20
+FROM nvcr.io/nvidia/jax:26.09-py3@sha256:53895f7648fbeb384cabacc1f69f2ec27ec4b2d371ee3f7af50c759f198a44ca
 
-ARG R_VERSION=4.6.0
+ARG R_VERSION=4.6.1
 ARG DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /workspace
@@ -72,14 +72,11 @@ RUN set -eux; \
     rm -f "/tmp/${deb}"; \
     rm -rf /var/lib/apt/lists/*
 
-RUN python3 -m pip install \
-      matplotlib==3.10.3 \
-      seaborn==0.13.2 \
-      boto3==1.34.162 \
-      redis==6.4.0 \
-      streamlit==1.47.0 \
-      plotly==6.2.0 \
-      vastai
+COPY .devcontainer/requirements.txt /opt/demixing/requirements.txt
+RUN python3 -m pip install --upgrade pip \
+    && python3 -m pip install --upgrade --upgrade-strategy eager \
+      -r /opt/demixing/requirements.txt 'jax[cuda13-local]==0.11.2' \
+    && python3 -m pip check
 
 COPY .devcontainer/install_r_packages_if_missing.R /tmp/install_r_packages_if_missing.R
 RUN set -eux; \

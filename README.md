@@ -6,7 +6,7 @@ Use the model to **generate theoretical predictions** or **fit behavioral data**
 
 ## Install
 
-Python 3.11+ is required. An NVIDIA GPU is strongly recommended for fitting.
+Python 3.12+ is required. An NVIDIA GPU is strongly recommended for fitting.
 
 - **Development container:** open the repository in VS Code and choose **Dev Containers: Reopen in Container** to get Python, R, and the GPU libraries.
 - **CPU container:** select `.devcontainer/cpu/devcontainer.json` for a machine without an NVIDIA GPU. Fitting takes substantially longer on a CPU.

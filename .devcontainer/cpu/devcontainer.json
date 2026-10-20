@@ -1,10 +1,10 @@
 {
   "name": "demixing-jax-r (cpu)",
-  "image": "andreychetverikov/demixing-jax-r:cpu",
+  "build": { "dockerfile": "../Dockerfile.jax-r-cpu", "context": "../.." },
   "mounts": [
-    "source=r-lib-4.6,target=/home/vscode/R/library,type=volume",
+    "source=r-lib-4.6-cpu-20261009,target=/home/vscode/R/library,type=volume",
     "source=r-mcp-state,target=/root/.cache,type=volume",
-    "source=demixing-model-venv,target=/workspaces/.venv,type=volume"
+    "source=demixing-model-venv-cpu-20261009,target=/workspaces/.venv,type=volume"
   ],
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2.5.9": {
@@ -23,6 +23,9 @@
     }
   },
   "remoteEnv": {
+    "PYTHONPYCACHEPREFIX": "/tmp/demixing-python-cache",
+    "JAX_COMPILATION_CACHE_DIR": "/tmp/demixing-jax-cache",
+    "PYTEST_ADDOPTS": "-o cache_dir=/tmp/demixing-pytest-cache",
     "PYTHONPATH": "/workspaces/demixing_model/demixing_model",
     "R_LIBS_USER": "/home/vscode/R/library"
   },
