@@ -1,4 +1,4 @@
-"""Persistent ordinary likelihood EM through JAX's stream-aware CUDA FFI.
+"""Persistent SQUAREM-accelerated likelihood EM through JAX's CUDA FFI.
 
 The optional backend requires nvcc and supports the maintained two-component,
 wrapped-feature/linear-identifying model at N=4,10,20,100,500. Sources are built
@@ -54,8 +54,8 @@ def _load(architecture):
     return target, handle
 
 
-def _run(x, theta, *, first_cap, max_iter, occupancy):
-    """Return raw states and compact diagnostics; all storage belongs to JAX."""
+def _run(x, theta, *, first_cap, max_iter, occupancy, accelerate=True):
+    """Return raw states/diagnostics; accelerate=False retains ordinary EM for checks."""
     device, = x.devices()
     if device.platform != 'gpu':
         raise ValueError('The CUDA EM backend requires an NVIDIA GPU')
@@ -74,7 +74,8 @@ def _run(x, theta, *, first_cap, max_iter, occupancy):
               jax.ShapeDtypeStruct((batch, 33), jnp.float32),
               jax.ShapeDtypeStruct((1,), jnp.int32))
     return jax.ffi.ffi_call(target, shapes)(x, theta, first_cap=np.int64(first_cap),
-        max_iter=np.int64(max_iter), occupancy=np.int64(occupancy))[:2]
+        max_iter=np.int64(max_iter), occupancy=np.int64(occupancy),
+        accelerate=np.int64(accelerate))[:2]
 
 
 def build_identity():

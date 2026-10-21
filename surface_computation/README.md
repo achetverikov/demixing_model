@@ -54,7 +54,7 @@ few ULPs and change selection among nearly tied optima. Simulation chunk size
 and row batch size are recorded in the resume fingerprint.
 
 For the maintained free-weight, wrapped-feature/linear-identifying model, add
-`--em-backend cuda` to use persistent ordinary EM at N=4,10,20,100,500.
+`--em-backend cuda` to use persistent SQUAREM-accelerated EM at N=4,10,20,100,500.
 This optional backend requires an NVIDIA GPU and `nvcc` on PATH; it builds its
 packaged CUDA sources once under `/tmp/demixing_cuda_em`. The default remains
 `--em-backend jax`. Unsupported CUDA configurations fail explicitly.
@@ -66,8 +66,19 @@ and the first-index tie rule. JAX owns the buffers and execution stream, so
 input buffers are reused without host uploads or raw-pointer borrowing.
 Initial statistics are calculated once inside the kernel. The observation loop
 stays rolled to limit compiled kernel size, and the worker pool uses occupancy
-sizing at every supported N. It does not use
-SQUAREM, alternative optimizers, reduced starting-point banks or fewer trials.
+sizing at every supported N.
+
+After 10 ordinary updates, SQUAREM extrapolates in scaled-mean/log-SD
+coordinates with an adaptive spectral-step cap of 256. Each proposal respects
+the existing parameter bounds and receives an ordinary EM stabilization step;
+it is accepted only if its likelihood reaches the second ordinary iterate.
+Rejected proposals retain that iterate and its cached moments. Selected capped
+winners continue with ordinary EM. Convergence thresholds, all 225 starts and
+the requested simulation count are retained. Different optimization paths can
+find different local optima, so regenerated outcomes can differ from ordinary
+EM. The step cap is an optimizer setting, not an upper SD bound.
+The iteration counter includes rejected stabilization attempts as well as
+ordinary EM updates; extrapolated-point statistics add an observation pass.
 
 CUDA uses its own persistent queue: omit `--em-stages` and
 `--continuation-batch`. Use `--simulation-chunk` and `--block-rows` to control
@@ -75,7 +86,8 @@ batching as before; a chunk of 20,000 can process an entire 20,000-trial cell
 in one call if memory permits. These execution settings do not change
 `--n-simulations`. Backend, CUDA build identity and source hashes are included
 in the resume manifest, preventing shards from different implementations from
-being combined. CUDA and JAX reductions can differ by float32 rounding.
+being combined. CUDA/JAX reductions and JAX initialization across compilation
+contexts can differ by a few float32 ULPs.
 
 ## Generate averaged surfaces
 
@@ -110,3 +122,10 @@ CUDA loop and queue performance validation, including the independent audit,
 is retained under `$DEMIXING_ARTIFACT_ROOT/performance_followup_20261021/campaign/`.
 These generated records are not shipped with the repository; measurements and
 exact-output comparisons apply to the recorded compiler and GPU.
+
+SQUAREM selection and integration validation are retained under
+`$DEMIXING_ARTIFACT_ROOT/squarem_constrained_followup_20261021/` and
+`$DEMIXING_ARTIFACT_ROOT/cuda_squarem_integration_20261021/`.
+These generated artifacts are not shipped. The internal `cuda_em._run` accepts
+`accelerate=False` for ordinary-EM reference checks; public CUDA simulation uses
+SQUAREM and its build identity prevents mixing it with earlier CUDA corpora.

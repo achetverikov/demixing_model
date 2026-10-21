@@ -30,7 +30,11 @@ def test_cuda_starts_and_cached_continuation_match_jax(n):
     keys = jax.random.split(jax.random.key(17), len(x))
     theta = cuda_em.initial_parameters(keys, x, n_init=5)
     expected = jax.vmap(partial(em.initial_parameters, n_init=5))(keys, x)[1]
-    np.testing.assert_array_equal(theta, jnp.stack(expected, axis=2))
+    expected = np.asarray(jnp.stack(expected, axis=2))
+    # Keys, weights and sampled means are exact; eager/JIT scale arithmetic can
+    # differ by a few float32 ULPs without changing the initialization law.
+    np.testing.assert_array_equal(theta[:, :, :3], expected[:, :, :3])
+    np.testing.assert_array_max_ulp(np.asarray(theta[:, :, 3:]), expected[:, :, 3:], maxulp=3)
     # A one-update all-start prefix forces the selected continuation path.
     raw, compact = cuda_em._run(x, theta, first_cap=1, max_iter=1000, occupancy=True)
     actual = cuda_em.result_from_compact(compact)
@@ -78,6 +82,31 @@ def test_cuda_broad_component_update_matches_jax():
     reference = jax.jit(em.advance)(x[0], em.initialize(x[0], initial, basis), basis, 1)
     np.testing.assert_allclose(raw[0, 0, :10].reshape(5, 2), jnp.stack(reference.theta), atol=.003, rtol=4e-6)
     np.testing.assert_allclose(raw[0, 0, 10], reference.ll, atol=.003, rtol=1e-6)
+
+
+def test_cuda_squarem_stabilization_preserves_second_iterate_ascent():
+    # Backend contract: catch a disabled acceleration route or a proposal accepted
+    # before stabilization/without its F^2 safeguard. The JAX suite owns EM math.
+    angle = jnp.linspace(-170., 170., 20)
+    x = jnp.column_stack((angle, 20*jnp.sin(jnp.arange(20)) + .03*angle))[None]
+    theta = jnp.array([[[[.35, .65], [-80., 80.], [-5., 5.], [90., 110.], [20., 25.]],
+                         [[.6, .4], [130., -130.], [7., -7.], [100., 80.], [25., 20.]]]])
+    # The first cycle keeps F^2 exactly at iteration12; the next cycle can
+    # extrapolate from there, with iteration14 as its ordinary fallback.
+    second, _ = cuda_em._run(x, theta, first_cap=14, max_iter=14,
+                            occupancy=True, accelerate=False)
+    ordinary, _ = cuda_em._run(x, theta, first_cap=15, max_iter=15,
+                              occupancy=True, accelerate=False)
+    accelerated, _ = cuda_em._run(x, theta, first_cap=15, max_iter=15, occupancy=True)
+    accelerated = np.asarray(accelerated)
+    assert not np.array_equal(accelerated[:, :, :10], ordinary[:, :, :10])
+    assert (accelerated[:, :, 10] >= np.asarray(second[:, :, 10])).all()
+    assert np.isfinite(accelerated).all()
+    p = accelerated[:, :, :10]
+    assert (p[:, :, :2] >= .1-1e-7).all() and (p[:, :, :2] <= .9+1e-7).all()
+    np.testing.assert_allclose(p[:, :, :2].sum(-1), 1., atol=1e-7)
+    assert (p[:, :, 2:4] >= -180.).all() and (p[:, :, 2:4] < 180.).all()
+    assert (p[:, :, 6:] >= 1.).all()
 
 
 def test_cuda_refuses_caps_and_unsupported_model_options():

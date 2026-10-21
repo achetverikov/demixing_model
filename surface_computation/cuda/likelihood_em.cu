@@ -3,6 +3,65 @@
 #include <xla/ffi/api/ffi.h>
 namespace ffi = xla::ffi;
 
+__device__ bool finite_state(const EMState&s) {
+  bool valid=isfinite(s.ll)&&isfinite(s.count[0])&&isfinite(s.count[1]);
+  #pragma unroll
+  for(int k=0;k<10;++k)valid=valid&&isfinite(s.theta[k]);
+  #pragma unroll
+  for(int k=0;k<8;++k)valid=valid&&isfinite(s.mom[k]);
+  return valid;
+}
+
+template<int N> __device__ void squarem(const float*xf,const float*xi,EMState&s,int max_iter) {
+  float stepmax=1.f;
+  while(s.iteration<max_iter&&isfinite(s.ll)&&!done(s)) {
+    if(s.iteration<10||max_iter-s.iteration<3){step<N>(xf,xi,s);continue;}
+    float base[10],first[10];
+    #pragma unroll
+    for(int k=0;k<10;++k)base[k]=s.theta[k];
+    step<N>(xf,xi,s);
+    if(done(s)||!isfinite(s.ll))break;
+    #pragma unroll
+    for(int k=0;k<10;++k)first[k]=s.theta[k];
+    step<N>(xf,xi,s);
+    if(done(s)||!isfinite(s.ll))break;
+    // Use one local chart per cycle: scaled means, wrapped angular differences,
+    // log SDs, and the original coupled weights (including active bounds).
+    float r[10],v[10],r2=0.f,v2=0.f;
+    #pragma unroll
+    for(int k=0;k<10;++k) {
+      if(k<2){r[k]=first[k]-base[k];v[k]=s.theta[k]-first[k]-r[k];}
+      else if(k<6) {
+        float d1=first[k]-base[k],d2=s.theta[k]-first[k];
+        if(k<4){d1=wrap(d1);d2=wrap(d2);}
+        r[k]=d1/base[k+4];v[k]=d2/base[k+4]-r[k];
+      }else{r[k]=logf(first[k]/base[k]);v[k]=logf(s.theta[k]/first[k])-r[k];}
+    }
+    #pragma unroll
+    for(int k=0;k<10;++k){r2+=r[k]*r[k];v2+=v[k]*v[k];}
+    float alpha=fminf(stepmax,fmaxf(1.f,sqrtf(r2/fmaxf(v2,1.e-30f))));
+    // A near-unit step offers no useful extrapolation: retain the exact F^2 state.
+    if(alpha<=1.01f){stepmax=fminf(256.f,stepmax*4.f);continue;}
+    float delta[10];
+    #pragma unroll
+    for(int k=0;k<10;++k)delta[k]=2.f*alpha*r[k]+alpha*alpha*v[k];
+    EMState trial=s;
+    trial.theta[0]=fminf(.9f,fmaxf(.1f,base[0]+delta[0]));trial.theta[1]=1.f-trial.theta[0];
+    #pragma unroll
+    for(int k=2;k<6;++k){trial.theta[k]=base[k]+delta[k]*base[k+4];if(k<4)trial.theta[k]=wrap(trial.theta[k]);}
+    #pragma unroll
+    for(int k=6;k<10;++k)trial.theta[k]=fmaxf(1.f,base[k]*expf(delta[k]));
+    statistics<N>(xf,xi,trial.theta,trial.ll,trial.count,trial.mom);
+    bool valid=finite_state(trial);
+    if(valid){step<N>(xf,xi,trial);valid=finite_state(trial);}
+    // Stabilize before testing ascent against F^2; reject without losing its
+    // cached moments. A rejected stabilization attempt still counts toward the cap.
+    valid=valid&&trial.ll>=s.ll;
+    if(valid)s=trial;else ++s.iteration;
+    if(alpha==stepmax)stepmax=valid?fminf(256.f,stepmax*4.f):fmaxf(1.f,stepmax/4.f);
+  }
+}
+
 __device__ int sum_i(int v) {
   for(int d=16;d;d/=2)v+=__shfl_down_sync(0xffffffff,v,d);
   return v;
@@ -75,7 +134,7 @@ __global__ void finish_kernel(const float*raw,float*compact,int starts) {
 }
 
 
-template<int N> __global__ void queued_kernel(const float*x,const float*initial,
+template<int N,bool Accelerate> __global__ void queued_kernel(const float*x,const float*initial,
     float*out,unsigned*head,int datasets,int starts,int max_iter) {
   int lane=threadIdx.x%32;
   while(true) {
@@ -96,7 +155,8 @@ template<int N> __global__ void queued_kernel(const float*x,const float*initial,
     for(int k=0;k<10;++k)s.theta[k]=initial[size_t(start)*10+k];
     statistics<N>(xf,xi,s.theta,s.ll,s.count,s.mom);
     s.iteration=0;s.decreases=0;s.relative=INFINITY;s.change=INFINITY;s.worst=0.f;
-    while(s.iteration<max_iter && isfinite(s.ll) && !done(s))step<N>(xf,xi,s);
+    if constexpr(Accelerate)squarem<N>(xf,xi,s,max_iter);
+    else while(s.iteration<max_iter && isfinite(s.ll) && !done(s))step<N>(xf,xi,s);
     if(lane==0)store_state(s,out+size_t(start)*26);
   }
 }
@@ -129,7 +189,7 @@ template<int N> __global__ void continue_kernel(const float*x,float*raw,
   }
 }
 
-template<int N> cudaError_t launch(cudaStream_t stream,const float*x,
+template<int N,bool Accelerate> cudaError_t launch(cudaStream_t stream,const float*x,
     const float*theta,float*raw,float*compact,unsigned*head,int datasets,
     int starts,int first_cap,int max_iter,bool occupancy) {
   int device,sm_count,active=4;
@@ -138,13 +198,13 @@ template<int N> cudaError_t launch(cudaStream_t stream,const float*x,
   status=cudaDeviceGetAttribute(&sm_count,cudaDevAttrMultiProcessorCount,device);
   if(status!=cudaSuccess)return status;
   if(occupancy) {
-    status=cudaOccupancyMaxActiveBlocksPerMultiprocessor(&active,queued_kernel<N>,128,0);
+    status=cudaOccupancyMaxActiveBlocksPerMultiprocessor(&active,queued_kernel<N,Accelerate>,128,0);
     if(status!=cudaSuccess)return status;
   }
   int needed=(datasets*starts+3)/4,blocks=std::min(needed,sm_count*active);
   status=cudaMemsetAsync(head,0,sizeof(unsigned),stream);
   if(status!=cudaSuccess)return status;
-  queued_kernel<N><<<blocks,128,0,stream>>>(x,theta,raw,head,datasets,starts,first_cap);
+  queued_kernel<N,Accelerate><<<blocks,128,0,stream>>>(x,theta,raw,head,datasets,starts,first_cap);
   if(max_iter>first_cap)
     continue_kernel<N><<<(datasets+3)/4,128,0,stream>>>(x,raw,datasets,starts,max_iter);
   finish_kernel<<<datasets,256,0,stream>>>(raw,compact,starts);
@@ -154,7 +214,7 @@ template<int N> cudaError_t launch(cudaStream_t stream,const float*x,
 ffi::Error fit(cudaStream_t stream,ffi::BufferR3<ffi::F32>x,
     ffi::BufferR4<ffi::F32>theta,ffi::ResultBufferR3<ffi::F32>raw,
     ffi::ResultBufferR2<ffi::F32>compact,ffi::ResultBufferR1<ffi::S32>queue,
-    int64_t first_cap,int64_t max_iter,int64_t occupancy) {
+    int64_t first_cap,int64_t max_iter,int64_t occupancy,int64_t accelerate) {
   auto xd=x.dimensions(),td=theta.dimensions();
   int datasets=xd[0],n=xd[1],starts=td[1];
   if(datasets<1 || starts<1 || xd[2]!=2 || td[0]!=datasets || td[2]!=5 || td[3]!=2
@@ -165,8 +225,9 @@ ffi::Error fit(cudaStream_t stream,ffi::BufferR3<ffi::F32>x,
     return ffi::Error::InvalidArgument("Invalid CUDA EM result shape");
   cudaError_t status;
   auto head=reinterpret_cast<unsigned*>(queue->typed_data());
-  #define DM_LAUNCH(N) launch<N>(stream,x.typed_data(),theta.typed_data(),raw->typed_data(), \
+  #define DM_LAUNCH_IMPL(N,A) launch<N,A>(stream,x.typed_data(),theta.typed_data(),raw->typed_data(), \
       compact->typed_data(),head,datasets,starts,first_cap,max_iter,occupancy)
+  #define DM_LAUNCH(N) (accelerate?DM_LAUNCH_IMPL(N,true):DM_LAUNCH_IMPL(N,false))
   switch(n) {
     case 4:status=DM_LAUNCH(4);break;
     case 10:status=DM_LAUNCH(10);break;
@@ -176,6 +237,7 @@ ffi::Error fit(cudaStream_t stream,ffi::BufferR3<ffi::F32>x,
     default:return ffi::Error::InvalidArgument("CUDA EM supports N=4,10,20,100,500");
   }
   #undef DM_LAUNCH
+  #undef DM_LAUNCH_IMPL
   return status==cudaSuccess?ffi::Error::Success():ffi::Error::Internal(cudaGetErrorString(status));
 }
 
@@ -183,4 +245,5 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(dm_likelihood_em,fit,
     ffi::Ffi::Bind().Ctx<ffi::PlatformStream<cudaStream_t>>()
     .Arg<ffi::BufferR3<ffi::F32>>().Arg<ffi::BufferR4<ffi::F32>>()
     .Ret<ffi::BufferR3<ffi::F32>>().Ret<ffi::BufferR2<ffi::F32>>().Ret<ffi::BufferR1<ffi::S32>>()
-    .Attr<int64_t>("first_cap").Attr<int64_t>("max_iter").Attr<int64_t>("occupancy"));
+    .Attr<int64_t>("first_cap").Attr<int64_t>("max_iter").Attr<int64_t>("occupancy")
+    .Attr<int64_t>("accelerate"));
