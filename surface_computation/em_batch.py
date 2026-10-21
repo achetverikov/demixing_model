@@ -74,7 +74,8 @@ def active_indices(state, rtol=em.RTOL, parameter_tol=em.PARAMETER_TOL):
 
 def fit_batch(keys, x, *, stages=None, continuation_batch=None,
               n_init=em.N_INIT, rtol=em.RTOL, parameter_tol=em.PARAMETER_TOL,
-              max_iter=em.MAX_ITER, wrap_axes=(True, False), fix_weights=False):
+              max_iter=em.MAX_ITER, wrap_axes=(True, False), fix_weights=False,
+              backend='jax'):
     """Return batched six-value fits and diagnostics; stages are cumulative caps.
 
     ``stages=None`` uses the fully compiled native loop. Staged execution pools
@@ -82,6 +83,15 @@ def fit_batch(keys, x, *, stages=None, continuation_batch=None,
     ``continuation_batch=None`` uses one power-of-two bucket for the active set;
     an explicit cap bounds continuation memory at the cost of serial calls.
     """
+    if backend == 'cuda':
+        if stages is not None or continuation_batch is not None:
+            raise ValueError('CUDA EM uses a persistent work queue; omit stages and continuation_batch')
+        if fix_weights or wrap_axes != (True, False) or rtol != em.RTOL or parameter_tol != em.PARAMETER_TOL:
+            raise ValueError('CUDA EM requires free weights, wrapped feature, linear IDF and default tolerances')
+        from surface_computation import cuda_em
+        return cuda_em.fit_batch(keys, x, n_init=n_init, max_iter=max_iter)
+    if backend != 'jax':
+        raise ValueError('EM backend must be jax or cuda')
     options = dict(n_init=n_init, rtol=rtol, parameter_tol=parameter_tol,
                    max_iter=max_iter, wrap_axes=wrap_axes, fix_weights=fix_weights)
     if stages is None:

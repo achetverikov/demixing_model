@@ -85,7 +85,7 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
              block_rows: int = 1, progress: bool = False,
              row_offset: int = 0, simulation_offset: int = 0,
              common_random_groups=None, em_stages=None, continuation_batch=None,
-             return_diagnostics=False, em_max_iter=em.MAX_ITER):
+             return_diagnostics=False, em_max_iter=em.MAX_ITER, em_backend='jax'):
     """Simulate raw EM bias outcomes for a continuous parameter design.
 
     Args:
@@ -107,6 +107,7 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
             up to 25000 updates. None uses the native compiled loop.
         continuation_batch: optional limit on packed continuation starts.
         return_diagnostics: also return per-trial likelihood/convergence arrays.
+        em_backend: 'jax' or the optional persistent 'cuda' backend.
 
     Returns:
         ``(M, n_simulations, 2)`` float32 array of mu_feat_bias in degrees.
@@ -128,7 +129,8 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
         x, fit_keys = generate_block(keys, block, n_simulations, n_samples)
         fitted = em_batch.fit_batch(fit_keys, x, fix_weights=fix_weights,
             wrap_axes=(jfm.jf.wrap_feat, jfm.jf.wrap_idf), stages=em_stages,
-            continuation_batch=continuation_batch, max_iter=em_max_iter)
+            continuation_batch=continuation_batch, max_iter=em_max_iter,
+            backend=em_backend)
         em_batch.check_results(fitted)
         out.append(bias_readout(fitted, block, n_simulations))
         if return_diagnostics:

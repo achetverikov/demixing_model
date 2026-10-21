@@ -48,3 +48,4 @@ include = ["shared*", "model_fit_to_data*", "surface_simulator_for_predictions*"
 
 [tool.setuptools.package-data]
 pretrained = ["*.pkl"]
+surface_computation = ["cuda/*.cu", "cuda/*.cuh"]

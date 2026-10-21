@@ -17,7 +17,8 @@ from surface_computation import em_identity
 def test_kernel_and_shared_density_changes_invalidate_generation_digest(tmp_path,monkeypatch):
     root=Path(generator.__file__).resolve().parents[1]
     paths=['surface_computation/'+name for name in ['generate_wnm_training_data.py','wnm_design.py',
-        'wnm_simulation.py','jax_fit_main.py','jax_fit_functions.py','likelihood_em.py','em_batch.py','em_identity.py']]+['shared/wnm.py']
+        'wnm_simulation.py','jax_fit_main.py','jax_fit_functions.py','likelihood_em.py','em_batch.py','em_identity.py',
+        'cuda_em.py', *generator.cuda_em.SOURCE_NAMES]]+['shared/wnm.py']
     for relative in paths:
         dest=tmp_path/relative;dest.parent.mkdir(exist_ok=True,parents=True)
         dest.write_bytes((root/relative).read_bytes())
@@ -28,6 +29,10 @@ def test_kernel_and_shared_density_changes_invalidate_generation_digest(tmp_path
     assert generator._code_digest()!=original
     prior=generator._code_digest()
     density=tmp_path/'shared/wnm.py';density.write_text(density.read_text()+'\n# changed density\n')
+    assert generator._code_digest()!=prior
+    prior=generator._code_digest()
+    cuda=tmp_path/'surface_computation/cuda/likelihood_em.cuh'
+    cuda.write_text(cuda.read_text()+'\n// changed CUDA kernel\n')
     assert generator._code_digest()!=prior
 
 
@@ -68,12 +73,15 @@ def test_cloud_reader_resolves_the_same_namespace_as_the_writer(monkeypatch):
 
 
 @pytest.mark.gpu
-def test_generator_diagnostics_resume_and_stale_estimator_refusal(tmp_path,monkeypatch):
+@pytest.mark.parametrize('backend', ['jax', 'cuda'])
+def test_generator_diagnostics_resume_and_stale_estimator_refusal(tmp_path,monkeypatch,backend):
     design=tmp_path/'design.npy';out=tmp_path/'generated.npz'
     np.save(design,np.array([[10.,10.,10.,60.],[20.,10.,10.,100.]],np.float32))
     args=['generator','--design-file',str(design),'--out',str(out),'--n-samples','4',
           '--n-simulations','2','--simulation-chunk','2','--shard-rows','2','--block-rows','2',
-          '--em-stages','5','50','5000','--resume']
+          '--em-backend',backend,'--resume']
+    if backend == 'jax':
+        args += ['--em-stages','5','50','5000']
     monkeypatch.setattr(sys,'argv',args)
     generator.main()
     with np.load(out) as blob:
@@ -89,6 +97,7 @@ def test_generator_diagnostics_resume_and_stale_estimator_refusal(tmp_path,monke
     manifest=out.with_suffix('.npz.shards')/'manifest.json'
     bad=json.loads(manifest.read_text());bad['estimator']='different_estimator'
     assert bad['block_rows']==2
+    assert bad['em_backend']==backend
     manifest.write_text(json.dumps(bad))
     with pytest.raises(ValueError,match='manifest does not match'):
         generator.main()

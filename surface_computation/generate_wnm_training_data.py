@@ -29,7 +29,7 @@ import numpy as np
 
 from surface_computation import wnm_design as design_mod
 from surface_computation import wnm_simulation
-from surface_computation import likelihood_em, em_batch
+from surface_computation import likelihood_em, em_batch, cuda_em
 
 
 def _save_npz(path: Path, compress: bool, **arrays):
@@ -58,6 +58,8 @@ def _code_digest(paths=None) -> str:
         root / 'surface_computation' / 'likelihood_em.py',
         root / 'surface_computation' / 'em_batch.py',
         root / 'surface_computation' / 'em_identity.py',
+        root / 'surface_computation' / 'cuda_em.py',
+        *(root / 'surface_computation' / name for name in cuda_em.SOURCE_NAMES),
         root / 'shared' / 'wnm.py',
     )
     digest = hashlib.sha256()
@@ -174,6 +176,8 @@ def main():
                    help='design rows simultaneously processed on device')
     p.add_argument('--simulation-chunk', type=int, default=250,
                    help='maximum EM runs per device call; bounds GPU memory')
+    p.add_argument('--em-backend', choices=['jax', 'cuda'], default='jax',
+                   help='persistent CUDA EM requires nvcc and N=4,10,20,100,500; default: jax')
     p.add_argument('--em-stages', type=int, nargs='+',
                    help='pool unfinished starts across parameter rows at these cumulative caps; end at 5000')
     p.add_argument('--continuation-batch', type=int,
@@ -206,6 +210,13 @@ def main():
         p.error('--crn and --crn-within-trajectories are mutually exclusive')
     if args.em_max_iter < 1:
         p.error('--em-max-iter must be positive')
+    if args.em_backend == 'cuda':
+        if args.fix_weights or args.n_samples not in cuda_em.SAMPLE_COUNTS:
+            p.error('CUDA EM requires free weights and N=4,10,20,100,500')
+        if args.em_stages is not None or args.continuation_batch is not None:
+            p.error('CUDA EM uses a persistent work queue; omit --em-stages and --continuation-batch')
+        if args.em_max_iter > likelihood_em.MAX_ITER:
+            p.error('CUDA EM supports --em-max-iter up to 25000')
     if args.em_stages and (args.em_stages[-1] != min(likelihood_em.FIRST_CAP, args.em_max_iter)
             or args.em_stages[0] < 1 or any(a >= b for a,b in zip(args.em_stages,args.em_stages[1:]))):
         p.error('--em-stages must strictly increase and end at min(5000, --em-max-iter)')
@@ -275,6 +286,8 @@ def main():
         'em_stages': args.em_stages,
         'continuation_batch': args.continuation_batch,
         'em_max_iter': args.em_max_iter,
+        'em_backend': args.em_backend,
+        'em_backend_build': cuda_em.build_identity() if args.em_backend == 'cuda' else None,
     }
     manifest = shard_dir / 'manifest.json'
     if manifest.exists():
@@ -309,7 +322,8 @@ def main():
                     common_random_groups=(None if crn_groups is None else
                                           crn_groups[row_start:row_stop]),
                     em_stages=args.em_stages, continuation_batch=args.continuation_batch,
-                    em_max_iter=args.em_max_iter, return_diagnostics=True)
+                    em_max_iter=args.em_max_iter, return_diagnostics=True,
+                    em_backend=args.em_backend)
                 _save_npz(path, args.compress, design=expected, bias=np.asarray(chunk_bias),
                           coordinates=coordinates, **{'em_'+k:np.asarray(v) for k,v in diagnostic.items()})
                 action = 'saved'
