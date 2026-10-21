@@ -68,6 +68,12 @@ Initial statistics are calculated once inside the kernel. The observation loop
 stays rolled to limit compiled kernel size, and the worker pool uses occupancy
 sizing at every supported N.
 
+The CUDA kernel shares one EM-update loop body between settling and the two
+SQUAREM maps, storing temporary parameter snapshots across warp lanes to reduce
+register lifetimes. Density
+evaluation uses one formula, outlined at N=4,10,20,100 and inlined at N=500,
+following measured instruction-cache and function-call costs.
+
 After 10 ordinary updates, SQUAREM extrapolates in scaled-mean/log-SD
 coordinates with an adaptive spectral-step cap of 256. Each proposal respects
 the existing parameter bounds and receives an ordinary EM stabilization step;
@@ -129,3 +135,8 @@ SQUAREM selection and integration validation are retained under
 These generated artifacts are not shipped. The internal `cuda_em._run` accepts
 `accelerate=False` for ordinary-EM reference checks; public CUDA simulation uses
 SQUAREM and its build identity prevents mixing it with earlier CUDA corpora.
+
+Counter-guided kernel validation and its independent audit are retained under
+`$DEMIXING_ARTIFACT_ROOT/cuda_counter_round_20261021/`. These generated artifacts
+are not shipped; timing and exact-output evidence apply to the recorded GPU,
+compiler, inputs and starting parameters.

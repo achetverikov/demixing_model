@@ -15,16 +15,33 @@ __device__ bool finite_state(const EMState&s) {
 template<int N> __device__ void squarem(const float*xf,const float*xi,EMState&s,int max_iter) {
   float stepmax=1.f;
   while(s.iteration<max_iter&&isfinite(s.ll)&&!done(s)) {
-    if(s.iteration<10||max_iter-s.iteration<3){step<N>(xf,xi,s);continue;}
+    bool extrapolate=s.iteration>=10&&max_iter-s.iteration>=3;
+    int snapshot_lane=threadIdx.x%32;
+    float base_saved=0.f,first_saved=0.f;
+    // EM parameters are identical across all 32 lanes, even when N<32.
+    // Keep one snapshot field per lane while the update body uses registers.
+    if(extrapolate) {
+      #pragma unroll
+      for(int k=0;k<10;++k)if(snapshot_lane==k)base_saved=s.theta[k];
+    }
+    // One compiled map body for settling and both SQUAREM maps.
+    #pragma unroll 1
+    for(int phase=0;phase<(extrapolate?2:1);++phase) {
+      step<N>(xf,xi,s);
+      if(done(s)||!isfinite(s.ll))break;
+      if(extrapolate&&phase==0) {
+        #pragma unroll
+        for(int k=0;k<10;++k)if(snapshot_lane==k)first_saved=s.theta[k];
+      }
+    }
+    if(done(s)||!isfinite(s.ll))break;
+    if(!extrapolate)continue;
     float base[10],first[10];
     #pragma unroll
-    for(int k=0;k<10;++k)base[k]=s.theta[k];
-    step<N>(xf,xi,s);
-    if(done(s)||!isfinite(s.ll))break;
-    #pragma unroll
-    for(int k=0;k<10;++k)first[k]=s.theta[k];
-    step<N>(xf,xi,s);
-    if(done(s)||!isfinite(s.ll))break;
+    for(int k=0;k<10;++k){
+      base[k]=__shfl_sync(0xffffffff,base_saved,k);
+      first[k]=__shfl_sync(0xffffffff,first_saved,k);
+    }
     // Use one local chart per cycle: scaled means, wrapped angular differences,
     // log SDs, and the original coupled weights (including active bounds).
     float r[10],v[10],r2=0.f,v2=0.f;

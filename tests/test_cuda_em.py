@@ -68,6 +68,15 @@ def test_cuda_retains_225_ties_and_nonfinite_guards():
     assert int(result[-1]['nonfinite_starts'][1]) == 225
     with pytest.raises(em_batch.EMValidationError, match='225 nonfinite starts'):
         em_batch.check_results(result)
+    # Backend guard contract: finite initial likelihood, overflowing moments,
+    # then a nonfinite first map must stop and be reported rather than iterated.
+    huge = theta[:1].at[:, :, 3, :].set(1.e20)
+    raw, compact = cuda_em._run(x[:1], huge, first_cap=15, max_iter=15, occupancy=True)
+    np.testing.assert_array_equal(raw[:, :, 21], 1.)
+    result = cuda_em.result_from_compact(compact)
+    assert (np.asarray(result[-1]['nonfinite_starts']) == 225).all()
+    with pytest.raises(em_batch.EMValidationError, match='225 nonfinite starts'):
+        em_batch.check_results(result)
 
 
 def test_cuda_broad_component_update_matches_jax():

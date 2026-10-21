@@ -25,7 +25,7 @@ __device__ float warp_sum(float x) {
 }
 
 struct Axis { float logp, first, second; };
-__device__ Axis wrapped(float x, float mean, float sd) {
+__device__ __forceinline__ Axis wrapped_body(float x, float mean, float sd) {
   float d=wrap(x-mean), var=sd*sd;
   if (sd < 60.f) {
     float z0=d-360.f, z1=d, z2=d+360.f;
@@ -52,6 +52,17 @@ __device__ Axis wrapped(float x, float mean, float sd) {
     var-2.f*var*var*OMEGA*OMEGA*second/denom};
 }
 
+// Outline the same density formula where smaller code beats call overhead.
+// At N=500 the measured tradeoff favors keeping it inside the statistics loop.
+__device__ __noinline__ Axis wrapped_outlined(float x,float mean,float sd) {
+  return wrapped_body(x,mean,sd);
+}
+
+template<int N> __device__ Axis wrapped(float x,float mean,float sd) {
+  if constexpr(N==500)return wrapped_body(x,mean,sd);
+  else return wrapped_outlined(x,mean,sd);
+}
+
 template<int N> __device__ void statistics(const float *xf,const float *xi,
     const float *theta,float &ll,float *count,float *mom) {
   float sums[11]={};
@@ -61,8 +72,8 @@ template<int N> __device__ void statistics(const float *xf,const float *xi,
   #pragma unroll 1
   for(int j=0;j<ITEMS;++j) {
     if(lane+j*32<N) {
-      Axis f0=wrapped(xf[j],theta[2],theta[6]);
-      Axis f1=wrapped(xf[j],theta[3],theta[7]);
+      Axis f0=wrapped<N>(xf[j],theta[2],theta[6]);
+      Axis f1=wrapped<N>(xf[j],theta[3],theta[7]);
       float di0=xi[j]-theta[4],di1=xi[j]-theta[5];
       float v0=theta[8]*theta[8],v1=theta[9]*theta[9];
       float l0=f0.logp-.5f*di0*di0/v0-logf(theta[8])-.5f*logf(2.f*PI)+logf(theta[0]);
