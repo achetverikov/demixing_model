@@ -57,7 +57,8 @@ template<int N> __device__ void statistics(const float *xf,const float *xi,
   float sums[11]={};
   constexpr int ITEMS=(N+31)/32;
   int lane=threadIdx.x%32;
-  #pragma unroll
+  // Keep the observation loop rolled to limit kernel code size at larger N.
+  #pragma unroll 1
   for(int j=0;j<ITEMS;++j) {
     if(lane+j*32<N) {
       Axis f0=wrapped(xf[j],theta[2],theta[6]);

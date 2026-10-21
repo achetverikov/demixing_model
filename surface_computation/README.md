@@ -64,8 +64,9 @@ work queue schedules independent starts, capped winners continue from cached
 states and are reselected, and GPU reduction preserves all-start diagnostics
 and the first-index tie rule. JAX owns the buffers and execution stream, so
 input buffers are reused without host uploads or raw-pointer borrowing.
-Initial statistics are calculated once inside the kernel. The worker pool uses
-occupancy sizing through N=100 and a fixed pool at N=500. It does not use
+Initial statistics are calculated once inside the kernel. The observation loop
+stays rolled to limit compiled kernel size, and the worker pool uses occupancy
+sizing at every supported N. It does not use
 SQUAREM, alternative optimizers, reduced starting-point banks or fewer trials.
 
 CUDA uses its own persistent queue: omit `--em-stages` and
@@ -104,3 +105,8 @@ estimator files remain in their original directories.
 `wnm_design.py` constructs parameter designs. `wnm_simulation.py` calls the JAX observer simulator and supports item-swap augmentation. `legacy_sample_import.py` loads raw outcomes from grid-corpus files.
 
 Generated corpora and surfaces belong under `$DEMIXING_ARTIFACT_ROOT` or another configured results location. They are not shipped and are not expected in a normal checkout.
+
+CUDA loop and queue performance validation, including the independent audit,
+is retained under `$DEMIXING_ARTIFACT_ROOT/performance_followup_20261021/campaign/`.
+These generated records are not shipped with the repository; measurements and
+exact-output comparisons apply to the recorded compiler and GPU.

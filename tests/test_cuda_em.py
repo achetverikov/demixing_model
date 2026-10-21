@@ -32,7 +32,7 @@ def test_cuda_starts_and_cached_continuation_match_jax(n):
     expected = jax.vmap(partial(em.initial_parameters, n_init=5))(keys, x)[1]
     np.testing.assert_array_equal(theta, jnp.stack(expected, axis=2))
     # A one-update all-start prefix forces the selected continuation path.
-    raw, compact = cuda_em._run(x, theta, first_cap=1, max_iter=1000, occupancy=n <= 100)
+    raw, compact = cuda_em._run(x, theta, first_cap=1, max_iter=1000, occupancy=True)
     actual = cuda_em.result_from_compact(compact)
     basis, state = em_batch.initialize(keys, x, n_init=5)
     state = em_batch.advance_all(x, basis, state, 1, n_init=5)

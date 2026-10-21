@@ -111,5 +111,5 @@ def fit_batch(keys, x, *, n_init=em.N_INIT, max_iter=em.MAX_ITER):
         raise ValueError('n_init must be positive and max_iter must be in [1,25000]')
     theta = initial_parameters(keys, x, n_init)
     _, compact = _run(x, theta, first_cap=min(em.FIRST_CAP, max_iter),
-                      max_iter=max_iter, occupancy=x.shape[1] <= 100)
+                      max_iter=max_iter, occupancy=True)
     return result_from_compact(compact)
