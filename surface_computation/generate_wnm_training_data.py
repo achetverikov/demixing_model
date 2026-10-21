@@ -23,6 +23,7 @@ import json
 import os
 import time
 from pathlib import Path
+from zipfile import BadZipFile
 
 import jax
 import numpy as np
@@ -83,7 +84,10 @@ def _shard_ranges(n_rows: int, shard_rows: int):
 def _valid_shard(path: Path, expected_design: np.ndarray, n_simulations: int,
                  expected_coordinates=None) -> bool:
     try:
-        with np.load(path) as blob:
+        with np.load(path) as archive:
+            names = ('design', 'bias', 'em_parameters',
+                     *('em_'+name for name in likelihood_em.DIAGNOSTIC_FIELDS))
+            blob = {name: archive[name] for name in names}
             valid = (np.array_equal(blob['design'], expected_design)
                      and blob['bias'].shape == (len(expected_design), n_simulations, 2)
                      and np.isfinite(blob['bias']).all()
@@ -95,10 +99,10 @@ def _valid_shard(path: Path, expected_design: np.ndarray, n_simulations: int,
             valid = valid and blob['em_parameters'].shape == (len(expected_design),n_simulations,5,2)
             valid = valid and np.isfinite(blob['em_parameters']).all()
             if expected_coordinates is not None:
-                valid = (valid and 'coordinates' in blob
-                         and np.array_equal(blob['coordinates'], expected_coordinates))
+                valid = (valid and 'coordinates' in archive
+                         and np.array_equal(archive['coordinates'], expected_coordinates))
             return valid
-    except (OSError, ValueError, KeyError):
+    except (OSError, ValueError, KeyError, BadZipFile):
         return False
 
 
@@ -276,6 +280,8 @@ def main():
         'estimator': likelihood_em.ESTIMATOR_ID,
         'simulation_code_sha256': _code_digest(),
         'design_sha256': _design_digest(design),
+        'strata_sha256': hashlib.sha256(json.dumps(strata).encode()).hexdigest(),
+        'crn_groups_sha256': None if crn_groups is None else _design_digest(crn_groups),
         'n_rows': len(design), 'n_simulations': args.n_simulations,
         'n_samples': args.n_samples, 'fix_weights': args.fix_weights,
         'crn': args.crn, 'seed': args.seed, 'design_seed': design_seed,
@@ -295,6 +301,8 @@ def main():
         if previous != signature:
             raise ValueError(f'existing shard manifest does not match this run: {manifest}')
     else:
+        if any(shard_dir.glob('rows_*.npz')):
+            raise ValueError(f'existing shards have no manifest: {shard_dir}')
         manifest.write_text(json.dumps(signature, indent=2) + '\n')
 
     records = []
@@ -339,6 +347,7 @@ def main():
     n_bad = int(np.sum(~np.isfinite(bias)))
     elapsed = time.time() - t0
     meta = dict(vars(args) | {'elapsed_s': elapsed,
+                              'generation_signature': signature,
                               'simulation_elapsed_s': simulation_elapsed,
                               'n_nonfinite': n_bad,
                               'estimator': likelihood_em.ESTIMATOR_ID,

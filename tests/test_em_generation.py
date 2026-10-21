@@ -46,6 +46,8 @@ def test_failed_shard_is_not_a_valid_resume_marker(tmp_path):
     diagnostic.pop('em_iterations')
     np.savez(path,design=design,bias=np.zeros((1,2,2)),**diagnostic)
     assert not generator._valid_shard(path,design,2)
+    path.write_bytes(path.read_bytes()[:-10])
+    assert not generator._valid_shard(path,design,2)
 
 
 def test_cloud_reader_resolves_the_same_namespace_as_the_writer(monkeypatch):
@@ -75,11 +77,12 @@ def test_cloud_reader_resolves_the_same_namespace_as_the_writer(monkeypatch):
 @pytest.mark.gpu
 @pytest.mark.parametrize('backend', ['jax', 'cuda'])
 def test_generator_diagnostics_resume_and_stale_estimator_refusal(tmp_path,monkeypatch,backend):
-    design=tmp_path/'design.npy';out=tmp_path/'generated.npz'
-    np.save(design,np.array([[10.,10.,10.,60.],[20.,10.,10.,100.]],np.float32))
+    design=tmp_path/'design.npz';out=tmp_path/'generated.npz'
+    points=np.array([[10.,10.,10.,60.],[20.,10.,10.,100.]],np.float32)
+    np.savez(design,design=points,strata=['curve_a','curve_a'])
     args=['generator','--design-file',str(design),'--out',str(out),'--n-samples','4',
           '--n-simulations','2','--simulation-chunk','2','--shard-rows','2','--block-rows','2',
-          '--em-backend',backend,'--resume']
+          '--em-backend',backend,'--resume','--crn-within-trajectories']
     if backend == 'jax':
         args += ['--em-stages','5','50','5000']
     monkeypatch.setattr(sys,'argv',args)
@@ -90,16 +93,27 @@ def test_generator_diagnostics_resume_and_stale_estimator_refusal(tmp_path,monke
         assert blob['em_iterations'].shape==(2,2)
         assert blob['em_parameters'].shape==(2,2,5,2)
         assert json.loads(str(blob['meta']))['estimator']==em.ESTIMATOR_ID
+        signature=json.loads(str(blob['meta']))['generation_signature']
+        assert signature['simulation_code_sha256']==generator._code_digest()
+        assert (signature['em_backend_build'] is not None)==(backend=='cuda')
     def unexpected(*args,**kwargs):
         raise AssertionError('completed shards must resume without another fit')
     monkeypatch.setattr(generator.wnm_simulation,'simulate',unexpected)
     generator.main()
+    # Labels change the CRN groups even when all numeric design rows stay fixed.
+    np.savez(design,design=points,strata=['curve_a','curve_b'])
+    with pytest.raises(ValueError,match='manifest does not match'):
+        generator.main()
+    np.savez(design,design=points,strata=['curve_a','curve_a'])
     manifest=out.with_suffix('.npz.shards')/'manifest.json'
     bad=json.loads(manifest.read_text());bad['estimator']='different_estimator'
     assert bad['block_rows']==2
     assert bad['em_backend']==backend
     manifest.write_text(json.dumps(bad))
     with pytest.raises(ValueError,match='manifest does not match'):
+        generator.main()
+    manifest.unlink()
+    with pytest.raises(ValueError,match='existing shards have no manifest'):
         generator.main()
 
 

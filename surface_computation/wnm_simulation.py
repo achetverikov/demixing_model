@@ -33,9 +33,9 @@ def simulation_keys(key, n_rows: int, common_random_numbers: bool = False,
                     common_random_groups=None):
     """Deterministic row keys for one simulation chunk.
 
-    Keys depend on absolute row/chunk coordinates, not on how either axis is
-    partitioned for execution.  The chunk size is recorded in the generation
-    manifest because the production simulator splits each chunk key internally.
+    Row keys depend on absolute row/chunk coordinates and preserve row sharding.
+    Trial draws depend on simulation chunk size: the simulator splits each chunk
+    key internally. The generation manifest therefore freezes chunk geometry.
     """
     if common_random_groups is not None:
         groups = np.asarray(common_random_groups)

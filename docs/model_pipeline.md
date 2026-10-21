@@ -46,9 +46,18 @@ EM estimates the component means, diagonal noise parameters, and mixture weights
 | Initial SDs | Uniformly sampled from 0.3–2 times the empirical SD |
 | Initial weights | 0.5 for each component |
 | Fitted weights | Constrained to 0.1–0.9 |
-| Convergence | Relative objective change below `1e-6`, up to 5,000 iterations |
+| Convergence | Relative likelihood change ≤ `1e-6` and normalized parameter change ≤ `1e-5` |
+| Iteration limits | 5,000 updates for every start; capped selected winners continue to 25,000 and are reselected |
 
-The feature likelihood sums Gaussian copies over seven period shifts. Feature means and SDs are updated using circular moments; angular errors are wrapped to the circle. Identifiability calculations use linear means and differences.
+Likelihood EM uses soft component and winding probabilities. The feature
+likelihood uses three spatial images below SD 60° and six Fourier harmonics
+above that threshold; its conditional winding moments update feature means and
+SDs. Angular errors are wrapped to the circle. Identifiability calculations use
+linear means and differences. The optional CUDA backend adds safeguarded
+SQUAREM acceleration and an N=500 density shortcut; see the
+[simulation guide](../surface_computation/README.md) for execution settings and
+numerical differences. Every converged start stops immediately. Convergence
+checks reuse the statistics from each update, without another likelihood pass.
 
 ## From simulations to a fast predictor
 
