@@ -106,6 +106,11 @@ in the resume manifest, preventing shards from different implementations from
 being combined. CUDA/JAX reductions and JAX initialization across compilation
 contexts can differ by a few float32 ULPs.
 
+CUDA simulation validates groups of small blocks with at most 4,096 pending
+trials, amortizing host counter downloads. Larger blocks are checked
+individually. All failures are checked before returning outcomes or publishing
+a shard; each fit retains its own convergence check after every EM update.
+
 ## Generate averaged surfaces
 
 For direct inspection of simulated distributions or identifiability-dimension (`mu_idf`) predictions, use `simulated_samples_grid.py`. It generates samples on a parameter grid; averaging tools then turn them into density surfaces.

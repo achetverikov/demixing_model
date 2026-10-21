@@ -124,6 +124,9 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
     n_rows = design.shape[0]
     out = []
     diagnostics = []
+    # Bound asynchronous CUDA work while amortizing host counter downloads.
+    validation_blocks = max(1, 4096 // (block_rows*n_simulations)) if em_backend == 'cuda' else 1
+    guards = []
     for start in range(0, n_rows, block_rows):
         block = design[start:start + block_rows]
         groups = (None if common_random_groups is None else
@@ -136,7 +139,13 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
             continuation_batch=continuation_batch, max_iter=em_max_iter,
             backend=em_backend, cuda_single_image=(eligible is not None and
                 bool(eligible[start:start + len(block)].all())))
-        em_batch.check_results(fitted)
+        guards.append({name:fitted[-1][name] for name in
+                       ('converged','nonfinite_starts','material_decreases')})
+        if len(guards) >= validation_blocks or start + len(block) == n_rows:
+            checked = guards[0] if len(guards) == 1 else jax.tree.map(
+                lambda *values:jnp.concatenate(values), *guards)
+            em_batch.check_results((checked,))
+            guards.clear()
         out.append(bias_readout(fitted, block, n_simulations))
         if return_diagnostics:
             diagnostic = dict(fitted[-1], log_likelihood=fitted[5])

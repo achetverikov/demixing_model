@@ -148,7 +148,9 @@ def test_cuda_simulation_dispatches_complete_n500_evaluators(monkeypatch):
     routes = []
     def fitted(keys, x, **options):
         routes.append(options['cuda_single_image'])
-        return None
+        return ({'converged':jnp.ones(len(x),dtype=bool),
+                 'nonfinite_starts':jnp.zeros(len(x),dtype=int),
+                 'material_decreases':jnp.zeros(len(x),dtype=int)},)
     monkeypatch.setattr(em_batch, 'fit_batch', fitted)
     monkeypatch.setattr(em_batch, 'check_results', lambda result: None)
     monkeypatch.setattr(simulation, 'bias_readout',
@@ -162,6 +164,26 @@ def test_cuda_simulation_dispatches_complete_n500_evaluators(monkeypatch):
     simulation.simulate(jax.random.key(31), design[:1], n_simulations=1,
                         n_samples=20, em_backend='cuda')
     assert routes == [False]
+
+
+@pytest.mark.parametrize('trials,expected_calls', [(2,3),(4097,2)])
+def test_cuda_simulation_checks_bounded_groups_before_return(monkeypatch,trials,expected_calls):
+    # Simulator contract: a failure in a queued block cannot escape a deferred
+    # check; large blocks must still be checked individually. No optimizer needed.
+    calls=[]
+    def fitted(keys,x,**options):
+        calls.append(len(x))
+        return ({'converged':jnp.ones(len(x),dtype=bool),
+                 'nonfinite_starts':jnp.full(len(x),int(len(calls)==2)),
+                 'material_decreases':jnp.zeros(len(x),dtype=int)},)
+    monkeypatch.setattr(em_batch,'fit_batch',fitted)
+    monkeypatch.setattr(simulation,'bias_readout',
+        lambda result,block,count:jnp.zeros((len(block),count,2)))
+    design=jnp.array([[10.,20.,30.,60.]]*3)
+    with pytest.raises(em_batch.EMValidationError,match=f'{trials} nonfinite starts'):
+        simulation.simulate(jax.random.key(31),design,n_simulations=trials,
+                            n_samples=4,em_backend='cuda')
+    assert len(calls)==expected_calls
 
 
 def test_cuda_single_image_library_preserves_complete_start_states():
