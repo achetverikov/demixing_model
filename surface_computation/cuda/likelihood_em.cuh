@@ -6,6 +6,9 @@
 
 constexpr float PI = 3.14159265358979323846f;
 constexpr float OMEGA = PI / 180.f;
+#ifndef DM_SINGLE_IMAGE
+#define DM_SINGLE_IMAGE 0
+#endif
 
 // Stable local subtraction, followed by exact half-open range correction.
 // In particular, nextafterf(180,-inf)+180 can round to360 in float32.
@@ -26,8 +29,24 @@ __device__ float warp_sum(float x) {
 
 struct Axis { float logp, first, second; };
 __device__ __forceinline__ Axis wrapped_body(float x, float mean, float sd) {
-  float d=wrap(x-mean), var=sd*sd;
+  float diff=x-mean;
+  float d;
+  if(fabsf(diff)<180.f)d=diff;
+  else if(fabsf(diff)>360.f)d=wrap(diff);
+  else {
+    float b=diff-x;
+    float error=(x-(diff-b))-(mean+b);
+    d=(diff>=180.f?diff-360.f:diff< -180.f?diff+360.f:diff)+error;
+    if(d>=180.f)d-=360.f;
+    if(d< -180.f)d+=360.f;
+  }
+  float var=sd*sd;
   if (sd < 60.f) {
+#if DM_SINGLE_IMAGE
+    // Each omitted image weighs at most exp(-32.4) relative to the principal.
+    if(180.f-fabsf(d)>=.09f*var)
+      return {-.5f*d*d/var-logf(sd)-.5f*logf(2.f*PI),d,d*d};
+#endif
     float z0=d-360.f, z1=d, z2=d+360.f;
     float a0=-.5f*z0*z0/var, a1=-.5f*z1*z1/var, a2=-.5f*z2*z2/var;
     float mx=fmaxf(a0,fmaxf(a1,a2));

@@ -23,15 +23,16 @@ from surface_computation import likelihood_em as em
 
 SAMPLE_COUNTS = (4, 10, 20, 100, 500)
 SOURCE_NAMES = ('cuda/likelihood_em.cu', 'cuda/likelihood_em.cuh')
+SINGLE_IMAGE_SD = np.sqrt(180. / .09)
 
 
 @cache
-def _load(architecture):
+def _load(architecture, single_image=False):
     compiler = shutil.which('nvcc')
     if compiler is None:
         raise RuntimeError('The CUDA EM backend requires nvcc on PATH')
     root = Path(__file__).resolve().parent
-    identity = subprocess.check_output([compiler, '--version']) + architecture.encode() + version('jaxlib').encode() + Path(__file__).read_bytes()
+    identity = subprocess.check_output([compiler, '--version']) + architecture.encode() + version('jaxlib').encode() + Path(__file__).read_bytes() + str(single_image).encode()
     for name in SOURCE_NAMES:
         identity += (root / name).read_bytes()
     token = hashlib.sha256(identity).hexdigest()
@@ -43,7 +44,8 @@ def _load(architecture):
         with tempfile.TemporaryDirectory(prefix='dm_cuda_build_', dir='/tmp') as scratch:
             output = Path(scratch) / library.name
             command = [compiler, '-O3', '-std=c++17', '-shared', '-Xcompiler', '-fPIC',
-                       '-arch=' + architecture, '-I' + jax.ffi.include_dir(),
+                       '-arch=' + architecture, '-DDM_SINGLE_IMAGE=' + str(int(single_image)),
+                       '-I' + jax.ffi.include_dir(),
                        str(root / SOURCE_NAMES[0]), '-o', str(output)]
             process = subprocess.run(command, capture_output=True, text=True)
             if process.returncode:
@@ -54,7 +56,7 @@ def _load(architecture):
     return target, handle
 
 
-def _run(x, theta, *, first_cap, max_iter, occupancy, accelerate=True):
+def _run(x, theta, *, first_cap, max_iter, occupancy, accelerate=True, single_image=False):
     """Return raw states/diagnostics; accelerate=False retains ordinary EM for checks."""
     device, = x.devices()
     if device.platform != 'gpu':
@@ -69,7 +71,7 @@ def _run(x, theta, *, first_cap, max_iter, occupancy, accelerate=True):
     if theta.devices() != x.devices():
         raise ValueError('CUDA EM inputs must be on the same device')
     capability = str(device.compute_capability).replace('.', '')
-    target, _ = _load('sm_' + capability)
+    target, _ = _load('sm_' + capability, single_image)
     shapes = (jax.ShapeDtypeStruct((batch, theta.shape[1], 26), jnp.float32),
               jax.ShapeDtypeStruct((batch, 33), jnp.float32),
               jax.ShapeDtypeStruct((1,), jnp.int32))
@@ -81,8 +83,8 @@ def _run(x, theta, *, first_cap, max_iter, occupancy, accelerate=True):
 def build_identity():
     """Fingerprint the compiled implementation for generation/resume metadata."""
     device = jax.devices('gpu')[0]
-    target, _ = _load('sm_' + str(device.compute_capability).replace('.', ''))
-    return target
+    architecture = 'sm_' + str(device.compute_capability).replace('.', '')
+    return ':'.join(_load(architecture, gate)[0] for gate in (False, True))
 
 
 @partial(jax.jit, static_argnames=('n_init',))
@@ -106,11 +108,11 @@ def result_from_compact(c):
     return tuple(parameters[:, k] for k in range(5)) + (c[:, 10], diagnostic)
 
 
-def fit_batch(keys, x, *, n_init=em.N_INIT, max_iter=em.MAX_ITER):
+def fit_batch(keys, x, *, n_init=em.N_INIT, max_iter=em.MAX_ITER, single_image=False):
     """Keep every start, continue/reselect capped winners, and return EM diagnostics."""
     if n_init < 1 or not 0 < max_iter <= em.MAX_ITER:
         raise ValueError('n_init must be positive and max_iter must be in [1,25000]')
     theta = initial_parameters(keys, x, n_init)
     _, compact = _run(x, theta, first_cap=min(em.FIRST_CAP, max_iter),
-                      max_iter=max_iter, occupancy=True)
+                      max_iter=max_iter, occupancy=True, single_image=single_image)
     return result_from_compact(compact)

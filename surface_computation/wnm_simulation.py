@@ -21,7 +21,7 @@ import numpy as np
 from surface_computation.wnm_design import SIM_IDF_DIFF
 
 from surface_computation import jax_fit_main as jfm
-from surface_computation import em_batch
+from surface_computation import em_batch, cuda_em
 from surface_computation import likelihood_em as em
 
 #: Identifiability separation used by the maintained Demixing Model simulator.
@@ -115,6 +115,10 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
         including the selected parameters in raw component order.
     """
     design = jnp.asarray(design, dtype=jnp.float32)
+    # This chooses a complete evaluator before fitting. Every evaluator still
+    # follows current fitted SDs and retains the full wrapped-normal fallback.
+    eligible = (np.min(np.asarray(design)[:, :2], axis=1) <= cuda_em.SINGLE_IMAGE_SD
+                if em_backend == 'cuda' and n_samples == 500 else None)
     if block_rows < 1 or n_simulations < 1:
         raise ValueError('block_rows and n_simulations must be positive')
     n_rows = design.shape[0]
@@ -130,7 +134,8 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
         fitted = em_batch.fit_batch(fit_keys, x, fix_weights=fix_weights,
             wrap_axes=(jfm.jf.wrap_feat, jfm.jf.wrap_idf), stages=em_stages,
             continuation_batch=continuation_batch, max_iter=em_max_iter,
-            backend=em_backend)
+            backend=em_backend, cuda_single_image=(eligible is not None and
+                bool(eligible[start:start + len(block)].all())))
         em_batch.check_results(fitted)
         out.append(bias_readout(fitted, block, n_simulations))
         if return_diagnostics:

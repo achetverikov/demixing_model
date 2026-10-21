@@ -140,3 +140,38 @@ def test_cuda_simulation_uses_native_keys_and_item_readout():
     direct = cuda_em.fit_batch(fit_keys, x)
     np.testing.assert_array_equal(bias, simulation.bias_readout(direct, design, 2))
     np.testing.assert_array_equal(diagnostic['parameters'], direct[-1]['parameters'].reshape(2, 2, 5, 2))
+
+
+def test_cuda_simulation_dispatches_complete_n500_evaluators(monkeypatch):
+    # Routing contract: mixed blocks and unknown generating SDs must keep the
+    # full evaluator. Numerical density and optimizer tests live below this API.
+    routes = []
+    def fitted(keys, x, **options):
+        routes.append(options['cuda_single_image'])
+        return None
+    monkeypatch.setattr(em_batch, 'fit_batch', fitted)
+    monkeypatch.setattr(em_batch, 'check_results', lambda result: None)
+    monkeypatch.setattr(simulation, 'bias_readout',
+        lambda result, block, count: jnp.zeros((len(block), count, 2)))
+    design = np.array([[10., 100., 30., 60.], [40., 80., 30., 60.],
+                       [50., 100., 30., 60.], [10., 100., 30., 60.]])
+    simulation.simulate(jax.random.key(31), design, n_simulations=1,
+                        n_samples=500, block_rows=2, em_backend='cuda')
+    assert routes == [True, False]
+    routes.clear()
+    simulation.simulate(jax.random.key(31), design[:1], n_simulations=1,
+                        n_samples=20, em_backend='cuda')
+    assert routes == [False]
+
+
+def test_cuda_single_image_library_preserves_complete_start_states():
+    # FFI contract: compiling the gate must keep broad fallback and continuation
+    # reachable. This catches a wrong build identity or a narrow-only library.
+    x = evidence(500)
+    keys = jax.random.split(jax.random.key(17), len(x))
+    theta = cuda_em.initial_parameters(keys, x, n_init=5)
+    outputs = [cuda_em._run(x, theta, first_cap=1, max_iter=1000,
+               occupancy=True, single_image=gate) for gate in (False, True)]
+    for baseline, gated in zip(*outputs):
+        np.testing.assert_array_equal(np.asarray(baseline).view(np.uint32),
+                                      np.asarray(gated).view(np.uint32))

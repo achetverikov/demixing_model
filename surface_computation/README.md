@@ -74,6 +74,17 @@ register lifetimes. Density
 evaluation uses one formula, outlined at N=4,10,20,100 and inlined at N=500,
 following measured instruction-cache and function-call costs.
 
+At N=500, training-data simulation chooses between two complete compiled
+evaluators before each block. If every row has at least one generating feature
+SD at or below `sqrt(180/0.09)` (about 44.72 degrees), it uses a single-image
+shortcut where the current fitted SD and observation distance make omitted
+winding weights at most `exp(-32.4)` of the principal image. Otherwise it uses
+the full evaluator. Both retain the original spatial and Fourier fallbacks;
+generating SDs never constrain fitted trajectories. Mixed blocks use the full
+evaluator. Direct CUDA fits without generating parameters use the full evaluator.
+Circular subtraction preserves local differences and compensates rounding near
+the wrap seam. Both compiled identities are included in generation metadata.
+
 After 10 ordinary updates, SQUAREM extrapolates in scaled-mean/log-SD
 coordinates with an adaptive spectral-step cap of 256. Each proposal respects
 the existing parameter bounds and receives an ordinary EM stabilization step;
@@ -140,3 +151,11 @@ Counter-guided kernel validation and its independent audit are retained under
 `$DEMIXING_ARTIFACT_ROOT/cuda_counter_round_20261021/`. These generated artifacts
 are not shipped; timing and exact-output evidence apply to the recorded GPU,
 compiler, inputs and starting parameters.
+
+Evaluator dispatch validation is retained under
+`$DEMIXING_ARTIFACT_ROOT/gate_dispatch_20261021/` and integration checks under
+`$DEMIXING_ARTIFACT_ROOT/pipeline_audit_20261021/integration/`.
+These generated records are not shipped. The dispatch comparison uses corrected
+subtraction as its baseline; tiny pointwise winding-moment differences remain
+possible, so the tested exact final-state comparisons are workload evidence,
+not a universal optimizer-equivalence guarantee.
