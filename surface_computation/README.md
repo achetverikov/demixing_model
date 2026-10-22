@@ -11,14 +11,16 @@ python -m surface_computation.generate_wnm_training_data \
   --n-samples 20 \
   --n-points 4000 \
   --n-simulations 200 \
-  --out /path/to/training_data.npz
+  --out /path/to/training_data
 ```
 
 - `--n-samples` sets the total internal evidence samples in each simulated trial; the generator defaults to 100.
 - `--n-points` sets the number of parameter combinations in the design.
 - `--n-simulations` sets the repeated simulations per design point.
 
-The NPZ stores the parameter design, raw feature-bias outcomes for both items, and generation metadata. The [training tools](../surrogate_training/wnm/README.md) use these outcomes to fit a conditional wrapped-normal mixture (WNM).
+The directory corpus stores the parameter design, raw feature-bias outcomes for
+both items, all EM diagnostics and generation metadata. The
+[training tools](../surrogate_training/wnm/README.md) read it directly.
 
 The observer uses likelihood EM with soft component and winding probabilities,
 225 starts, SDs bounded below by 1 and component weights bounded below by 0.1.
@@ -28,7 +30,7 @@ Both likelihood and parameter changes must stabilize. All starts receive up to
 selected fits, nonfinite starts, or material likelihood decreases before saving.
 The fit is a multistart local search; it does not certify a global optimum.
 
-Each shard and final NPZ includes per-trial `em_*` diagnostics and selected
+Each corpus includes per-trial `em_*` diagnostics and selected
 `em_parameters` of shape `(rows, trials, 5, 2)`, in raw fit order, with fields
 `(weight, feature mean, identifying mean, feature SD, identifying SD)`.
 These parameters allow inspection of floor-bound spikes and nearly uniform
@@ -38,7 +40,39 @@ fingerprint includes the likelihood kernel and density helper; old simulation
 shards cannot resume under the new estimator. Bundled NN checkpoints are
 unchanged and require new simulation data and retraining to reflect this fitter.
 
-The generator saves simulation chunks beside the output so interrupted runs can resume. Keep simulation and Python caches under `/tmp`, and run one GPU job at a time on a shared device.
+The corpus uses standard `.npy` memory maps and a SQLite tile index. Array writes
+are flushed before publishing a run-bound tile checksum; `--resume` verifies
+checksums and recomputes missing or altered tiles. An atomic `complete.json`
+marker is published only after exact tile coverage is complete. Training refuses
+incomplete corpora. One process owns the writer lock; independent workers must
+use separate outputs. Do not modify a completed corpus while training reads it.
+
+Storage and training batches do not require whole-corpus assembly or a full
+finite-value mask. `--shard-rows` and `--simulation-chunk` still define the same
+logical RNG tiles, even though tiles now occupy slices in shared array files.
+Existing NPZ files remain readable; older NPZ-tile checkpoint directories cannot
+resume as this new storage format. No existing outcomes are silently migrated.
+
+To request an optional consolidated export, use `--out /path/to/data.npz`; the
+durable directory is then `/path/to/data.npz.shards`. Export streams in bounded
+buffers but needs space for a second copy; initial generation checks capacity.
+You can also export a completed directory later:
+
+```bash
+python -m surface_computation.simulation_corpus /path/to/training_data /path/to/data.npz
+```
+
+Use `python -m surface_computation.simulation_corpus /path/to/training_data
+--verify` for an explicit full-payload checksum scan. Ordinary training opening
+checks completion, array schemas and the coverage index; it relies on the
+validated payload remaining immutable rather than rereading all diagnostics.
+
+`--compress` applies only to NPZ export. The directory corpus retains exact raw
+arrays. At 148,076 rows and 20,000 trials, payload storage is about 258 GB per
+sample-count setting, plus checkpoint metadata. Memory mapping removes the
+258 GB heap requirement and the mandatory second output copy; it does not
+remove the need for that durable storage. Keep compute caches under `/tmp`,
+and run one GPU job at a time on a shared device.
 
 `--block-rows` batches different parameter combinations on the GPU. The total
 trial batch is `block_rows × simulation_chunk`; increase it with attention to

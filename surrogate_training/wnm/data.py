@@ -15,6 +15,27 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 import numpy as np
+from surface_computation import simulation_corpus
+
+
+class RowView:
+    """Indexed row view; subsets and minibatches never copy a whole corpus."""
+    def __init__(self, base, rows=None):
+        rows = np.arange(base.shape[0]) if rows is None else np.asarray(rows)
+        self.base = base.base if isinstance(base,RowView) else base
+        self.rows = base.rows[rows] if isinstance(base,RowView) else rows
+        self.shape = (len(self.rows),)+base.shape[1:]
+        self.ndim = len(self.shape)
+        self.dtype = base.dtype
+
+    def __getitem__(self,key):
+        key = key if isinstance(key,tuple) else (key,)
+        result = self.base[(self.rows[key[0]],)+key[1:]]
+        simulation_corpus.release_pages(self.base)
+        return result
+
+    def __array__(self,dtype=None,copy=None):
+        return np.asarray(self[:],dtype=dtype)
 
 
 class SampleStore:
@@ -26,14 +47,14 @@ class SampleStore:
     conditional density at the mirrored parameter vector.
     """
 
-    def __init__(self, design, bias):
+    def __init__(self, design, bias, *, all_finite=False):
         self.design = np.asarray(design, dtype=np.float32)
-        self.bias = np.asarray(bias, dtype=np.float32)
+        self.bias = bias if isinstance(bias,RowView) else RowView(np.asanyarray(bias,dtype=np.float32))
         if self.bias.shape[0] != self.design.shape[0] or self.bias.ndim != 3:
             raise ValueError(f"bias {self.bias.shape} does not match design "
                              f"{self.design.shape}")
         self.mirrored = self.design[:, [1, 0, 2, 3]]
-        self.finite = np.isfinite(self.bias)
+        self.all_finite = all_finite
 
     @property
     def n_rows(self) -> int:
@@ -41,7 +62,9 @@ class SampleStore:
 
     @property
     def n_observations(self) -> int:
-        return int(self.finite.sum())
+        if self.all_finite:
+            return int(np.prod(self.bias.shape))
+        return sum(int(np.isfinite(self.bias[a:a+16]).sum()) for a in range(0,self.n_rows,16))
 
     def param_key(self) -> np.ndarray:
         """Row-wise ``(sd_feat1, sd_feat2, sd_idf)`` triple, for reporting."""
@@ -60,7 +83,8 @@ class SampleStore:
         return np.column_stack([sd.min(axis=1), sd.max(axis=1), self.design[:, 2]])
 
     def subset(self, row_idx) -> "SampleStore":
-        return SampleStore(self.design[row_idx], self.bias[row_idx])
+        rows = np.arange(self.n_rows)[row_idx]
+        return SampleStore(self.design[row_idx], RowView(self.bias,rows),all_finite=self.all_finite)
 
     def batch(self, rng: np.random.Generator, batch_size: int
               ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -70,7 +94,7 @@ class SampleStore:
         c = rng.integers(0, 2, batch_size)
         x = np.where(c[:, None] == 0, self.design[m], self.mirrored[m])
         b = self.bias[m, j, c]
-        w = self.finite[m, j, c].astype(np.float32)
+        w = np.isfinite(b).astype(np.float32)
         return x, np.nan_to_num(b).astype(np.float32), w
 
     def grouped_batch(self, rng: np.random.Generator, n_groups: int,
@@ -82,7 +106,7 @@ class SampleStore:
         j = rng.integers(0, self.bias.shape[1], (n_groups, outcomes_per_group))
         x = np.where(c[:, None] == 0, self.design[m], self.mirrored[m])
         b = self.bias[m[:, None], j, c[:, None]]
-        w = self.finite[m[:, None], j, c[:, None]].astype(np.float32)
+        w = np.isfinite(b).astype(np.float32)
         return x, np.nan_to_num(b).astype(np.float32), w
 
     def all_rows(self) -> Tuple[np.ndarray, np.ndarray]:
@@ -122,11 +146,11 @@ def split_by_params(store: SampleStore, val_fraction: float = 0.1, seed: int = 0
 
 def load_npz(path) -> Tuple[SampleStore, dict]:
     """Load an NPZ written by :mod:`surface_computation.generate_wnm_training_data`."""
-    blob = np.load(Path(path), allow_pickle=True)
-    meta = json.loads(str(blob['meta']))
-    if 'strata' in blob and blob['strata'].size:
-        meta['strata'] = [str(s) for s in blob['strata']]
-    return SampleStore(blob['design'], blob['bias']), meta
+    with np.load(Path(path), allow_pickle=True) as blob:
+        meta = json.loads(str(blob['meta']))
+        if 'strata' in blob and blob['strata'].size:
+            meta['strata'] = [str(s) for s in blob['strata']]
+        return SampleStore(blob['design'], blob['bias']), meta
 
 
 def load_source(source: str, corpus_files: Optional[int] = None,
@@ -136,6 +160,12 @@ def load_source(source: str, corpus_files: Optional[int] = None,
     path = Path(source)
     if path.suffix == '.npz':
         return load_npz(path)
+    if (path/'manifest.json').exists() and json.loads((path/'manifest.json').read_text()).get('storage_format')==simulation_corpus.FORMAT:
+        with simulation_corpus.Corpus(path) as corpus:
+            meta = dict(corpus.meta)
+            if corpus.strata:
+                meta['strata'] = corpus.strata
+            return SampleStore(corpus.design,corpus.arrays['bias'],all_finite=True),meta
 
     from surface_computation import legacy_sample_import as existing_samples
     directory = path if path.is_dir() else existing_samples.corpus_dir(source)

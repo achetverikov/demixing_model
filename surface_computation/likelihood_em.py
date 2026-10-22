@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import jax.scipy as jsp
 
 from shared import wnm
-from surface_computation.em_identity import ESTIMATOR_ID
+from surface_computation.em_identity import ESTIMATOR_ID, DIAGNOSTIC_DTYPES
 
 N_INIT = 225
 RTOL = 1e-6
@@ -22,9 +22,7 @@ PARAMETER_TOL = 1e-5
 FIRST_CAP = 5000
 MAX_ITER = 25000
 N_HARMONICS = 6
-DIAGNOSTIC_FIELDS = ('iterations', 'relative_change', 'parameter_change', 'converged',
-    'any_best_converged', 'best_tie_count', 'capped_starts', 'continued_winner',
-    'nonfinite_starts', 'material_decreases', 'worst_change', 'log_likelihood')
+DIAGNOSTIC_FIELDS = tuple(DIAGNOSTIC_DTYPES)
 
 
 class State(NamedTuple):

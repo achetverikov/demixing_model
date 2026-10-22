@@ -12,9 +12,10 @@ Usage (from the repo root)::
         --corpus-files 800 --corpus-sims 400 --components 8 \
         --out $DEMIXING_ARTIFACT_ROOT/wnm/run_checkpoint.pkl
 
-``--source`` accepts either a corpus directory name under
-``$DEMIXING_ARTIFACT_ROOT`` (grid parameters, free of new simulation cost) or an
-``.npz`` written by ``python -m surface_computation.generate_wnm_training_data`` (continuous parameters). The output of this trainer is a training checkpoint; use ``python -m surrogate_training.wnm.package_artifact`` to create a self-contained production artifact.
+``--source`` accepts a completed directory corpus or NPZ from the training-data
+generator, or a legacy grid corpus under ``$DEMIXING_ARTIFACT_ROOT``. The output
+is a training checkpoint; ``surrogate_training.wnm.package_artifact`` creates a
+self-contained production artifact.
 """
 
 from __future__ import annotations
@@ -124,20 +125,22 @@ def trajectory_validation_metrics(model, variables, store, labels, n_wraps=4,
     for component in (0, 1):
         params = (store.design if component == 0 else
                   np.asarray(wm.mirror_params(store.design)))
-        bias = store.bias[:, :, component]
-        nll, _ = evaluate_mod.model_case_nll(
-            model, variables, params, bias, n_wraps=n_wraps,
-            case_block=16, chunk=min(2000, bias.shape[1]))
-        empirical = evaluate_mod.empirical_moments(bias)
-        dist = model.apply(variables, jnp.asarray(params))
-        pred_mean, _ = wm.mean_and_resultant(dist)
-        pred_sd = wm.circular_sd(dist)
-        mean_error = np.abs(np.asarray(wm.wrap_deg(
-            np.asarray(pred_mean) - empirical['mean_bias'])))
-        sd_error = np.abs(np.asarray(pred_sd) - empirical['circ_sd'])
+        nll,mean_error,sd_error,resultant = (np.empty(store.n_rows) for _ in range(4))
+        for a in range(0,store.n_rows,16):
+            rows = slice(a,a+16)
+            bias = store.bias[rows,:,component]
+            nll[rows],_ = evaluate_mod.model_case_nll(
+                model,variables,params[rows],bias,n_wraps=n_wraps,
+                case_block=16,chunk=min(2000,bias.shape[1]))
+            empirical = evaluate_mod.empirical_moments(bias)
+            dist = model.apply(variables,jnp.asarray(params[rows]))
+            pred_mean,_ = wm.mean_and_resultant(dist)
+            mean_error[rows] = np.abs(np.asarray(wm.wrap_deg(np.asarray(pred_mean)-empirical['mean_bias'])))
+            sd_error[rows] = np.abs(np.asarray(wm.circular_sd(dist))-empirical['circ_sd'])
+            resultant[rows] = empirical['resultant']
         for label in np.unique(labels):
             keep = labels == label
-            identified = keep & (empirical['resultant'] >= min_resultant)
+            identified = keep & (resultant >= min_resultant)
             group_nll.append(float(np.nanmean(nll[keep])))
             mean_errors.append(float(np.nanmax(mean_error[keep])))
             sd_errors.append(float(np.nanmax(sd_error[keep])))
@@ -200,7 +203,7 @@ def main():
     p.add_argument('--corpus-sims', type=int, default=400)
     p.add_argument('--seed', type=int, default=0)
     p.add_argument('--selection-reference', type=Path, default=None,
-                   help='modest raw trajectory NPZ used during checkpoint selection')
+                   help='modest raw trajectory corpus/NPZ used during checkpoint selection')
     p.add_argument('--selection-every', type=int, default=2000,
                    help='steps between trajectory-reference evaluations')
     p.add_argument('--checkpoint-metric', choices=['val-nll', 'trajectory-nll'],

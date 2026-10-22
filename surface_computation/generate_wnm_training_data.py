@@ -7,12 +7,12 @@ surface.
 Usage (from the repo root)::
 
     PYTHONPATH=. python -m surface_computation.generate_wnm_training_data \
-        --n-points 4000 --n-simulations 200 --out $DEMIXING_ARTIFACT_ROOT/wnm/train.npz
+        --n-points 4000 --n-simulations 200 --out $DEMIXING_ARTIFACT_ROOT/wnm/train
 
     PYTHONPATH=. python -m surface_computation.generate_wnm_training_data \
         --validation --n-simulations 100000 --simulation-chunk 250 \
         --shard-rows 1 --resume \
-        --out .../validation.npz
+        --out .../validation
 """
 
 from __future__ import annotations
@@ -20,27 +20,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import time
 from pathlib import Path
-from zipfile import BadZipFile
 
 import jax
 import numpy as np
 
 from surface_computation import wnm_design as design_mod
 from surface_computation import wnm_simulation
-from surface_computation import likelihood_em, em_batch, cuda_em
-
-
-def _save_npz(path: Path, compress: bool, **arrays):
-    """Atomically write an NPZ so an interrupted shard is never considered done."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f'.{path.name}.tmp')
-    writer = np.savez_compressed if compress else np.savez
-    with open(tmp, 'wb') as handle:
-        writer(handle, **arrays)
-    os.replace(tmp, path)
+from surface_computation import likelihood_em, cuda_em, simulation_corpus as storage
 
 
 def _design_digest(design: np.ndarray) -> str:
@@ -59,6 +47,7 @@ def _code_digest(paths=None) -> str:
         root / 'surface_computation' / 'likelihood_em.py',
         root / 'surface_computation' / 'em_batch.py',
         root / 'surface_computation' / 'em_identity.py',
+        root / 'surface_computation' / 'simulation_corpus.py',
         root / 'surface_computation' / 'cuda_em.py',
         *(root / 'surface_computation' / name for name in cuda_em.SOURCE_NAMES),
         root / 'shared' / 'wnm.py',
@@ -79,46 +68,6 @@ def _chunk_ranges(size: int, chunk_size: int):
 def _shard_ranges(n_rows: int, shard_rows: int):
     """Backward-compatible name for row chunk ranges."""
     return _chunk_ranges(n_rows, shard_rows)
-
-
-def _valid_shard(path: Path, expected_design: np.ndarray, n_simulations: int,
-                 expected_coordinates=None) -> bool:
-    try:
-        with np.load(path) as archive:
-            names = ('design', 'bias', 'em_parameters',
-                     *('em_'+name for name in likelihood_em.DIAGNOSTIC_FIELDS))
-            blob = {name: archive[name] for name in names}
-            valid = (np.array_equal(blob['design'], expected_design)
-                     and blob['bias'].shape == (len(expected_design), n_simulations, 2)
-                     and np.isfinite(blob['bias']).all()
-                     and blob['em_converged'].shape == (len(expected_design), n_simulations)
-                     and blob['em_converged'].all())
-            valid = valid and all(blob['em_'+name].shape == (len(expected_design), n_simulations)
-                and np.isfinite(blob['em_'+name]).all() for name in likelihood_em.DIAGNOSTIC_FIELDS)
-            valid = valid and not (blob['em_nonfinite_starts'].any() or blob['em_material_decreases'].any())
-            valid = valid and blob['em_parameters'].shape == (len(expected_design),n_simulations,5,2)
-            valid = valid and np.isfinite(blob['em_parameters']).all()
-            if expected_coordinates is not None:
-                valid = (valid and 'coordinates' in archive
-                         and np.array_equal(archive['coordinates'], expected_coordinates))
-            return valid
-    except (OSError, ValueError, KeyError, BadZipFile):
-        return False
-
-
-def _assemble_chunks(records, n_rows: int, n_simulations: int, return_diagnostics=False):
-    """Assemble verified two-axis chunks with only the final array in memory."""
-    bias = np.empty((n_rows, n_simulations, 2), dtype=np.float32)
-    diagnostics = {}
-    for path, row_start, row_stop, sim_start, sim_stop in records:
-        with np.load(path) as blob:
-            bias[row_start:row_stop, sim_start:sim_stop] = blob['bias']
-            if return_diagnostics:
-                for name in ('em_'+k for k in (*likelihood_em.DIAGNOSTIC_FIELDS,'parameters')):
-                    if name not in diagnostics:
-                        diagnostics[name] = np.empty((n_rows, n_simulations)+blob[name].shape[2:], dtype=blob[name].dtype)
-                    diagnostics[name][row_start:row_stop, sim_start:sim_stop] = blob[name]
-    return (bias, diagnostics) if return_diagnostics else bias
 
 
 def _load_design_file(path: Path) -> tuple[np.ndarray, list[str] | None]:
@@ -146,7 +95,8 @@ def _load_design_file(path: Path) -> tuple[np.ndarray, list[str] | None]:
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('--out', required=True, type=Path)
+    p.add_argument('--out', required=True, type=Path,
+                   help='directory corpus; an explicit .npz also requests a streamed export')
     p.add_argument('--design-file', type=Path,
                    help='exact .npy/.npz design; overrides generated designs')
     p.add_argument('--n-points', type=int, default=4000,
@@ -200,6 +150,8 @@ def main():
     p.add_argument('--design-seed', type=int, default=None,
                    help='design seed; set identically across independent simulation repeats')
     args = p.parse_args()
+    if args.compress and args.out.suffix!='.npz':
+        p.error('--compress applies to an explicit .npz export; directory corpora use mapped arrays')
     design_seed = args.seed if args.design_seed is None else args.design_seed
 
     if args.n_simulations < 1 or args.simulation_chunk < 1:
@@ -273,10 +225,14 @@ def main():
           f"device chunk <= {args.block_rows} rows x {args.simulation_chunk} simulations)")
     t0 = time.time()
     base_key = jax.random.PRNGKey(args.seed + 1)
-    shard_dir = args.out.with_suffix(args.out.suffix + '.shards')
-    shard_dir.mkdir(parents=True, exist_ok=True)
+    shard_dir = args.out.with_suffix(args.out.suffix + '.shards') if args.out.suffix=='.npz' else args.out
+    if args.out.suffix=='.npz':
+        args.out.parent.mkdir(parents=True,exist_ok=True)
+        copies = 1+int(not (shard_dir/'manifest.json').exists())
+        storage.require_space(args.out.parent,copies*storage.payload_bytes(len(design),args.n_simulations))
     signature = {
-        'format_version': 3,
+        'format_version': 4,
+        'storage_format': storage.FORMAT,
         'estimator': likelihood_em.ESTIMATOR_ID,
         'simulation_code_sha256': _code_digest(),
         'design_sha256': _design_digest(design),
@@ -295,75 +251,45 @@ def main():
         'em_backend': args.em_backend,
         'em_backend_build': cuda_em.build_identity() if args.em_backend == 'cuda' else None,
     }
-    manifest = shard_dir / 'manifest.json'
-    if manifest.exists():
-        previous = json.loads(manifest.read_text())
-        if previous != signature:
-            raise ValueError(f'existing shard manifest does not match this run: {manifest}')
-    else:
-        if any(shard_dir.glob('rows_*.npz')):
-            raise ValueError(f'existing shards have no manifest: {shard_dir}')
-        manifest.write_text(json.dumps(signature, indent=2) + '\n')
-
-    records = []
     total_chunks = (len(_chunk_ranges(len(design), args.shard_rows))
                     * len(_chunk_ranges(args.n_simulations, args.simulation_chunk)))
     completed_chunks = 0
-    for row_start, row_stop in _chunk_ranges(len(design), args.shard_rows):
-        expected = design[row_start:row_stop]
-        for sim_start, sim_stop in _chunk_ranges(
-                args.n_simulations, args.simulation_chunk):
-            path = shard_dir / (f'rows_{row_start:05d}_{row_stop:05d}_'
-                                f'sims_{sim_start:06d}_{sim_stop:06d}.npz')
-            n_chunk = sim_stop - sim_start
-            coordinates = np.asarray([row_start, row_stop, sim_start, sim_stop])
-            if args.resume and path.exists() and _valid_shard(
-                    path, expected, n_chunk, coordinates):
-                action = 'reused'
-            else:
-                chunk_bias, diagnostic = wnm_simulation.simulate(
-                    base_key, expected, n_simulations=n_chunk,
-                    n_samples=args.n_samples, fix_weights=args.fix_weights,
-                    common_random_numbers=args.crn,
-                    block_rows=min(args.block_rows, len(expected)), progress=False,
-                    row_offset=row_start, simulation_offset=sim_start,
-                    common_random_groups=(None if crn_groups is None else
-                                          crn_groups[row_start:row_stop]),
-                    em_stages=args.em_stages, continuation_batch=args.continuation_batch,
-                    em_max_iter=args.em_max_iter, return_diagnostics=True,
-                    em_backend=args.em_backend)
-                _save_npz(path, args.compress, design=expected, bias=np.asarray(chunk_bias),
-                          coordinates=coordinates, **{'em_'+k:np.asarray(v) for k,v in diagnostic.items()})
-                action = 'saved'
-            records.append((path, row_start, row_stop, sim_start, sim_stop))
-            completed_chunks += 1
-            if (args.progress_every and
-                    (completed_chunks % args.progress_every == 0
-                     or completed_chunks == total_chunks)):
-                print(f'  chunks {completed_chunks}/{total_chunks}; '
-                      f'{action} {path.name}', flush=True)
-    simulation_elapsed = time.time() - t0
-    bias, diagnostics = _assemble_chunks(records, len(design), args.n_simulations, return_diagnostics=True)
-    n_bad = int(np.sum(~np.isfinite(bias)))
-    elapsed = time.time() - t0
-    meta = dict(vars(args) | {'elapsed_s': elapsed,
-                              'generation_signature': signature,
-                              'simulation_elapsed_s': simulation_elapsed,
-                              'n_nonfinite': n_bad,
-                              'estimator': likelihood_em.ESTIMATOR_ID,
-                              'em_summary': em_batch.summarize({k.removeprefix('em_'):v for k,v in diagnostics.items()}),
-                              'effective_design_seed': design_seed,
-                              'idf_diff': wnm_simulation.IDF_DIFF,
-                              'dprime_definition': 'idf_diff / sd_idf',
-                              'param_names': list(design_mod.PARAM_NAMES)})
-    meta = {key: str(value) if isinstance(value, Path) else value
-            for key, value in meta.items()}
-    _save_npz(args.out, args.compress, design=design, bias=bias,
-              strata=np.asarray(strata if strata else [], dtype=object),
-              meta=json.dumps(meta), **diagnostics)
-    print(f"Done in {elapsed:.1f}s ({elapsed / design.shape[0]:.2f}s/point); "
-          f"{n_bad} non-finite biases")
-    print(f"Saved {args.out} ({args.out.stat().st_size / 1e6:.1f} MB)")
+    with storage.writer(shard_dir,signature,design,strata) as corpus:
+        for row_start, row_stop in _chunk_ranges(len(design), args.shard_rows):
+            expected = design[row_start:row_stop]
+            for sim_start, sim_stop in _chunk_ranges(args.n_simulations,args.simulation_chunk):
+                coordinates = (row_start,row_stop,sim_start,sim_stop)
+                n_chunk = sim_stop-sim_start
+                if args.resume and corpus.valid_tile(coordinates):
+                    action = 'reused'
+                else:
+                    chunk_bias, diagnostic = wnm_simulation.simulate(
+                        base_key, expected, n_simulations=n_chunk,
+                        n_samples=args.n_samples, fix_weights=args.fix_weights,
+                        common_random_numbers=args.crn,
+                        block_rows=min(args.block_rows, len(expected)), progress=False,
+                        row_offset=row_start, simulation_offset=sim_start,
+                        common_random_groups=(None if crn_groups is None else crn_groups[row_start:row_stop]),
+                        em_stages=args.em_stages, continuation_batch=args.continuation_batch,
+                        em_max_iter=args.em_max_iter, return_diagnostics=True,em_backend=args.em_backend)
+                    arrays = dict(bias=np.asarray(chunk_bias),
+                        **{'em_'+k:np.asarray(v) for k,v in diagnostic.items()})
+                    corpus.write_tile(coordinates,arrays)
+                    action = 'saved'
+                completed_chunks += 1
+                if args.progress_every and (completed_chunks%args.progress_every==0 or completed_chunks==total_chunks):
+                    print(f'  chunks {completed_chunks}/{total_chunks}; {action} {coordinates}',flush=True)
+        simulation_elapsed = time.time()-t0
+        meta = dict(vars(args) | {'simulation_elapsed_s':simulation_elapsed,
+            'estimator':likelihood_em.ESTIMATOR_ID,'effective_design_seed':design_seed,
+            'idf_diff':wnm_simulation.IDF_DIFF,'dprime_definition':'idf_diff / sd_idf',
+            'param_names':list(design_mod.PARAM_NAMES)})
+        meta = {k:str(v) if isinstance(v,Path) else v for k,v in meta.items()}
+        corpus.finish(meta)
+    if args.out.suffix=='.npz':
+        storage.export_npz(shard_dir,args.out,compress=args.compress)
+    elapsed = time.time()-t0
+    print(f'Done in {elapsed:.1f}s ({elapsed/len(design):.2f}s/point); saved {args.out}')
 
 
 if __name__ == '__main__':

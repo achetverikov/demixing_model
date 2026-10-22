@@ -17,7 +17,7 @@ from surface_computation import em_identity
 def test_kernel_and_shared_density_changes_invalidate_generation_digest(tmp_path,monkeypatch):
     root=Path(generator.__file__).resolve().parents[1]
     paths=['surface_computation/'+name for name in ['generate_wnm_training_data.py','wnm_design.py',
-        'wnm_simulation.py','jax_fit_main.py','jax_fit_functions.py','likelihood_em.py','em_batch.py','em_identity.py',
+        'wnm_simulation.py','simulation_corpus.py','jax_fit_main.py','jax_fit_functions.py','likelihood_em.py','em_batch.py','em_identity.py',
         'cuda_em.py', *generator.cuda_em.SOURCE_NAMES]]+['shared/wnm.py']
     for relative in paths:
         dest=tmp_path/relative;dest.parent.mkdir(exist_ok=True,parents=True)
@@ -34,20 +34,6 @@ def test_kernel_and_shared_density_changes_invalidate_generation_digest(tmp_path
     cuda=tmp_path/'surface_computation/cuda/likelihood_em.cuh'
     cuda.write_text(cuda.read_text()+'\n// changed CUDA kernel\n')
     assert generator._code_digest()!=prior
-
-
-def test_failed_shard_is_not_a_valid_resume_marker(tmp_path):
-    path=tmp_path/'chunk.npz';design=np.array([[10.,20.,30.,60.]],np.float32)
-    diagnostic={'em_'+k:np.zeros((1,2)) for k in em.DIAGNOSTIC_FIELDS}
-    diagnostic['em_converged']=np.array([[True,True]])
-    diagnostic['em_parameters']=np.ones((1,2,5,2))
-    np.savez(path,design=design,bias=np.zeros((1,2,2)),**diagnostic)
-    assert generator._valid_shard(path,design,2)
-    diagnostic.pop('em_iterations')
-    np.savez(path,design=design,bias=np.zeros((1,2,2)),**diagnostic)
-    assert not generator._valid_shard(path,design,2)
-    path.write_bytes(path.read_bytes()[:-10])
-    assert not generator._valid_shard(path,design,2)
 
 
 def test_cloud_reader_resolves_the_same_namespace_as_the_writer(monkeypatch):
@@ -77,7 +63,7 @@ def test_cloud_reader_resolves_the_same_namespace_as_the_writer(monkeypatch):
 @pytest.mark.gpu
 @pytest.mark.parametrize('backend', ['jax', 'cuda'])
 def test_generator_diagnostics_resume_and_stale_estimator_refusal(tmp_path,monkeypatch,backend):
-    design=tmp_path/'design.npz';out=tmp_path/'generated.npz'
+    design=tmp_path/'design.npz';out=tmp_path/('generated.npz' if backend=='jax' else 'generated')
     points=np.array([[10.,10.,10.,60.],[20.,10.,10.,100.]],np.float32)
     np.savez(design,design=points,strata=['curve_a','curve_a'])
     args=['generator','--design-file',str(design),'--out',str(out),'--n-samples','4',
@@ -87,7 +73,9 @@ def test_generator_diagnostics_resume_and_stale_estimator_refusal(tmp_path,monke
         args += ['--em-stages','5','50','5000']
     monkeypatch.setattr(sys,'argv',args)
     generator.main()
-    with np.load(out) as blob:
+    from surface_computation import simulation_corpus
+    with (np.load(out) if backend=='jax' else simulation_corpus.Corpus(out)) as saved:
+        blob = saved if backend=='jax' else dict(saved.arrays,meta=json.dumps(saved.meta))
         assert blob['bias'].shape==(2,2,2)
         assert blob['em_converged'].all() and not blob['em_nonfinite_starts'].any()
         assert blob['em_iterations'].shape==(2,2)
@@ -105,7 +93,7 @@ def test_generator_diagnostics_resume_and_stale_estimator_refusal(tmp_path,monke
     with pytest.raises(ValueError,match='manifest does not match'):
         generator.main()
     np.savez(design,design=points,strata=['curve_a','curve_a'])
-    manifest=out.with_suffix('.npz.shards')/'manifest.json'
+    manifest=(out.with_suffix('.npz.shards') if backend=='jax' else out)/'manifest.json'
     bad=json.loads(manifest.read_text());bad['estimator']='different_estimator'
     assert bad['block_rows']==2
     assert bad['em_backend']==backend

@@ -9,7 +9,7 @@ Run commands from the repository root.
 ```bash
 python -m surface_computation.generate_wnm_training_data \
   --n-samples 20 \
-  --out /path/to/training_data.npz
+  --out /path/to/training_data
 ```
 
 Choose the internal sample count for the observer you want to model. See the [simulation guide](../../surface_computation/README.md) for design size, repetitions, and output details.
@@ -22,12 +22,19 @@ other counts, and validate that predictor independently before fitting data.
 
 ```bash
 python -m surrogate_training.wnm.train \
-  --source /path/to/training_data.npz \
+  --source /path/to/training_data \
   --components 12 \
   --out /path/to/run_checkpoint.pkl
 ```
 
 Training minimizes negative log-likelihood on the raw simulated biases. The checkpoint records the sample count, selected step, architecture, and training parameter bounds, including the swapped-item examples.
+
+Completed directory corpora use memory-mapped bias arrays. Minibatches fetch only
+their selected outcomes; parameter-group train/validation splits keep row-index
+views, and trajectory-reference evaluation reads 16 rows at a time. All raw
+diagnostics remain available in the corpus. Existing NPZ and legacy grid sources
+are also supported; an NPZ bias member is loaded into RAM because ZIP members
+cannot be memory-mapped directly.
 
 ## 3. Package the checkpoint
 
