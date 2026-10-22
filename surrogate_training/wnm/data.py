@@ -126,6 +126,10 @@ class HistogramStore:
     returned by ``simulation_corpus.Corpus.histograms``. Item 2 of a row is a
     draw from the item-1 density at the mirrored parameter vector, exactly as in
     :class:`SampleStore`, and the parameter-group split interface is the same.
+
+    Weighting differs from raw-outcome training when trials are masked: here every
+    sampled cell and item counts equally after normalizing its remaining counts,
+    whereas raw batches weight individual finite outcomes.
     """
 
     def __init__(self, design, counts):
@@ -201,12 +205,20 @@ def split_by_params(store: SampleStore, val_fraction: float = 0.1, seed: int = 0
     return store.subset(~is_val), store.subset(is_val)
 
 
-def load_npz(path) -> Tuple[SampleStore, dict]:
-    """Load an NPZ written by :mod:`surface_computation.generate_wnm_training_data`."""
+def load_npz(path):
+    """Load an NPZ written by :mod:`surface_computation.generate_wnm_training_data`.
+
+    A raw corpus export gives a :class:`SampleStore`; a histogram corpus export
+    (per-chunk ``histogram`` counts) gives a :class:`HistogramStore`.
+    """
     with np.load(Path(path), allow_pickle=True) as blob:
         meta = json.loads(str(blob['meta']))
         if 'strata' in blob and blob['strata'].size:
             meta['strata'] = [str(s) for s in blob['strata']]
+        if 'histogram' in blob:
+            histogram = blob['histogram']
+            meta['histogram_bins'] = histogram.shape[-1]
+            return HistogramStore(blob['design'], histogram.sum(axis=1, dtype=np.int64)), meta
         return SampleStore(blob['design'], blob['bias']), meta
 
 

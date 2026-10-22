@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 from filelock import Timeout
 
+from shared import wnm as wm
 from surface_computation import simulation_corpus as storage
 from surrogate_training.wnm import data
 
@@ -199,10 +200,16 @@ def test_legacy_nonfinite_samples_keep_weights_without_full_mask():
     assert np.isfinite(values).all() and (weights==0).any()
 
 
+def reference_bins(bias, bins):
+    """Independent reference: bin j holds edges[j] <= b < edges[j+1] for the float32 edges."""
+    b = np.where(bias >= 180., bias - 360., np.where(bias < -180., bias + 360., bias)).astype(np.float32)
+    return np.searchsorted(wm.histogram_edges(bins), b, side='right') - 1
+
+
 def binned(bias, bins):
-    """Independent NumPy reference for half-open circular bins from -180 deg."""
+    """Per-row, per-item counts under :func:`reference_bins`, skipping masked trials."""
     finite = np.isfinite(bias)
-    index = np.floor(np.mod(np.where(finite, bias, 0.)+180., 360.)*bins/360.).astype(int) % bins
+    index = reference_bins(np.where(finite, bias, 0.), bins)
     out = np.zeros(bias.shape[:1]+(2, bins), np.int32)
     for row in range(bias.shape[0]):
         for item in (0, 1):
@@ -240,3 +247,40 @@ def test_histogram_corpus_round_trip_summaries_and_validation(tmp_path,example):
         np.testing.assert_array_equal(corpus.histograms(),binned(arrays['bias'],8))
         # Same totals a raw corpus of these trials would record.
         assert corpus.meta['em_summary']==raw_summary and corpus.meta['n_masked']==1
+        expected = corpus.histograms()
+    # The NPZ export must load back as a histogram training source.
+    storage.export_npz(root, tmp_path/'histograms.npz')
+    store, meta = data.load_source(str(tmp_path/'histograms.npz'))
+    assert isinstance(store, data.HistogramStore) and meta['histogram_bins'] == 8
+    np.testing.assert_array_equal(store.counts, expected)
+
+
+def test_raw_tile_checksums_keep_the_declared_array_order(example):
+    # Existing raw corpora were checksummed in DTYPES order; verify() must keep accepting them.
+    design,strata,signature,arrays = example
+    tile = {k:v[:2,:3] for k,v in reversed(list(arrays.items()))}
+    legacy = hashlib.sha256(('identity'+str((0,2,0,3))).encode())
+    for name in storage.DTYPES:
+        legacy.update(np.ascontiguousarray(tile[name]).view(np.uint8))
+    assert storage.tile_digest('identity',(0,2,0,3),tile)==legacy.hexdigest()
+
+
+@pytest.mark.parametrize('bins', [720, 37])
+def test_device_binning_matches_the_exact_float32_edges(bins):
+    # Shifting by 180 in float32 can move an angle next to an edge into the
+    # neighbouring bin; the generator's reducer must follow the exact edges.
+    from surface_computation import wnm_simulation
+    edges = wm.histogram_edges(bins)
+    values = np.concatenate([edges, np.nextafter(edges, np.float32(-np.inf)), np.nextafter(edges, np.float32(np.inf)),
+                             np.float32([179.99998474121094, 0.4999999701976776, 180., -180., 539.5, -540.])]).astype(np.float32)
+    # XLA flushes denormals to zero, so the denormal neighbours of 0 are not meaningful here.
+    values = values[(np.abs(values) < 540.) & ((values == 0) | (np.abs(values) >= np.finfo(np.float32).tiny))]
+    np.testing.assert_array_equal(np.asarray(wnm_simulation.bin_index(values, bins)),
+                                  reference_bins(values, bins) % bins)
+
+
+def test_histogram_reduction_refuses_calls_that_could_overflow_int32_sums():
+    from surface_computation import wnm_simulation
+    trials = 2**31 // wnm_simulation.MAX_COUNT_PER_TRIAL + 1
+    with pytest.raises(ValueError, match='overflow int32'):
+        wnm_simulation.histogram_tile(np.zeros((1, trials, 2), np.float32), {}, 720)

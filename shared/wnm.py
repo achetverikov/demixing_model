@@ -8,7 +8,9 @@ with (pi, mu, sigma) produced by a small MLP.  ``b`` is the ``mu_feat_bias`` val
 returned by ``jax_fit_main.simulate_dual_component_bias_distribution``; the
 circle is 360 degrees wide and densities are **per degree**.
 
-There is no bias grid, no feat_diff grid and no KDE anywhere in this module.
+The model itself uses no bias grid, feat_diff grid or KDE. The histogram
+training objective scores the mixture's probability mass in equal circular bins
+(:func:`histogram_edges`, :func:`mixture_bin_log_probabilities`).
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from typing import Sequence
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 PERIOD = 360.0
 
@@ -29,6 +32,28 @@ SD_LOG_LO = float(jnp.log(5.0))
 SD_LOG_HI = float(jnp.log(200.0))
 FEAT_DIFF_LO = 0.0
 FEAT_DIFF_HI = 180.0
+
+
+def _branch_sigmas(sigma, sigma_switch):
+    """SDs for the spatial and Fourier branches, selected at ``sigma >= sigma_switch``.
+
+    Each branch sees the true sigma only where it is selected and the switch
+    value elsewhere, keeping both finite under ``jnp.where`` while the selected
+    branch receives the full derivative. ``jnp.minimum``/``jnp.maximum`` would
+    split the derivative between the arguments at exactly ``sigma_switch``.
+    """
+    fourier = sigma >= sigma_switch
+    return jnp.where(fourier, sigma_switch, sigma), jnp.where(fourier, sigma, sigma_switch)
+
+
+def histogram_edges(bins: int) -> np.ndarray:
+    """The ``bins + 1`` float32 edges of the half-open circular histogram bins.
+
+    Bin ``j`` holds ``edges[j] <= b < edges[j + 1]``, from -180 to +180 degrees;
+    +180 is the same angle as -180 and belongs to bin 0. Histogram corpora and the
+    histogram training objective both use exactly these float32 edges.
+    """
+    return (-180.0 + np.arange(bins + 1) * (PERIOD / bins)).astype(np.float32)
 
 
 def wrap_deg(x):
@@ -108,13 +133,12 @@ def wrapped_normal_logpdf(b, mu, sigma, n_wraps: int = 4,
     """
     d = wrap_deg(b - mu)
 
-    sigma_lo = jnp.minimum(sigma, sigma_switch)
+    sigma_lo, sigma_hi = _branch_sigmas(sigma, sigma_switch)
     shifts = jnp.arange(-n_wraps, n_wraps + 1, dtype=d.dtype) * PERIOD
     z = (d[..., None] + shifts) / sigma_lo[..., None]
     logp = -0.5 * z ** 2 - jnp.log(sigma_lo[..., None]) - 0.5 * jnp.log(2.0 * jnp.pi)
     logp_spatial = jax.scipy.special.logsumexp(logp, axis=-1)
 
-    sigma_hi = jnp.maximum(sigma, sigma_switch)
     s_rad = jnp.radians(sigma_hi)
     dphi = jnp.radians(d)
     n = jnp.arange(1, n_harmonics + 1, dtype=d.dtype)
@@ -151,48 +175,60 @@ def mixture_logpdf_samples(samples, dist, n_wraps: int = 4):
     return jax.scipy.special.logsumexp(dist['log_pi'][:, None, :] + comp, axis=-1)
 
 
-def wrapped_normal_bin_probability(lo, hi, mu, sigma, n_wraps: int = 4,
-                                   n_harmonics: int = 8, sigma_switch: float = SIGMA_SWITCH):
-    """Probability of the arc ``[lo, hi)`` (degrees, ``hi - lo <= 360``) under a wrapped normal.
+def wrapped_normal_bin_probabilities(edges, mu, sigma, n_wraps: int = 4,
+                                     n_harmonics: int = 8, sigma_switch: float = SIGMA_SWITCH):
+    """Probability of each arc between consecutive ``edges`` under wrapped normals.
 
-    Integrates :func:`wrapped_normal_logpdf` exactly, with the same switch: the
-    spatial branch sums Gaussian CDF differences over the wrap images, using
-    upper-tail differences when both edges lie above the mean so that small
-    tail probabilities keep their relative precision; the Fourier branch
-    integrates the series term by term. Arguments broadcast together.
+    ``edges`` is increasing and spans one period (:func:`histogram_edges`); ``mu``
+    and ``sigma`` are broadcastable arrays of shape ``(...)``. Returns ``(..., E-1)``.
+    Matches :func:`wrapped_normal_logpdf` with the same switch: the spatial branch
+    sums Gaussian CDF differences over the wrap images, using upper-tail
+    differences when both edges lie above the mean so small tail masses keep
+    their relative precision; the Fourier branch integrates the series.
+
+    Each edge is first moved by a whole period into the half circle around the
+    mean and only then offset from it, so offsets near the mean are exact float32
+    differences (subtracting after wrapping would round them at the 360-degree
+    scale). Adjacent arcs share offsets, the first and last edge (the same angle)
+    share one, and the single arc spanning the antipode of the mean adds the
+    period. The arcs therefore tile the circle; masses are accurate to float32
+    rounding and the truncation of either branch.
     """
-    d_lo = wrap_deg(lo - mu)
-    d_hi = d_lo + (hi - lo)
+    edges = jnp.asarray(edges)
+    raw = edges - mu[..., None]
+    near = jnp.where(raw >= 180.0, edges - PERIOD, jnp.where(raw < -180.0, edges + PERIOD, edges))
+    t = near - mu[..., None]
+    t = t.at[..., -1].set(t[..., 0])
+    lo, hi = t[..., :-1], t[..., 1:]
+    hi = jnp.where(hi < lo, hi + PERIOD, hi)
 
-    sigma_s = jnp.minimum(sigma, sigma_switch)
-    shifts = jnp.arange(-n_wraps, n_wraps + 1, dtype=d_lo.dtype) * PERIOD
-    a = (d_lo[..., None] + shifts) / sigma_s[..., None]
-    b = (d_hi[..., None] + shifts) / sigma_s[..., None]
+    sigma_s, sigma_f = _branch_sigmas(sigma, sigma_switch)
+    shifts = jnp.arange(-n_wraps, n_wraps + 1, dtype=t.dtype) * PERIOD
+    a = (lo[..., None] + shifts) / sigma_s[..., None, None]
+    b = (hi[..., None] + shifts) / sigma_s[..., None, None]
     ndtr = jax.scipy.special.ndtr
     spatial = jnp.sum(jnp.where(a > 0, ndtr(-a) - ndtr(-b), ndtr(b) - ndtr(a)), axis=-1)
 
-    sigma_f = jnp.maximum(sigma, sigma_switch)
-    n = jnp.arange(1, n_harmonics + 1, dtype=d_lo.dtype)
-    decay = jnp.exp(-0.5 * (n * jnp.radians(sigma_f)[..., None]) ** 2)
-    sines = (jnp.sin(n * jnp.radians(d_hi)[..., None]) - jnp.sin(n * jnp.radians(d_lo)[..., None])) / n
+    n = jnp.arange(1, n_harmonics + 1, dtype=t.dtype)
+    decay = jnp.exp(-0.5 * (n * jnp.radians(sigma_f)[..., None]) ** 2)[..., None, :]
+    sines = (jnp.sin(n * jnp.radians(hi)[..., None]) - jnp.sin(n * jnp.radians(lo)[..., None])) / n
     fourier = ((hi - lo) + 2.0 * jnp.degrees(jnp.sum(decay * sines, axis=-1))) / PERIOD
 
-    return jnp.clip(jnp.where(sigma >= sigma_switch, fourier, spatial), 0.0, 1.0)
+    return jnp.maximum(jnp.where((sigma >= sigma_switch)[..., None], fourier, spatial), 0.0)
 
 
 def mixture_bin_log_probabilities(bins: int, dist, n_wraps: int = 4):
-    """Log probability of each of ``bins`` equal half-open arcs from -180 deg: ``(N, K)`` -> ``(N, bins)``.
+    """Log probability of each :func:`histogram_edges` bin: ``(N, K)`` mixture -> ``(N, bins)``.
 
-    The bin layout matches the histogram corpora of
-    ``surface_computation.simulation_corpus``; used by the histogram training
-    objective, which scores probability mass per bin rather than density at
-    bin centres.
+    Used by the histogram training objective, which scores probability mass per
+    bin rather than density at bin centres. Masses are renormalized to sum to one
+    over the circle, absorbing the small truncation and rounding of the per-arc
+    sums. Bins with mass below 1e-30 are floored there: the objective then caps
+    a bin's loss at about 69 nats and passes no gradient through it.
     """
-    lo = -180.0 + jnp.arange(bins, dtype=dist['mu'].dtype) * (PERIOD / bins)
-    comp = wrapped_normal_bin_probability(
-        lo[None, :, None], lo[None, :, None] + PERIOD / bins,
-        dist['mu'][:, None, :], dist['sigma'][:, None, :], n_wraps)
-    mass = jnp.sum(jnp.exp(dist['log_pi'])[:, None, :] * comp, axis=-1)
+    comp = wrapped_normal_bin_probabilities(histogram_edges(bins), dist['mu'], dist['sigma'], n_wraps)
+    mass = jnp.sum(jnp.exp(dist['log_pi'])[..., None] * comp, axis=-2)
+    mass = mass / jnp.sum(mass, axis=-1, keepdims=True)
     return jnp.log(jnp.maximum(mass, 1e-30))
 
 
@@ -270,12 +306,11 @@ def density_asymmetry(dist, n_wraps: int = 1, n_harmonics: int = 3,
     keeps both values and gradients finite under ``jnp.where``.
     """
     mu, sigma = dist['mu'], dist['sigma']
-    sigma_lo = jnp.minimum(sigma, sigma_switch)
+    sigma_lo, sigma_hi = _branch_sigmas(sigma, sigma_switch)
     positive = wrapped_normal_interval_probability(
         mu, sigma_lo, 0.0, 180.0, n_wraps)
     spatial = 2.0 * positive - 1.0
 
-    sigma_hi = jnp.maximum(sigma, sigma_switch)
     n = jnp.arange(1, 2 * n_harmonics, 2, dtype=mu.dtype)
     mu_rad = jnp.radians(mu)[..., None]
     sigma_rad = jnp.radians(sigma_hi)[..., None]
@@ -381,8 +416,8 @@ def nll(model, variables, params, bias, n_wraps: int = 4):
     """Mean negative log likelihood of ``bias`` under ``q(.|params)``.
 
     ``params`` is ``(N, 4)`` and ``bias`` is ``(N,)``: one simulated EM outcome
-    per row.  This is the only training objective — no histogram, KDE, bias grid
-    or surface is constructed.
+    per row: the raw-outcome training objective (the histogram objective is
+    :func:`mixture_bin_log_probabilities`).
     """
     dist = model.apply(variables, params)
     return -jnp.mean(mixture_logpdf(bias, dist, n_wraps))

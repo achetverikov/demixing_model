@@ -371,3 +371,37 @@ def test_bin_log_probabilities_have_finite_gradients_for_narrow_components():
         return wm.mixture_bin_log_probabilities(720, dist)[0].sum()
     grad = jax.grad(loss)(jnp.array(.25))
     assert np.isfinite(float(loss(jnp.array(.25)))) and np.isfinite(float(grad))
+
+
+@pytest.mark.parametrize('bins', [720, 37])
+def test_bin_masses_match_exact_gaussian_sums_across_the_seam(bins):
+    # Means at and next to +-180 with sub-bin widths catch arcs that fail to tile
+    # the circle or lose precision when offsets are formed at the 360-degree scale.
+    from scipy.stats import norm
+    edges = wm.histogram_edges(bins).astype(np.float64)
+    images = np.arange(-8, 9)[:, None] * 360.
+    for mu in (-180., -179.99998, -179.9, 0.1, 179.9, 179.99998):
+        for sigma in (.25, .5, 30., 59.9, 60.1, 150.):
+            mu32, s32 = float(np.float32(mu)), float(np.float32(sigma))
+            p = np.asarray(wm.wrapped_normal_bin_probabilities(
+                wm.histogram_edges(bins), jnp.float32(mu32), jnp.float32(s32)), np.float64)
+            exact = (norm.cdf((edges[1:] - mu32 + images) / s32)
+                     - norm.cdf((edges[:-1] - mu32 + images) / s32)).sum(0)
+            np.testing.assert_allclose(p, exact, atol=3e-7)
+            np.testing.assert_allclose(p.sum(), 1., atol=3e-7)
+
+
+def test_branch_switch_gradients_are_exact_at_the_switch():
+    # jnp.minimum/maximum would halve the derivative at exactly sigma_switch;
+    # a float32 central difference resolves the derivative far better than 2x.
+    cases = {
+        'logpdf': lambda s: wm.wrapped_normal_logpdf(jnp.float32(25.), jnp.float32(10.), s),
+        'bin': lambda s: wm.wrapped_normal_bin_probabilities(np.array([20., 20.5], np.float32), jnp.float32(10.), s)[0],
+        'asymmetry': lambda s: wm.density_asymmetry(
+            {'log_pi': jnp.zeros(1), 'mu': jnp.array([10.]), 'sigma': jnp.stack([s])}),
+    }
+    for name, f in cases.items():
+        s = jnp.float32(wm.SIGMA_SWITCH)
+        grad = float(jax.grad(f)(s))
+        finite = float((f(s + .5) - f(s - .5)) / 1.)
+        np.testing.assert_allclose(grad, finite, rtol=2e-2, err_msg=name)

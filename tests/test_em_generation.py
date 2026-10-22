@@ -12,6 +12,7 @@ import pytest
 from surface_computation import generate_wnm_training_data as generator
 from surface_computation import likelihood_em as em
 from surface_computation import em_identity
+from shared import wnm as wm
 
 
 def test_kernel_and_shared_density_changes_invalidate_generation_digest(tmp_path,monkeypatch):
@@ -121,7 +122,8 @@ def test_generator_writes_matching_raw_and_histogram_corpora_from_one_fit(tmp_pa
     generator.main()
     with simulation_corpus.Corpus(raw) as r, simulation_corpus.Corpus(hist) as h:
         bias=np.asarray(r.arrays['bias'])
-        index=np.floor(np.mod(bias+180.,360.)*36/360.).astype(int)%36
+        wrapped=np.where(bias>=180.,bias-360.,bias).astype(np.float32)
+        index=np.searchsorted(wm.histogram_edges(36),wrapped,side='right')-1
         expected=np.stack([[np.bincount(index[row,:,item],minlength=36) for item in (0,1)] for row in range(2)])
         np.testing.assert_array_equal(h.histograms(),expected)
         assert h.meta['em_summary']==r.meta['em_summary']

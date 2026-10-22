@@ -27,7 +27,7 @@ python -m surrogate_training.wnm.train \
   --out /path/to/run_checkpoint.pkl
 ```
 
-Training minimizes negative log-likelihood on the raw simulated biases. The checkpoint records the sample count, selected step, architecture, and training parameter bounds, including the swapped-item examples.
+With a raw corpus, training minimizes the negative log-likelihood of the raw simulated biases. With a histogram corpus (`--histogram-out` in the generator), it minimizes the cross-entropy of each cell's binned outcome frequencies under the predicted mixture's per-bin probability mass, using the generator's bins; `--histogram-batch` sets the cell-items per step. Model, schedule, held-out parameter-group split and checkpoint selection are shared. `--holdout-fraction` additionally removes a test set of parameter groups from training and selection, and `--checkpoint-metric final` keeps the last step. The checkpoint records the objective, sample count, selected step, architecture, hold-out, timings and training parameter bounds, including the swapped-item examples.
 
 Completed directory corpora use memory-mapped bias arrays. Minibatches fetch only
 their selected outcomes; parameter-group train/validation splits keep row-index

@@ -105,9 +105,14 @@ def summary_totals(summaries):
     return total
 
 
-def tile_digest(signature, coordinates, arrays):
+def tile_digest(signature, coordinates, arrays, names=DTYPES):
+    """Checksum of one tile, hashing arrays in the layout's declared order.
+
+    For raw corpora that is :data:`DTYPES` order, which keeps checksums of
+    existing raw corpora valid.
+    """
     digest = hashlib.sha256((signature+str(tuple(coordinates))).encode())
-    for name in sorted(arrays):
+    for name in names:
         digest.update(np.ascontiguousarray(arrays[name]).view(np.uint8))
     return digest.hexdigest()
 
@@ -152,9 +157,10 @@ class RawLayout:
 class HistogramLayout:
     """Per-cell outcome counts for both items plus summed EM diagnostics.
 
-    Bins are half-open on the circle: ``histogram_bins`` equal bins from -180
-    degrees, with +180 wrapping to bin 0. Masked trials are left out of both
-    items' counts and are counted in ``masked_fits``.
+    Bins are those of ``shared.wnm.histogram_edges(histogram_bins)``: half-open,
+    from -180 degrees, with +180 wrapping to bin 0 (counted on the GPU by
+    ``wnm_simulation.bin_index``). Masked trials are left out of both items'
+    counts and are counted in ``masked_fits``.
     """
     format, dtypes = HISTOGRAM_FORMAT, HISTOGRAM_DTYPES
 
@@ -273,7 +279,7 @@ class Corpus:
             return False
         try:
             arrays = self.tile(coordinates)
-            return (saved[:2]==(b,d) and saved[2]==tile_digest(self.identity,coordinates,arrays)
+            return (saved[:2]==(b,d) and saved[2]==tile_digest(self.identity,coordinates,arrays,self.layout.dtypes)
                     and json.loads(saved[3])==self.layout.summary(arrays))
         finally:
             for array in self.arrays.values():
@@ -286,7 +292,7 @@ class Corpus:
         if set(arrays)!=set(self.layout.dtypes):
             raise ValueError(f'corpus tile arrays {sorted(arrays)} do not match the layout {sorted(self.layout.dtypes)}')
         self.layout.validate(arrays,coordinates)
-        expected = tile_digest(self.identity,coordinates,arrays)
+        expected = tile_digest(self.identity,coordinates,arrays,self.layout.dtypes)
         (self.root/'complete.json').unlink(missing_ok=True)
         with self.db:
             self.db.execute('DELETE FROM tiles WHERE row_start=? AND sim_start=?',(a,c))
@@ -295,7 +301,7 @@ class Corpus:
             value[index] = arrays[name]
             value.flush()
             release_pages(value)
-        if tile_digest(self.identity,coordinates,self.tile(coordinates))!=expected:
+        if tile_digest(self.identity,coordinates,self.tile(coordinates),self.layout.dtypes)!=expected:
             raise OSError('corpus tile write failed checksum verification')
         with self.db:
             self.db.execute('INSERT INTO tiles VALUES (?,?,?,?,?,?)',

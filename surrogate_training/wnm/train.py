@@ -76,8 +76,9 @@ def make_histogram_loss(model, bins: int, n_wraps: int):
 
     Scores each bin's probability mass under the predicted mixture, not the
     density at bin centres, so it stays bounded for components narrower than a
-    bin. Equals the raw-outcome NLL of the binned outcomes, up to the constant
-    ``log(bin width)``.
+    bin. It is the likelihood of the outcomes' bin labels. Subtracting
+    ``log(bin width)`` gives a piecewise-constant density score, which is close
+    to, but generally not equal to, the raw-outcome NLL of the same outcomes.
     """
     @jax.jit
     def loss_fn(variables, x, freq, w):
@@ -227,12 +228,19 @@ def main():
                    help='modest raw trajectory corpus/NPZ used during checkpoint selection')
     p.add_argument('--selection-every', type=int, default=2000,
                    help='steps between trajectory-reference evaluations')
-    p.add_argument('--checkpoint-metric', choices=['val-nll', 'trajectory-nll'],
+    p.add_argument('--checkpoint-metric', choices=['val-nll', 'trajectory-nll', 'final'],
                    default='val-nll',
-                   help='metric minimized when retaining the best checkpoint')
+                   help="metric minimized when retaining the best checkpoint; 'final' keeps the last step")
+    p.add_argument('--holdout-fraction', type=float, default=0.,
+                   help='parameter-group fraction removed from training and checkpoint selection '
+                        '(a test set for later evaluation); recorded in the checkpoint')
+    p.add_argument('--holdout-seed', type=int, default=12345)
     p.add_argument('--moment-min-resultant', type=float, default=.2,
                    help='minimum empirical resultant for interpretable max moment errors')
     args = p.parse_args()
+    started = time.time()
+    if not 0. <= args.holdout_fraction < 1.:
+        p.error('--holdout-fraction must lie in [0,1)')
     if not 0. <= args.augmentation_fraction <= 1.:
         p.error('--augmentation-fraction must lie in [0,1]')
     if args.checkpoint_metric == 'trajectory-nll' and not args.selection_reference:
@@ -271,6 +279,12 @@ def main():
         if args.histogram_batch < 1:
             p.error('--histogram-batch must be positive')
         args.batch_size = args.histogram_batch
+    holdout_meta = None
+    if args.holdout_fraction:
+        store, test_store = data_mod.split_by_params(store, args.holdout_fraction, seed=args.holdout_seed)
+        holdout_meta = dict(fraction=args.holdout_fraction, seed=args.holdout_seed, rows=test_store.n_rows)
+        print(f"held out {test_store.n_rows} rows by parameter group for testing; "
+              f"excluded from training and selection")
     train_store, val_store = data_mod.split_by_params(
         store, args.val_fraction, seed=args.seed)
     print(f"{store.n_rows} parameter rows, {store.n_observations:,} finite outcomes; "
@@ -280,6 +294,8 @@ def main():
     augmentation_meta = None
     if args.augmentation:
         augmentation, augmentation_meta = data_mod.load_source(args.augmentation)
+        if not isinstance(augmentation, data_mod.SampleStore):
+            p.error('--augmentation must be a raw-outcome source')
         augmentation_strata = augmentation_meta.pop('strata', None)
         if augmentation_strata:
             augmentation_meta['n_trajectory_labels'] = len(set(augmentation_strata))
@@ -294,6 +310,8 @@ def main():
     selection_store = selection_labels = selection_meta = None
     if args.selection_reference:
         selection_store, selection_meta = data_mod.load_source(args.selection_reference)
+        if not isinstance(selection_store, data_mod.SampleStore):
+            p.error('--selection-reference must be a raw-outcome source')
         selection_labels = selection_meta.pop('strata', None)
         if not selection_labels:
             raise ValueError('--selection-reference must contain trajectory labels')
@@ -365,10 +383,10 @@ def main():
                     model, variables, selection_store, selection_labels, args.n_wraps,
                     args.moment_min_resultant)
                 history[-1].update(trajectory_metrics)
-            score = (val_nll if args.checkpoint_metric == 'val-nll' else
+            score = (val_nll if args.checkpoint_metric in ('val-nll', 'final') else
                      (trajectory_metrics['trajectory_nll']
                       if trajectory_metrics else np.inf))
-            if score < best[0]:
+            if score < best[0] or (args.checkpoint_metric == 'final' and step == args.steps):
                 best = (score, jax.tree.map(np.array, variables))
                 selected_step = step
             detail = ''
@@ -398,14 +416,18 @@ def main():
                               'histogram_bins': store.bins if histogram else None,
                               'selected_step': selected_step, 'n_samples': n_samples,
                               'supported_domain': domain,
-                              'checkpoint_selection': ('held_out_parameter_groups'
-                                  if args.checkpoint_metric == 'val-nll' else 'selection_reference'),
+                              'checkpoint_selection': {'val-nll': 'held_out_parameter_groups',
+                                  'trajectory-nll': 'selection_reference',
+                                  'final': 'final_step'}[args.checkpoint_metric],
+                              'holdout': holdout_meta,
                               'out': str(args.out), 'source_meta': source_meta,
                               'augmentation_meta': augmentation_meta,
                               'selection_meta': selection_meta,
                               'best_checkpoint_score': best[0], 'history': history,
                               'n_network_params': n_params,
-                              'train_seconds': time.time() - t0})
+                              'setup_seconds': t0 - started,
+                              'train_seconds': time.time() - t0,
+                              'total_seconds_before_save': time.time() - started})
     meta = json.loads(json.dumps(meta, default=str))
     wm.save_model(args.out, best[1], model, meta)
     print(f"Best {args.checkpoint_metric} {best[0]:.4f}; saved {args.out} "

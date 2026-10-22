@@ -73,10 +73,17 @@ def test_histogram_corpus_trains_and_packages(tmp_path, monkeypatch):
     with pytest.raises(SystemExit):
         train.main()
     assert not checkpoint.exists()
-    monkeypatch.setattr(sys, "argv", common)
+    raw_source = tmp_path / "raw.npz"
+    np.savez(raw_source, design=design, bias=np.zeros((8, 4, 2), dtype=np.float32), meta=json.dumps({"n_samples": 20}))
+    monkeypatch.setattr(sys, "argv", ["train", "--source", str(raw_source), "--augmentation", str(source),
+                                      "--out", str(checkpoint), "--steps", "1"])
+    with pytest.raises(SystemExit):
+        train.main()
+    monkeypatch.setattr(sys, "argv", common + ["--holdout-fraction", "0.25", "--checkpoint-metric", "final"])
     train.main()
     meta = pickle.loads(checkpoint.read_bytes())["meta"]
     assert meta["training_objective"] == "histogram_bin_cross_entropy" and meta["histogram_bins"] == 36
+    assert meta["holdout"]["rows"] == 2 and meta["selected_step"] == 2 and meta["checkpoint_selection"] == "final_step"
     artifact = tmp_path / "custom.pkl"
     monkeypatch.setattr(sys, "argv", ["package", "--fit", str(checkpoint), "--out", str(artifact),
                                       "--n-samples", "20"])

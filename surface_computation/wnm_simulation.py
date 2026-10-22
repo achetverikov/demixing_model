@@ -18,6 +18,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from shared import wnm as wm
 from surface_computation.wnm_design import SIM_IDF_DIFF
 
 from surface_computation import jax_fit_main as jfm
@@ -219,20 +220,47 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
     return bias
 
 
-@partial(jax.jit, static_argnames=['bins'])
+#: int32 device sums: per-trial counts reach at most this many starts, so a call
+#: may reduce at most 2**31 // MAX_COUNT_PER_TRIAL trials per row.
+MAX_COUNT_PER_TRIAL = 1024
+
+
+def bin_index(bias, bins):
+    """Histogram bin of each finite bias under :func:`shared.wnm.histogram_edges`.
+
+    A float32 estimate from the scaled angle is corrected by comparison with the
+    exact float32 edges, because rounding while shifting by 180 degrees can move
+    an angle next to an edge into the neighbouring bin. Angles in [-540, 540) are
+    wrapped into [-180, 180); +180 belongs to bin 0. Denormal angles are flushed
+    to zero by XLA, so the negative denormals just below 0 count as 0.
+    """
+    edges = jnp.asarray(wm.histogram_edges(bins))
+    b = jnp.where(bias >= 180., bias - 360., jnp.where(bias < -180., bias + 360., bias))
+    index = jnp.clip(jnp.floor((b + 180.) * (bins / 360.)).astype(jnp.int32), 0, bins - 1)
+    index = index - (b < edges[index]).astype(jnp.int32) + (b >= edges[index + 1]).astype(jnp.int32)
+    return jnp.mod(index, bins)
+
+
 def histogram_tile(bias, diagnostic, bins):
     """One simulation chunk as histogram-corpus arrays, reduced on device.
 
     ``bias`` is ``(rows, trials, 2)`` from :func:`simulate`; ``diagnostic`` its
     per-trial diagnostics. Returns ``histogram (rows, 1, 2, bins)`` counts over
-    half-open circular bins from -180 deg (+180 wraps to bin 0, as in
-    ``shared.mu_feat_axis``), ``counts (rows, 1, len(HISTOGRAM_COUNTS))`` and
-    ``max_iterations (rows, 1)``. Masked (NaN) trials are left out of the counts.
+    the bins of :func:`shared.wnm.histogram_edges` (see :func:`bin_index`),
+    ``counts (rows, 1, len(HISTOGRAM_COUNTS))`` and ``max_iterations (rows, 1)``.
+    Masked (NaN) trials are left out of the histogram counts.
     """
+    if bias.shape[1] > 2**31 // MAX_COUNT_PER_TRIAL:
+        raise ValueError(f'{bias.shape[1]} trials per row could overflow int32 diagnostic sums; '
+                         f'use at most {2**31 // MAX_COUNT_PER_TRIAL} per call')
+    return _histogram_tile(bias, diagnostic, bins)
+
+
+@partial(jax.jit, static_argnames=['bins'])
+def _histogram_tile(bias, diagnostic, bins):
     rows = bias.shape[0]
     finite = jnp.isfinite(bias)
-    index = jnp.floor(jnp.mod(jnp.where(finite, bias, 0.)+180., 360.)*(bins/360.)).astype(jnp.int32)
-    index = jnp.minimum(index, bins-1)
+    index = bin_index(jnp.where(finite, bias, 0.), bins)
     cell = (jnp.arange(rows)[:, None, None]*2+jnp.arange(2)[None, None, :])*bins+index
     histogram = jnp.zeros(rows*2*bins, jnp.int32).at[cell.ravel()].add(finite.ravel().astype(jnp.int32))
     sums = dict(selected_cap_hits=~diagnostic['converged'],
