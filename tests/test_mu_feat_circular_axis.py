@@ -163,6 +163,13 @@ def test_normalisers_reject_a_legacy_shaped_input():
 # 4. Binning wraps, not clips
 # ---------------------------------------------------------------------------
 
+def test_numpy_bin_indices_refuse_missing_outcomes():
+    # A NaN cast to an integer index lands in an arbitrary bin; masked simulation
+    # trials must be filtered by the caller instead.
+    with pytest.raises(ValueError, match='nonfinite'):
+        mu_feat_axis.bin_indices_np(np.array([0., np.nan]))
+
+
 def test_bin_indices_wrap_both_endpoints_to_the_same_bin():
     assert int(bin_indices(jnp.asarray(-180.0))) == 0
     assert int(bin_indices(jnp.asarray(180.0))) == 0

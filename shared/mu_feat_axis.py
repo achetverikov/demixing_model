@@ -203,7 +203,13 @@ def bin_indices(bias_deg, n: Optional[int] = None) -> jnp.ndarray:
 
 
 def bin_indices_np(bias_deg, n: Optional[int] = None) -> np.ndarray:
-    """NumPy twin of :func:`bin_indices` for the non-JAX post-processing paths."""
+    """NumPy twin of :func:`bin_indices` for the non-JAX post-processing paths.
+
+    Raises on nonfinite biases (for example masked simulation trials): an
+    integer cast would otherwise place them in an arbitrary bin.
+    """
+    if not np.isfinite(bias_deg).all():
+        raise ValueError('bin_indices_np received nonfinite biases; filter missing outcomes first')
     if n is None:
         n = mu_feat_size()
     lo = config.mu_feat_bias_range[0]

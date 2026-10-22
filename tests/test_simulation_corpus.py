@@ -35,6 +35,7 @@ def example():
     arrays['em_repaired'][2,0] = True
     arrays['em_material_decreases'][0,0] = 2
     arrays['em_nonfinite_starts'][0,1] = 1
+    arrays['em_worst_change'][0,1] = np.nan  # all-start aggregate of that losing failure
     strata = ['a','a','b','b','c']
     signature = dict(storage_format=storage.FORMAT,n_rows=rows,n_simulations=sims,
         shard_rows=2,simulation_chunk=3,n_samples=4,seed=19,
@@ -67,6 +68,14 @@ def test_complete_corpus_export_and_sampling_match_in_memory(tmp_path,example,co
         for name,value in arrays.items():
             assert isinstance(corpus.arrays[name],np.memmap)
             np.testing.assert_array_equal(corpus.arrays[name],value)
+    # Completion metadata must agree with the indexed tile summaries.
+    original = (root/'complete.json').read_text()
+    marker = json.loads(original)
+    marker['meta']['n_masked'] = 0
+    (root/'complete.json').write_text(json.dumps(marker))
+    with pytest.raises(ValueError,match='disagrees with its tile summaries'):
+        storage.Corpus(root)
+    (root/'complete.json').write_text(original)
     destination = tmp_path/'export.npz'
     storage.export_npz(root,destination,compress=compress)
     with np.load(destination) as blob:
@@ -151,6 +160,10 @@ def test_invalid_or_incomplete_tile_cannot_publish(tmp_path,example):
             corpus.write_tile(corpus.coordinates(0,0),part)
         part = {k:v[:2,:3].copy() for k,v in arrays.items()}
         part['bias'][1,2] = 0.
+        with pytest.raises(ValueError,match='inconsistent masked'):
+            corpus.write_tile(corpus.coordinates(0,0),part)
+        part = {k:v[:2,:3].copy() for k,v in arrays.items()}
+        part['em_converged'][1,2] = True  # masked although its diagnostics say success
         with pytest.raises(ValueError,match='inconsistent masked'):
             corpus.write_tile(corpus.coordinates(0,0),part)
         with pytest.raises(ValueError,match='coverage'):

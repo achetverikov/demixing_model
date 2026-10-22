@@ -94,13 +94,15 @@ def _response_surfaces(predictions):
     responses = np.asarray(simulate(jax.random.PRNGKey(7), design,
                                     n_simulations=200, n_samples=n_samples,
                                     block_rows=4))[:, :, 0]
-    counts = np.stack([np.bincount(bin_indices_np(row), minlength=len(bias_grid))
+    # Masked (failed) simulation trials are NaN; leave them out and record how many.
+    counts = np.stack([np.bincount(bin_indices_np(row[np.isfinite(row)]), minlength=len(bias_grid))
                        for row in responses])
+    missing = int((~np.isfinite(responses)).sum())
     simulated = gaussian_filter(counts.astype(float), sigma=(1.5, 1.5),
                                 mode=("nearest", "wrap"))
     simulated /= simulated.sum(axis=1, keepdims=True)
     return {"parameters": {**params, "n_samples": n_samples,
-                           "random_seed": 7},
+                           "random_seed": 7, "missing_responses": missing},
             "surface": simulated.T, "predicted_surface": mass.T,
             "feat_diff_grid": feature_grid,
             "mu_feat_bias_grid": bias_grid}

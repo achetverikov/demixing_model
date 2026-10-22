@@ -27,10 +27,15 @@ from surface_computation import likelihood_em as em
 #: Identifiability separation used by the maintained Demixing Model simulator.
 IDF_DIFF = SIM_IDF_DIFF
 
-#: A call refuses its output once more than max(count, fraction * trials)
-#: selected fits stay invalid after repair. Isolated failures are masked and
-#: recorded; a systematic failure stops at the first tile it reaches.
-MASKED_ALLOWANCE = (3, 1e-3)
+#: A call refuses its output once more than max(3, trials // 1000) selected
+#: fits stay invalid after repair. Isolated failures are masked and recorded; a
+#: systematic failure stops at the first call (generator tile) it reaches. The
+#: allowance applies per call, not to the corpus as a whole.
+MASKED_ALLOWANCE = (3, 1000)
+
+
+def masked_allowance(trials):
+    return max(MASKED_ALLOWANCE[0], trials // MASKED_ALLOWANCE[1])
 
 
 def simulation_keys(key, n_rows: int, common_random_numbers: bool = False,
@@ -88,8 +93,9 @@ def bias_readout(result, design, n_simulations):
 def repair_failed(fit_keys, x, fitted, failed, backend, max_iter, starts='random'):
     """Refit failed selected fits once; return the merged fit and repaired/masked flags.
 
-    CUDA refits use ordinary EM with the complete evaluator, from the starts the
-    original batch fit used (indexed, not recomputed, so they match bit for bit).
+    CUDA refits use ordinary EM with the complete evaluator. Their starts are
+    regenerated for the whole original batch, with its keys and geometry, and
+    then indexed, so they equal the starts the original fit used.
     The JAX backend already is ordinary EM, so its failures are masked directly.
     """
     failed = np.flatnonzero(failed)
@@ -158,7 +164,7 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
     n_rows = design.shape[0]
     out = []
     diagnostics = []
-    allowed = max(MASKED_ALLOWANCE[0], int(MASKED_ALLOWANCE[1]*n_rows*n_simulations))
+    allowed = masked_allowance(n_rows*n_simulations)
     n_masked = 0
     # Bound asynchronous CUDA work while amortizing host failure-mask downloads.
     validation_blocks = max(1, 4096 // (block_rows*n_simulations)) if em_backend == 'cuda' else 1

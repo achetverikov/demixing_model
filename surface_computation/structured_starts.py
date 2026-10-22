@@ -6,18 +6,22 @@ coordinate in two circular charts, and small local neighbourhoods, plus one even
 This gives ``min(N, 20) + 34`` starts (54 for N >= 20), replacing the 225 random starts.
 They do not certify a global maximum. All M-steps remain the production likelihood EM.
 
-Provenance: ported unchanged (without its unused pooled-scale variant) from
+Provenance: formulas ported unchanged (without the unused pooled-scale variant) from
 ``$DEMIXING_ARTIFACT_ROOT/performance_search_20261021/astra/structured_init.py``, the
 "structured54" bank validated in ``density_tolerance_20261022``,
-``density_trajectory_20261022`` and ``narrow_interval_check_20261022``.
+``density_trajectory_20261022`` and ``narrow_interval_check_20261022``. The experiments
+built the bank in 128-dataset chunks; batch shape changes the result only by float
+rounding.
 """
 import jax
 import jax.numpy as jnp
 
 from shared import wnm
 
-#: Datasets per device call; bounds the transient (starts, N, N) neighbourhood arrays.
-CHUNK = 128
+#: Datasets per device call; bounds transient memory (about 1 GB at N=500). Larger
+#: chunks cut per-call overhead: building the bank took 0.07-0.12 s per 20k datasets
+#: at 128 and 0.025-0.053 s at 4096, comparable to a whole structured fit at N <= 20.
+CHUNK = 4096
 
 
 def count(n):

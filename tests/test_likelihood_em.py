@@ -110,6 +110,13 @@ def test_checked_simulation_refuses_systematic_capped_fits_and_unused_options():
         em_batch.fit_batch(None,None,continuation_batch=32)
 
 
+def test_masked_allowance_uses_exact_integer_thousandths():
+    # 0.001*29000 is 28.999... in floating point; the allowance must be 29.
+    assert sim.masked_allowance(145*200) == 29
+    assert sim.masked_allowance(4000) == 4
+    assert sim.masked_allowance(250) == sim.MASKED_ALLOWANCE[0]
+
+
 def test_checked_results_count_losing_start_failures_but_refuse_failed_winners():
     diagnostic = dict(converged=jnp.array([True]),nonfinite_starts=jnp.array([1]),
                       material_decreases=jnp.array([3]),winner_decreases=jnp.array([0]))

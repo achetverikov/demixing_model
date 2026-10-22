@@ -21,6 +21,8 @@ import numpy as np
 from surface_computation.em_identity import DIAGNOSTIC_DTYPES
 
 FORMAT = 'demixing-raw-corpus/2'
+#: Diagnostics aggregated over every start, including counted losing failures.
+ALL_START_AGGREGATES = ('em_worst_change',)
 DTYPES = {'bias':'float32', **{'em_'+k:v for k,v in DIAGNOSTIC_DTYPES.items()},
           'em_parameters':'float32', 'em_repaired':'bool', 'em_masked':'bool'}
 
@@ -69,15 +71,26 @@ def validate_tile(arrays, rows, simulations):
         if value.shape!=array_shape(name,rows,simulations) or value.dtype!=np.dtype(dtype):
             raise ValueError(f'invalid corpus tile array {name}: {value.shape}, {value.dtype}')
     # Masked trials keep their failed diagnostics; every other trial must be a
-    # finite, converged selected fit. Losing-start failures are only counted.
+    # finite, converged selected fit. Losing-start failures are only counted, so
+    # aggregates over all starts may be nonfinite for a valid selected fit.
     masked = arrays['em_masked']
-    if not np.isnan(arrays['bias'][masked]).all() or (masked & arrays['em_repaired']).any():
+    winner_failed = ~arrays['em_converged'] | (arrays['em_winner_decreases'] > 0)
+    if (not np.isnan(arrays['bias'][masked]).all() or (masked & arrays['em_repaired']).any()
+            or (masked & ~winner_failed).any()):
         raise ValueError('corpus tile has inconsistent masked trials')
     for name in DTYPES:
-        if not np.isfinite(arrays[name][~masked]).all():
+        if name not in ALL_START_AGGREGATES and not np.isfinite(arrays[name][~masked]).all():
             raise ValueError(f'nonfinite corpus tile array {name}')
     if not arrays['em_converged'][~masked].all() or arrays['em_winner_decreases'][~masked].any():
         raise ValueError('corpus tile failed EM validation')
+
+
+def summary_totals(summaries):
+    total = {}
+    for summary in summaries:
+        for name, value in summary.items():
+            total[name] = max(total.get(name, 0), value) if name == 'maximum_iterations' else total.get(name, 0)+value
+    return total
 
 
 def tile_digest(signature, coordinates, arrays):
@@ -132,6 +145,9 @@ class Corpus:
             marker = json.loads((self.root/'complete.json').read_text())
             if marker['signature']!=self.identity or marker['index_sha256']!=self.index_digest():
                 raise ValueError('corpus is incomplete or its tile index changed')
+            totals = self.tile_totals()
+            if marker['meta'].get('em_summary')!=totals or marker['meta'].get('n_masked')!=totals['masked_fits']:
+                raise ValueError('corpus completion metadata disagrees with its tile summaries')
             self.meta = marker['meta']
 
     def close(self):
@@ -206,12 +222,12 @@ class Corpus:
             if not self.valid_tile(coordinates):
                 raise ValueError(f'corpus tile checksum failed: {coordinates}')
 
+    def tile_totals(self):
+        return summary_totals(json.loads(encoded) for (encoded,) in self.db.execute('SELECT summary FROM tiles'))
+
     def finish(self, meta):
         index = self.index_digest()
-        total = {}
-        for (encoded,) in self.db.execute('SELECT summary FROM tiles'):
-            for name,value in json.loads(encoded).items():
-                total[name] = max(total.get(name,0),value) if name=='maximum_iterations' else total.get(name,0)+value
+        total = self.tile_totals()
         meta = dict(meta,generation_signature=self.signature,em_summary=total,n_masked=total['masked_fits'])
         atomic_json(self.root/'complete.json',dict(format=FORMAT,signature=self.identity,index_sha256=index,meta=meta))
         self.meta = meta

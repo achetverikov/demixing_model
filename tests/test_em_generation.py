@@ -130,6 +130,17 @@ def test_raw_grid_preserves_nondivisible_trial_counts_and_checks_diagnostics(tmp
         dict(n_simulations=11,n_samples=4,random_seed=17),jnp.array([30.,60.]))
     assert result[0].shape==(2,11,2) and result[-1]['iterations'].shape==(2,11)
     assert (result[2] is not None)==full
+    # The exploratory grid stays strict: a failed selected fit (here one per
+    # feature difference) refuses the scan
+    # (unlike the WNM training generator, which repairs or masks it).
+    def failing(key,*values,**kwargs):
+        out=simulate(key,*values,**kwargs)
+        return out[:-1]+(dict(out[-1],converged=out[-1]['converged'].at[0].set(False)),)
+    monkeypatch.setattr(grid.jfm,'simulate_dual_component_bias_distribution',failing)
+    grid._scan_entry.clear_cache()
+    with pytest.raises(RuntimeError,match='2 selected fits failed'):
+        computer._compute_samples_for_entry(10,20,30,None,
+            dict(n_simulations=11,n_samples=4,random_seed=17),jnp.array([30.,60.]))
     assert grid.estimator_path(grid.estimator_path(tmp_path/'samples'))==grid.estimator_path(tmp_path/'samples')
     assert em.ESTIMATOR_ID in grid.build_samples_folder_name(1000,100,'EM',True,False)
     monkeypatch.setattr(grid.config,'samples_folder',tmp_path/grid.build_samples_folder_name(1000,100,'EM',True,False))

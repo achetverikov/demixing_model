@@ -826,6 +826,9 @@ class ChunkedGridComputer:
                 all_full.append(full)
             else:
                 mu_feat, mu_idf, diagnostic = result
+            # Deliberately strict: this exploratory grid path refuses any failed
+            # selected fit rather than repairing or masking it like the WNM
+            # training generator (wnm_simulation.simulate).
             em_batch.check_results((diagnostic,))
             all_diagnostics.append(diagnostic)
             print(f"    Scan {rep + 1}/{num_scan_loops}: {time.time() - tic:.1f}s")

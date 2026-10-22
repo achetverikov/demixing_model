@@ -31,8 +31,11 @@ A selected fit that stays capped or decreased likelihood on its own path is
 refitted once with ordinary (unaccelerated) EM from the same data and starts
 with the CUDA backend; if it still fails, or with the JAX backend, its trial is
 kept with NaN biases and `em_masked` set (`em_repaired` marks a replaced fit).
-A call refuses its output when more than max(3, 0.1% of its trials) stay
-masked. The corpus records the totals in `em_summary` and `n_masked`.
+A call (one generator tile) refuses its output when more than
+max(3, trials // 1000) stay masked; the allowance is per call, not corpus-wide.
+The corpus records the totals in `em_summary` and `n_masked`. The exploratory grid
+generator (`simulated_samples_grid.py`) deliberately stays strict and refuses any
+failed selected fit.
 The fit is a multistart local search; it does not certify a global optimum.
 
 Each corpus includes per-trial `em_*` diagnostics and selected
@@ -73,9 +76,9 @@ checks completion, array schemas and the coverage index; it relies on the
 validated payload remaining immutable rather than rereading all diagnostics.
 
 `--compress` applies only to NPZ export. The directory corpus retains exact raw
-arrays. At 148,076 rows and 20,000 trials, payload storage is about 258 GB per
+arrays. At 148,076 rows and 20,000 trials, payload storage is about 275 GB per
 sample-count setting, plus checkpoint metadata. Memory mapping removes the
-258 GB heap requirement and the mandatory second output copy; it does not
+275 GB heap requirement and the mandatory second output copy; it does not
 remove the need for that durable storage. Keep compute caches under `/tmp`,
 and run one GPU job at a time on a shared device.
 
@@ -206,9 +209,13 @@ Structured-start selection evidence is retained under
 `$DEMIXING_ARTIFACT_ROOT/structured_starts_low_n_20261022/`. These generated artifacts
 are not shipped. At N=500 the bank was compared with 225 random starts on identical
 observations, by optimum quality and by matched NN retraining against an
-independent-data control. At N=4-100 the comparison is teacher-level only (optimum
-quality and histogram shift from the better of the two fits); there it was 8-9x
-faster and closer to that reference than random starts.
+independent-data control. At N=4-100 the comparison is teacher-level only, on a
+32-cell panel: the bank was 3.5-6.7x faster including its construction (8-9x for
+fitting alone), gained the higher likelihood far
+more often than it lost it, and every sampled cell passed a criterion chosen after
+the first run, measured against the better of the two fits on each dataset. That
+reference is a finite two-search ensemble, not a global optimum, and in some cells
+the bank's histogram shift from it exceeded the random starts' shift.
 
 Counter-guided kernel validation and its independent audit are retained under
 `$DEMIXING_ARTIFACT_ROOT/cuda_counter_round_20261021/`. These generated artifacts
