@@ -111,7 +111,8 @@ sizing at every supported N.
 data-derived bank of min(N, 20) + 34 starts (54 at N >= 20), built from hard
 splits and local neighbourhoods of each dataset (`structured_starts.py`). It
 requires the CUDA backend and is recorded in the corpus manifest. The CLI default
-remains `random`; the bank is the selected setting for N=500 production corpora.
+remains `random`; the bank is the selected setting for production corpora at all
+supported N.
 Repairs of failed winners reuse the starts of the original batch fit.
 
 The CUDA kernel shares one EM-update loop body between settling and the two
@@ -201,10 +202,13 @@ SQUAREM and its build identity prevents mixing it with earlier CUDA corpora.
 Structured-start selection evidence is retained under
 `$DEMIXING_ARTIFACT_ROOT/density_tolerance_20261022/`,
 `$DEMIXING_ARTIFACT_ROOT/density_trajectory_20261022/` and
-`$DEMIXING_ARTIFACT_ROOT/narrow_interval_check_20261022/`. These generated artifacts
+`$DEMIXING_ARTIFACT_ROOT/narrow_interval_check_20261022/` and
+`$DEMIXING_ARTIFACT_ROOT/structured_starts_low_n_20261022/`. These generated artifacts
 are not shipped. At N=500 the bank was compared with 225 random starts on identical
 observations, by optimum quality and by matched NN retraining against an
-independent-data control; that evidence does not cover other N.
+independent-data control. At N=4-100 the comparison is teacher-level only (optimum
+quality and histogram shift from the better of the two fits); there it was 8-9x
+faster and closer to that reference than random starts.
 
 Counter-guided kernel validation and its independent audit are retained under
 `$DEMIXING_ARTIFACT_ROOT/cuda_counter_round_20261021/`. These generated artifacts
