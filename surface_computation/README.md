@@ -26,8 +26,13 @@ The observer uses likelihood EM with soft component and winding probabilities,
 225 starts, SDs bounded below by 1 and component weights bounded below by 0.1.
 Both likelihood and parameter changes must stabilize. All starts receive up to
 5,000 updates; a capped selected winner continues from its cached state up to
-25,000. Capped losing starts remain counted. Generation refuses unresolved
-selected fits, nonfinite starts, or material likelihood decreases before saving.
+25,000. Capped, nonfinite or likelihood-decreasing losing starts remain counted.
+A selected fit that stays capped or decreased likelihood on its own path is
+refitted once with ordinary (unaccelerated) EM from the same data and starts
+with the CUDA backend; if it still fails, or with the JAX backend, its trial is
+kept with NaN biases and `em_masked` set (`em_repaired` marks a replaced fit).
+A call refuses its output when more than max(3, 0.1% of its trials) stay
+masked. The corpus records the totals in `em_summary` and `n_masked`.
 The fit is a multistart local search; it does not certify a global optimum.
 
 Each corpus includes per-trial `em_*` diagnostics and selected

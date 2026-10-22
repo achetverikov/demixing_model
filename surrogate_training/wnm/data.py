@@ -165,7 +165,8 @@ def load_source(source: str, corpus_files: Optional[int] = None,
             meta = dict(corpus.meta)
             if corpus.strata:
                 meta['strata'] = corpus.strata
-            return SampleStore(corpus.design,corpus.arrays['bias'],all_finite=True),meta
+            return SampleStore(corpus.design,corpus.arrays['bias'],
+                               all_finite=corpus.meta['n_masked']==0),meta
 
     from surface_computation import legacy_sample_import as existing_samples
     directory = path if path.is_dir() else existing_samples.corpus_dir(source)

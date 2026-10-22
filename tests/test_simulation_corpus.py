@@ -26,6 +26,15 @@ def example():
     arrays['em_converged'][:] = True
     arrays['em_any_best_converged'][:] = True
     arrays['em_iterations'][:] = np.arange(rows*sims).reshape(rows,sims)
+    # One masked failed winner, one repaired fit and counted losing-start failures.
+    arrays['em_masked'][1,2] = True
+    arrays['bias'][1,2] = np.nan
+    arrays['em_converged'][1,2] = False
+    arrays['em_log_likelihood'][1,2] = np.nan
+    arrays['em_relative_change'][1,2] = np.inf
+    arrays['em_repaired'][2,0] = True
+    arrays['em_material_decreases'][0,0] = 2
+    arrays['em_nonfinite_starts'][0,1] = 1
     strata = ['a','a','b','b','c']
     signature = dict(storage_format=storage.FORMAT,n_rows=rows,n_simulations=sims,
         shard_rows=2,simulation_chunk=3,n_samples=4,seed=19,
@@ -52,6 +61,9 @@ def test_complete_corpus_export_and_sampling_match_in_memory(tmp_path,example,co
     with storage.Corpus(root) as corpus:
         corpus.verify()
         assert corpus.meta['em_summary']['maximum_iterations']==34
+        summary = corpus.meta['em_summary']
+        assert (summary['masked_fits'],summary['repaired_fits'],corpus.meta['n_masked'])==(1,1,1)
+        assert (summary['material_decreases'],summary['nonfinite_starts'])==(2,1)
         for name,value in arrays.items():
             assert isinstance(corpus.arrays[name],np.memmap)
             np.testing.assert_array_equal(corpus.arrays[name],value)
@@ -132,6 +144,14 @@ def test_invalid_or_incomplete_tile_cannot_publish(tmp_path,example):
         part = {k:v[:2,:3].copy() for k,v in arrays.items()}
         part['em_converged'][0,0] = False
         with pytest.raises(ValueError,match='EM validation'):
+            corpus.write_tile(corpus.coordinates(0,0),part)
+        part = {k:v[:2,:3].copy() for k,v in arrays.items()}
+        part['bias'][0,0,0] = np.nan
+        with pytest.raises(ValueError,match='nonfinite corpus tile array bias'):
+            corpus.write_tile(corpus.coordinates(0,0),part)
+        part = {k:v[:2,:3].copy() for k,v in arrays.items()}
+        part['bias'][1,2] = 0.
+        with pytest.raises(ValueError,match='inconsistent masked'):
             corpus.write_tile(corpus.coordinates(0,0),part)
         with pytest.raises(ValueError,match='coverage'):
             corpus.finish({})

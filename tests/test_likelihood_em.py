@@ -100,19 +100,22 @@ def test_multirow_keys_observations_and_native_readout_are_preserved():
         assert np.asarray(expected[-1]['converged']).all()
 
 
-def test_checked_simulation_refuses_capped_fits_and_unused_options():
-    with pytest.raises(RuntimeError,match='iteration cap'):
+def test_checked_simulation_refuses_systematic_capped_fits_and_unused_options():
+    # More capped winners than the masking allowance must refuse the call.
+    count = sim.MASKED_ALLOWANCE[0]+1
+    with pytest.raises(RuntimeError,match=f'{count} selected fits still failed after repair'):
         sim.simulate(jax.random.key(17),jnp.array([[10.,60.,30.,60.]]),
-            n_simulations=1,n_samples=20,em_max_iter=1)
+            n_simulations=count,n_samples=20,em_max_iter=1)
     with pytest.raises(ValueError,match='requires stages'):
         em_batch.fit_batch(None,None,continuation_batch=32)
 
 
-def test_checked_simulation_refuses_numerical_failures_even_with_a_valid_winner():
+def test_checked_results_count_losing_start_failures_but_refuse_failed_winners():
     diagnostic = dict(converged=jnp.array([True]),nonfinite_starts=jnp.array([1]),
-                      material_decreases=jnp.array([0]))
-    with pytest.raises(RuntimeError,match='1 nonfinite starts'):
-        em_batch.check_results((diagnostic,))
+                      material_decreases=jnp.array([3]),winner_decreases=jnp.array([0]))
+    em_batch.check_results((diagnostic,))
+    with pytest.raises(RuntimeError,match='1 selected fits decreased likelihood'):
+        em_batch.check_results((dict(diagnostic,winner_decreases=jnp.array([1])),))
 
 
 def test_selected_tie_reports_the_actual_capped_winner():

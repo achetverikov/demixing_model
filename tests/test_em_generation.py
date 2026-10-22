@@ -121,7 +121,8 @@ def test_raw_grid_preserves_nondivisible_trial_counts_and_checks_diagnostics(tmp
         n=kwargs['n_simulations']
         bias=jnp.zeros((n,2))
         diagnostic=dict(converged=jnp.ones(n,dtype=bool),nonfinite_starts=jnp.zeros(n,dtype=int),
-                        material_decreases=jnp.zeros(n,dtype=int),iterations=jnp.ones(n,dtype=int))
+                        material_decreases=jnp.zeros(n,dtype=int),winner_decreases=jnp.zeros(n,dtype=int),
+                        iterations=jnp.ones(n,dtype=int))
         result=(bias,bias,jnp.zeros((n,2,23))) if return_full_results else (bias,bias)
         return result+(diagnostic,)
     monkeypatch.setattr(grid.jfm,'simulate_dual_component_bias_distribution',simulate)

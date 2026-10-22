@@ -124,18 +124,27 @@ def fit_batch(keys, x, *, stages=None, continuation_batch=None,
 
 
 @jax.jit
+def winner_failed(diagnostic):
+    """Selected fits that are capped, nonfinite or decreased likelihood on their own path.
+
+    Nonfinite or decreasing losing starts cannot change the selected fit; they
+    are only counted in the diagnostics.
+    """
+    return ~diagnostic['converged'] | (diagnostic['winner_decreases'] > 0)
+
+
+@jax.jit
 def validation_counts(diagnostic):
     return jnp.array([jnp.sum(~diagnostic['converged']),
-                      jnp.sum(diagnostic['nonfinite_starts']),
-                      jnp.sum(diagnostic['material_decreases'])])
+                      jnp.sum(diagnostic['winner_decreases'] > 0)])
 
 
 def check_results(result):
-    """Refuse failed/capped winners or numerical failures before writing samples."""
-    failures, nonfinite, decreases = map(int, np.asarray(validation_counts(result[-1])))
-    if failures or nonfinite or decreases:
+    """Refuse failed/capped winners before writing samples."""
+    failures, decreases = map(int, np.asarray(validation_counts(result[-1])))
+    if failures or decreases:
         raise EMValidationError(f'EM validation failed: {failures} selected fits failed or reached the iteration cap; '
-            f'{nonfinite} nonfinite starts; {decreases} material likelihood decreases; no samples saved')
+            f'{decreases} selected fits decreased likelihood; no samples saved')
 
 
 def summarize(diagnostic):

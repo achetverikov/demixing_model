@@ -27,6 +27,11 @@ from surface_computation import likelihood_em as em
 #: Identifiability separation used by the maintained Demixing Model simulator.
 IDF_DIFF = SIM_IDF_DIFF
 
+#: A call refuses its output once more than max(count, fraction * trials)
+#: selected fits stay invalid after repair. Isolated failures are masked and
+#: recorded; a systematic failure stops at the first tile it reaches.
+MASKED_ALLOWANCE = (3, 1e-3)
+
 
 def simulation_keys(key, n_rows: int, common_random_numbers: bool = False,
                     row_offset: int = 0, simulation_offset: int = 0,
@@ -80,6 +85,28 @@ def bias_readout(result, design, n_simulations):
     return (-jnp.sign(true)*difference).reshape((len(design), n_simulations, 2))
 
 
+def repair_failed(fit_keys, x, fitted, failed, backend, max_iter):
+    """Refit failed selected fits once; return the merged fit and repaired/masked flags.
+
+    CUDA refits use ordinary EM with the complete evaluator and the same starts.
+    The JAX backend already is ordinary EM, so its failures are masked directly.
+    """
+    failed = np.flatnonzero(failed)
+    repaired = np.zeros(len(x), bool)
+    masked = np.zeros(len(x), bool)
+    if backend == 'cuda':
+        retry = cuda_em.fit_batch(fit_keys[failed], x[failed], max_iter=max_iter,
+                                  accelerate=False)
+        valid = ~np.asarray(em_batch.winner_failed(retry[-1]))
+        target, source = jnp.asarray(failed[valid]), jnp.asarray(np.flatnonzero(valid))
+        fitted = jax.tree.map(lambda old, new: old.at[target].set(new[source]), fitted, retry)
+        repaired[failed[valid]] = True
+        masked[failed[~valid]] = True
+    else:
+        masked[failed] = True
+    return fitted, repaired, masked
+
+
 def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
              fix_weights: bool = False, common_random_numbers: bool = False,
              block_rows: int = 1, progress: bool = False,
@@ -111,8 +138,11 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
 
     Returns:
         ``(M, n_simulations, 2)`` float32 array of mu_feat_bias in degrees.
+        A selected fit that is capped or decreased likelihood is refitted once
+        (:func:`repair_failed`); if it still fails, both its biases are NaN.
         With return_diagnostics, a tuple of this array and per-trial diagnostics,
-        including the selected parameters in raw component order.
+        including the selected parameters in raw component order and the
+        ``repaired``/``masked`` flags.
     """
     design = jnp.asarray(design, dtype=jnp.float32)
     # This chooses a complete evaluator before fitting. Every evaluator still
@@ -124,9 +154,36 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
     n_rows = design.shape[0]
     out = []
     diagnostics = []
-    # Bound asynchronous CUDA work while amortizing host counter downloads.
+    allowed = max(MASKED_ALLOWANCE[0], int(MASKED_ALLOWANCE[1]*n_rows*n_simulations))
+    n_masked = 0
+    # Bound asynchronous CUDA work while amortizing host failure-mask downloads.
     validation_blocks = max(1, 4096 // (block_rows*n_simulations)) if em_backend == 'cuda' else 1
-    guards = []
+    pending = []
+
+    def settle():
+        nonlocal n_masked
+        failed = np.asarray(jnp.concatenate([em_batch.winner_failed(fitted[-1])
+                                             for *_, fitted in pending]))
+        offset = 0
+        for block, fit_keys, x, fitted in pending:
+            block_failed, offset = failed[offset:offset+len(x)], offset+len(x)
+            repaired = masked = np.zeros(len(x), bool)
+            if block_failed.any():
+                fitted, repaired, masked = repair_failed(
+                    fit_keys, x, fitted, block_failed, em_backend, em_max_iter)
+                n_masked += int(masked.sum())
+                if n_masked > allowed:
+                    raise em_batch.EMValidationError(
+                        f'EM validation failed: {n_masked} selected fits still failed after repair '
+                        f'(allowed {allowed} of {n_rows*n_simulations}); no samples saved')
+            shape = (len(block), n_simulations)
+            bias = bias_readout(fitted, block, n_simulations)
+            out.append(jnp.where(masked.reshape(shape)[..., None], jnp.nan, bias))
+            if return_diagnostics:
+                diagnostic = dict(fitted[-1], log_likelihood=fitted[5], repaired=repaired, masked=masked)
+                diagnostics.append(jax.tree.map(lambda v: jnp.reshape(v, shape+jnp.shape(v)[1:]), diagnostic))
+        pending.clear()
+
     for start in range(0, n_rows, block_rows):
         block = design[start:start + block_rows]
         groups = (None if common_random_groups is None else
@@ -139,17 +196,9 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
             continuation_batch=continuation_batch, max_iter=em_max_iter,
             backend=em_backend, cuda_single_image=(eligible is not None and
                 bool(eligible[start:start + len(block)].all())))
-        guards.append({name:fitted[-1][name] for name in
-                       ('converged','nonfinite_starts','material_decreases')})
-        if len(guards) >= validation_blocks or start + len(block) == n_rows:
-            checked = guards[0] if len(guards) == 1 else jax.tree.map(
-                lambda *values:jnp.concatenate(values), *guards)
-            em_batch.check_results((checked,))
-            guards.clear()
-        out.append(bias_readout(fitted, block, n_simulations))
-        if return_diagnostics:
-            diagnostic = dict(fitted[-1], log_likelihood=fitted[5])
-            diagnostics.append(jax.tree.map(lambda v: v.reshape((len(block), n_simulations)+v.shape[1:]), diagnostic))
+        pending.append((block, fit_keys, x, fitted))
+        if len(pending) >= validation_blocks or start + len(block) == n_rows:
+            settle()
         if progress:
             print(f"  simulated rows {start}-{start + block.shape[0]} / {n_rows}",
                   flush=True)

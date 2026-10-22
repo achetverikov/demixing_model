@@ -6,8 +6,8 @@ ESTIMATOR_ID = 'wrapped_likelihood_em_v1'
 DIAGNOSTIC_DTYPES = dict(iterations='int32', relative_change='float32',
     parameter_change='float32', converged='bool', any_best_converged='bool',
     best_tie_count='int32', capped_starts='int32', continued_winner='bool',
-    nonfinite_starts='int32', material_decreases='int32', worst_change='float32',
-    log_likelihood='float32')
+    nonfinite_starts='int32', material_decreases='int32', winner_decreases='int32',
+    worst_change='float32', log_likelihood='float32')
 
 
 def qualify_name(name, namespace):

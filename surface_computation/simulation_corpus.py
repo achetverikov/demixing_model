@@ -20,9 +20,9 @@ import numpy as np
 
 from surface_computation.em_identity import DIAGNOSTIC_DTYPES
 
-FORMAT = 'demixing-raw-corpus/1'
+FORMAT = 'demixing-raw-corpus/2'
 DTYPES = {'bias':'float32', **{'em_'+k:v for k,v in DIAGNOSTIC_DTYPES.items()},
-          'em_parameters':'float32'}
+          'em_parameters':'float32', 'em_repaired':'bool', 'em_masked':'bool'}
 
 
 def signature_digest(signature):
@@ -68,9 +68,15 @@ def validate_tile(arrays, rows, simulations):
         value = arrays[name]
         if value.shape!=array_shape(name,rows,simulations) or value.dtype!=np.dtype(dtype):
             raise ValueError(f'invalid corpus tile array {name}: {value.shape}, {value.dtype}')
-        if not np.isfinite(value).all():
+    # Masked trials keep their failed diagnostics; every other trial must be a
+    # finite, converged selected fit. Losing-start failures are only counted.
+    masked = arrays['em_masked']
+    if not np.isnan(arrays['bias'][masked]).all() or (masked & arrays['em_repaired']).any():
+        raise ValueError('corpus tile has inconsistent masked trials')
+    for name in DTYPES:
+        if not np.isfinite(arrays[name][~masked]).all():
             raise ValueError(f'nonfinite corpus tile array {name}')
-    if not arrays['em_converged'].all() or arrays['em_nonfinite_starts'].any() or arrays['em_material_decreases'].any():
+    if not arrays['em_converged'][~masked].all() or arrays['em_winner_decreases'][~masked].any():
         raise ValueError('corpus tile failed EM validation')
 
 
@@ -86,7 +92,8 @@ def summary(arrays):
         capped_losing_starts=arrays['em_capped_starts'],
         nonfinite_starts=arrays['em_nonfinite_starts'],
         material_decreases=arrays['em_material_decreases'],
-        continued_winners=arrays['em_continued_winner'])
+        continued_winners=arrays['em_continued_winner'],
+        repaired_fits=arrays['em_repaired'], masked_fits=arrays['em_masked'])
     return dict({k:int(np.sum(v,dtype=np.int64)) for k,v in names.items()},
                 maximum_iterations=int(arrays['em_iterations'].max()))
 
@@ -205,7 +212,7 @@ class Corpus:
         for (encoded,) in self.db.execute('SELECT summary FROM tiles'):
             for name,value in json.loads(encoded).items():
                 total[name] = max(total.get(name,0),value) if name=='maximum_iterations' else total.get(name,0)+value
-        meta = dict(meta,generation_signature=self.signature,em_summary=total,n_nonfinite=0)
+        meta = dict(meta,generation_signature=self.signature,em_summary=total,n_masked=total['masked_fits'])
         atomic_json(self.root/'complete.json',dict(format=FORMAT,signature=self.identity,index_sha256=index,meta=meta))
         self.meta = meta
 

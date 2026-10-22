@@ -181,6 +181,7 @@ def finish(x, basis, state, max_iter=MAX_ITER, rtol=RTOL,
         continued_winner=selected.iteration > FIRST_CAP,
         nonfinite_starts=jnp.sum(~jnp.isfinite(state.ll)),
         material_decreases=jnp.sum(state.material_decreases),
+        winner_decreases=selected.material_decreases,
         worst_change=jnp.minimum(state.worst_change.min(), selected.worst_change),
         log_likelihood=selected.ll, parameters=jnp.stack(selected.theta))
     return selected.theta+(selected.ll, diagnostics)

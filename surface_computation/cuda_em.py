@@ -103,16 +103,18 @@ def result_from_compact(c):
         parameter_change=c[:, 23], converged=ok, any_best_converged=ok | (c[:, 32] > 0),
         best_tie_count=c[:, 27].astype(jnp.int32), capped_starts=c[:, 28].astype(jnp.int32),
         continued_winner=c[:, 21] > em.FIRST_CAP, nonfinite_starts=c[:, 29].astype(jnp.int32),
-        material_decreases=c[:, 30].astype(jnp.int32), worst_change=c[:, 31],
+        material_decreases=c[:, 30].astype(jnp.int32), winner_decreases=c[:, 25].astype(jnp.int32),
+        worst_change=c[:, 31],
         log_likelihood=c[:, 10], parameters=parameters)
     return tuple(parameters[:, k] for k in range(5)) + (c[:, 10], diagnostic)
 
 
-def fit_batch(keys, x, *, n_init=em.N_INIT, max_iter=em.MAX_ITER, single_image=False):
+def fit_batch(keys, x, *, n_init=em.N_INIT, max_iter=em.MAX_ITER, single_image=False,
+              accelerate=True):
     """Keep every start, continue/reselect capped winners, and return EM diagnostics."""
     if n_init < 1 or not 0 < max_iter <= em.MAX_ITER:
         raise ValueError('n_init must be positive and max_iter must be in [1,25000]')
     theta = initial_parameters(keys, x, n_init)
-    _, compact = _run(x, theta, first_cap=min(em.FIRST_CAP, max_iter),
-                      max_iter=max_iter, occupancy=True, single_image=single_image)
+    _, compact = _run(x, theta, first_cap=min(em.FIRST_CAP, max_iter), max_iter=max_iter,
+                      occupancy=True, accelerate=accelerate, single_image=single_image)
     return result_from_compact(compact)

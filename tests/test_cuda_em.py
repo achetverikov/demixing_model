@@ -66,7 +66,7 @@ def test_cuda_retains_225_ties_and_nonfinite_guards():
                              first_cap=2, max_iter=2, occupancy=True)
     result = cuda_em.result_from_compact(compact)
     assert int(result[-1]['nonfinite_starts'][1]) == 225
-    with pytest.raises(em_batch.EMValidationError, match='225 nonfinite starts'):
+    with pytest.raises(em_batch.EMValidationError, match='1 selected fits failed'):
         em_batch.check_results(result)
     # Backend guard contract: finite initial likelihood, overflowing moments,
     # then a nonfinite first map must stop and be reported rather than iterated.
@@ -75,7 +75,7 @@ def test_cuda_retains_225_ties_and_nonfinite_guards():
     np.testing.assert_array_equal(raw[:, :, 21], 1.)
     result = cuda_em.result_from_compact(compact)
     assert (np.asarray(result[-1]['nonfinite_starts']) == 225).all()
-    with pytest.raises(em_batch.EMValidationError, match='225 nonfinite starts'):
+    with pytest.raises(em_batch.EMValidationError, match='1 selected fits failed'):
         em_batch.check_results(result)
 
 
@@ -149,10 +149,8 @@ def test_cuda_simulation_dispatches_complete_n500_evaluators(monkeypatch):
     def fitted(keys, x, **options):
         routes.append(options['cuda_single_image'])
         return ({'converged':jnp.ones(len(x),dtype=bool),
-                 'nonfinite_starts':jnp.zeros(len(x),dtype=int),
-                 'material_decreases':jnp.zeros(len(x),dtype=int)},)
+                 'winner_decreases':jnp.zeros(len(x),dtype=int)},)
     monkeypatch.setattr(em_batch, 'fit_batch', fitted)
-    monkeypatch.setattr(em_batch, 'check_results', lambda result: None)
     monkeypatch.setattr(simulation, 'bias_readout',
         lambda result, block, count: jnp.zeros((len(block), count, 2)))
     design = np.array([[10., 100., 30., 60.], [40., 80., 30., 60.],
@@ -166,24 +164,62 @@ def test_cuda_simulation_dispatches_complete_n500_evaluators(monkeypatch):
     assert routes == [False]
 
 
-@pytest.mark.parametrize('trials,expected_calls', [(2,3),(4097,2)])
+def stub_fit(converged, decreases=None):
+    decreases = np.zeros(len(converged), int) if decreases is None else decreases
+    return (jnp.zeros(len(converged)),)*5+(jnp.zeros(len(converged)),
+        {'converged':jnp.asarray(converged),'winner_decreases':jnp.asarray(decreases)})
+
+
+@pytest.mark.parametrize('trials,expected_calls', [(4,3),(4097,2)])
 def test_cuda_simulation_checks_bounded_groups_before_return(monkeypatch,trials,expected_calls):
-    # Simulator contract: a failure in a queued block cannot escape a deferred
-    # check; large blocks must still be checked individually. No optimizer needed.
-    calls=[]
+    # Simulator contract: a systematic failure in a queued block cannot escape a
+    # deferred check; large blocks must still be checked individually. No optimizer needed.
+    calls,repairs=[],[]
     def fitted(keys,x,**options):
         calls.append(len(x))
-        return ({'converged':jnp.ones(len(x),dtype=bool),
-                 'nonfinite_starts':jnp.full(len(x),int(len(calls)==2)),
-                 'material_decreases':jnp.zeros(len(x),dtype=int)},)
+        return stub_fit(np.full(len(x),len(calls)!=2))
+    def refit(keys,x,**options):
+        repairs.append(options['accelerate'])
+        return stub_fit(np.zeros(len(x),bool))
     monkeypatch.setattr(em_batch,'fit_batch',fitted)
+    monkeypatch.setattr(cuda_em,'fit_batch',refit)
     monkeypatch.setattr(simulation,'bias_readout',
         lambda result,block,count:jnp.zeros((len(block),count,2)))
     design=jnp.array([[10.,20.,30.,60.]]*3)
-    with pytest.raises(em_batch.EMValidationError,match=f'{trials} nonfinite starts'):
+    with pytest.raises(em_batch.EMValidationError,match=f'{trials} selected fits still failed'):
         simulation.simulate(jax.random.key(31),design,n_simulations=trials,
                             n_samples=4,em_backend='cuda')
-    assert len(calls)==expected_calls
+    assert len(calls)==expected_calls and repairs==[False]
+
+
+def test_cuda_simulation_repairs_then_masks_isolated_failed_winners(monkeypatch):
+    # Simulator contract: a failed winner is refitted with ordinary EM on its own
+    # data and starts; a successful refit replaces it, and a failed one becomes a
+    # recorded NaN outcome instead of refusing the whole tile.
+    failed = np.array([False, True, True, False])
+    def fitted(keys,x,**options):
+        result = stub_fit(~failed, np.array([0,0,2,0]))
+        return tuple(v+1. for v in result[:6])+result[6:]
+    refits=[]
+    def refit(keys,x,**options):
+        refits.append((np.asarray(jax.random.key_data(keys)),np.asarray(x),options['accelerate']))
+        return stub_fit(np.array([True,False]))
+    monkeypatch.setattr(em_batch,'fit_batch',fitted)
+    monkeypatch.setattr(cuda_em,'fit_batch',refit)
+    monkeypatch.setattr(simulation,'bias_readout',
+        lambda result,block,count:jnp.broadcast_to(result[5].reshape(len(block),count,1),(len(block),count,2)))
+    key=jax.random.key(31);design=jnp.array([[10.,20.,30.,60.]]*2)
+    bias,diagnostic = simulation.simulate(key,design,n_simulations=2,n_samples=4,
+        block_rows=2,em_backend='cuda',return_diagnostics=True)
+    x,fit_keys = simulation.generate_block(simulation.simulation_keys(key,2),design,2,4)
+    (keys,data,accelerate), = refits
+    np.testing.assert_array_equal(keys,np.asarray(jax.random.key_data(fit_keys[1:3])))
+    np.testing.assert_array_equal(data,np.asarray(x[1:3]))
+    assert accelerate is False
+    np.testing.assert_array_equal(diagnostic['repaired'],[[False,True],[False,False]])
+    np.testing.assert_array_equal(diagnostic['masked'],[[False,False],[True,False]])
+    np.testing.assert_array_equal(bias[...,0],[[1.,0.],[np.nan,1.]])
+    np.testing.assert_array_equal(diagnostic['winner_decreases'],[[0,0],[2,0]])
 
 
 def test_cuda_single_image_library_preserves_complete_start_states():
