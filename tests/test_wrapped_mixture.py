@@ -349,3 +349,25 @@ def test_asymmetry_value_and_gradient_are_continuous_at_representation_switch():
     assert float(jnp.abs(asymmetry(below) - asymmetry(above))) < 2e-5
     assert float(jnp.abs(jax.grad(asymmetry)(below) -
                          jax.grad(asymmetry)(above))) < 2e-5
+
+
+@pytest.mark.parametrize('mu,sigma', [(0., .26), (179.9, .3), (30., 5.), (10., 59.), (10., 61.), (90., 150.)])
+def test_bin_probabilities_integrate_the_density(mu, sigma):
+    # The histogram objective must score the same distribution as the density,
+    # on both sides of the spatial/Fourier switch and for sub-bin components.
+    dist = {'log_pi': jnp.zeros((1, 1)), 'mu': jnp.array([[mu]]), 'sigma': jnp.array([[sigma]])}
+    p = np.exp(np.asarray(wm.mixture_bin_log_probabilities(72, dist), dtype=np.float64))[0]
+    fine = -180. + (np.arange(72 * 500) + .5) * (360. / (72 * 500))
+    dens = np.exp(np.asarray(wm.mixture_logpdf_grid(jnp.asarray(fine), dist), dtype=np.float64))[0]
+    reference = dens.reshape(72, 500).sum(1) * (360. / (72 * 500))
+    np.testing.assert_allclose(p.sum(), 1., atol=2e-6)
+    # The midpoint reference itself errs by ~1e-5 relative for peaks narrower than its step.
+    np.testing.assert_allclose(p, reference, rtol=1e-4, atol=2e-6)
+
+
+def test_bin_log_probabilities_have_finite_gradients_for_narrow_components():
+    def loss(sigma):
+        dist = {'log_pi': jnp.zeros((1, 1)), 'mu': jnp.array([[.1]]), 'sigma': sigma[None, None]}
+        return wm.mixture_bin_log_probabilities(720, dist)[0].sum()
+    grad = jax.grad(loss)(jnp.array(.25))
+    assert np.isfinite(float(loss(jnp.array(.25)))) and np.isfinite(float(grad))

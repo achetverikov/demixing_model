@@ -151,6 +151,51 @@ def mixture_logpdf_samples(samples, dist, n_wraps: int = 4):
     return jax.scipy.special.logsumexp(dist['log_pi'][:, None, :] + comp, axis=-1)
 
 
+def wrapped_normal_bin_probability(lo, hi, mu, sigma, n_wraps: int = 4,
+                                   n_harmonics: int = 8, sigma_switch: float = SIGMA_SWITCH):
+    """Probability of the arc ``[lo, hi)`` (degrees, ``hi - lo <= 360``) under a wrapped normal.
+
+    Integrates :func:`wrapped_normal_logpdf` exactly, with the same switch: the
+    spatial branch sums Gaussian CDF differences over the wrap images, using
+    upper-tail differences when both edges lie above the mean so that small
+    tail probabilities keep their relative precision; the Fourier branch
+    integrates the series term by term. Arguments broadcast together.
+    """
+    d_lo = wrap_deg(lo - mu)
+    d_hi = d_lo + (hi - lo)
+
+    sigma_s = jnp.minimum(sigma, sigma_switch)
+    shifts = jnp.arange(-n_wraps, n_wraps + 1, dtype=d_lo.dtype) * PERIOD
+    a = (d_lo[..., None] + shifts) / sigma_s[..., None]
+    b = (d_hi[..., None] + shifts) / sigma_s[..., None]
+    ndtr = jax.scipy.special.ndtr
+    spatial = jnp.sum(jnp.where(a > 0, ndtr(-a) - ndtr(-b), ndtr(b) - ndtr(a)), axis=-1)
+
+    sigma_f = jnp.maximum(sigma, sigma_switch)
+    n = jnp.arange(1, n_harmonics + 1, dtype=d_lo.dtype)
+    decay = jnp.exp(-0.5 * (n * jnp.radians(sigma_f)[..., None]) ** 2)
+    sines = (jnp.sin(n * jnp.radians(d_hi)[..., None]) - jnp.sin(n * jnp.radians(d_lo)[..., None])) / n
+    fourier = ((hi - lo) + 2.0 * jnp.degrees(jnp.sum(decay * sines, axis=-1))) / PERIOD
+
+    return jnp.clip(jnp.where(sigma >= sigma_switch, fourier, spatial), 0.0, 1.0)
+
+
+def mixture_bin_log_probabilities(bins: int, dist, n_wraps: int = 4):
+    """Log probability of each of ``bins`` equal half-open arcs from -180 deg: ``(N, K)`` -> ``(N, bins)``.
+
+    The bin layout matches the histogram corpora of
+    ``surface_computation.simulation_corpus``; used by the histogram training
+    objective, which scores probability mass per bin rather than density at
+    bin centres.
+    """
+    lo = -180.0 + jnp.arange(bins, dtype=dist['mu'].dtype) * (PERIOD / bins)
+    comp = wrapped_normal_bin_probability(
+        lo[None, :, None], lo[None, :, None] + PERIOD / bins,
+        dist['mu'][:, None, :], dist['sigma'][:, None, :], n_wraps)
+    mass = jnp.sum(jnp.exp(dist['log_pi'])[:, None, :] * comp, axis=-1)
+    return jnp.log(jnp.maximum(mass, 1e-30))
+
+
 def mixture_logpdf_grid(grid, dist, n_wraps: int = 4):
     """Evaluate the mixture on a shared grid: ``(N, K)`` params -> ``(N, G)``.
 

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Train the conditional wrapped-normal mixture on raw EM bias samples.
+"""Train the conditional wrapped-normal mixture on simulated EM bias outcomes.
 
-The objective is the negative log likelihood of individual simulated biases.
-No histogram, KDE, bias grid or likelihood surface is constructed anywhere in
-the loss.
+With a raw-outcome source the objective is the negative log likelihood of
+individual simulated biases. With a histogram corpus
+(``generate_wnm_training_data --histogram-out``) it is the cross-entropy of each
+cell's binned outcome frequencies under the predicted mixture's per-bin
+probability mass. Model, schedule, parameter-group split and checkpoint
+selection are shared. No KDE or likelihood surface is constructed.
 
 Usage (from the repo root)::
 
@@ -64,6 +67,22 @@ def make_loss(model, n_wraps: int, moment_weight=0., moment_huber_delta=.1,
         tail_nll = jnp.mean(jax.lax.top_k(group_nll, n_tail)[0])
         return (mean_nll + moment_weight * moment_loss
                 + cvar_weight * (tail_nll - mean_nll))
+
+    return loss_fn
+
+
+def make_histogram_loss(model, bins: int, n_wraps: int):
+    """Mean per-case cross-entropy (nat per outcome) of binned outcome frequencies.
+
+    Scores each bin's probability mass under the predicted mixture, not the
+    density at bin centres, so it stays bounded for components narrower than a
+    bin. Equals the raw-outcome NLL of the binned outcomes, up to the constant
+    ``log(bin width)``.
+    """
+    @jax.jit
+    def loss_fn(variables, x, freq, w):
+        logp = wm.mixture_bin_log_probabilities(bins, model.apply(variables, x), n_wraps)
+        return -jnp.sum(w * jnp.sum(freq * logp, axis=-1)) / jnp.maximum(jnp.sum(w), 1.)
 
     return loss_fn
 
@@ -194,6 +213,8 @@ def main():
     p.add_argument('--cvar-fraction', type=float, default=.1)
     p.add_argument('--steps', type=int, default=20000)
     p.add_argument('--batch-size', type=int, default=8192)
+    p.add_argument('--histogram-batch', type=int, default=256,
+                   help='cells x items per step when --source is a histogram corpus')
     p.add_argument('--lr', type=float, default=3e-3)
     p.add_argument('--warmup', type=int, default=500)
     p.add_argument('--val-fraction', type=float, default=0.1)
@@ -239,6 +260,17 @@ def main():
     source_strata = source_meta.pop('strata', None)
     if source_strata:
         source_meta['n_trajectory_labels'] = len(set(source_strata))
+    histogram = isinstance(store, data_mod.HistogramStore)
+    if histogram:
+        unsupported = [name for name, used in (
+            ('--augmentation', args.augmentation), ('--grouped-outcomes', args.grouped_outcomes != 1),
+            ('--moment-weight', args.moment_weight), ('--cvar-weight', args.cvar_weight),
+            ('--selection-reference', args.selection_reference)) if used]
+        if unsupported:
+            p.error(f'{", ".join(unsupported)} require a raw-outcome source, not a histogram corpus')
+        if args.histogram_batch < 1:
+            p.error('--histogram-batch must be positive')
+        args.batch_size = args.histogram_batch
     train_store, val_store = data_mod.split_by_params(
         store, args.val_fraction, seed=args.seed)
     print(f"{store.n_rows} parameter rows, {store.n_observations:,} finite outcomes; "
@@ -294,9 +326,10 @@ def main():
     tx = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(schedule))
     opt_state = tx.init(variables)
 
-    loss_fn = make_loss(model, args.n_wraps, args.moment_weight,
-                        args.moment_huber_delta, args.cvar_weight,
-                        args.cvar_fraction)
+    loss_fn = (make_histogram_loss(model, store.bins, args.n_wraps) if histogram else
+               make_loss(model, args.n_wraps, args.moment_weight,
+                         args.moment_huber_delta, args.cvar_weight,
+                         args.cvar_fraction))
 
     @jax.jit
     def update(variables, opt_state, x, b, w):
@@ -360,6 +393,9 @@ def main():
     domain = {name: [float(design[:, i].min()), float(design[:, i].max())]
               for i, name in enumerate(("sd_feat1", "sd_feat2", "sd_idf", "feat_diff"))}
     meta = dict(vars(args) | {'training_schema': 'wnm-training/1',
+                              'training_objective': ('histogram_bin_cross_entropy' if histogram
+                                                     else 'raw_outcome_nll'),
+                              'histogram_bins': store.bins if histogram else None,
                               'selected_step': selected_step, 'n_samples': n_samples,
                               'supported_domain': domain,
                               'checkpoint_selection': ('held_out_parameter_groups'

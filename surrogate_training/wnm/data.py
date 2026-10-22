@@ -119,6 +119,63 @@ class SampleStore:
         return x[keep], b[keep]
 
 
+class HistogramStore:
+    """Per-cell outcome histograms with on-the-fly mirror augmentation.
+
+    ``counts`` is ``(M, 2, bins)``: both items' counts for each design row, as
+    returned by ``simulation_corpus.Corpus.histograms``. Item 2 of a row is a
+    draw from the item-1 density at the mirrored parameter vector, exactly as in
+    :class:`SampleStore`, and the parameter-group split interface is the same.
+    """
+
+    def __init__(self, design, counts):
+        self.design = np.asarray(design, dtype=np.float32)
+        self.counts = np.asarray(counts)
+        if self.counts.ndim != 3 or self.counts.shape[:2] != (self.design.shape[0], 2):
+            raise ValueError(f'counts {self.counts.shape} do not match design {self.design.shape}')
+        if (self.counts.sum(-1) < 1).any():
+            raise ValueError('every row and item needs at least one counted outcome')
+        self.mirrored = self.design[:, [1, 0, 2, 3]]
+
+    @property
+    def n_rows(self) -> int:
+        return self.design.shape[0]
+
+    @property
+    def bins(self) -> int:
+        return self.counts.shape[-1]
+
+    @property
+    def n_observations(self) -> int:
+        return int(self.counts.sum())
+
+    def canonical_param_key(self) -> np.ndarray:
+        sd = self.design[:, :2]
+        return np.column_stack([sd.min(axis=1), sd.max(axis=1), self.design[:, 2]])
+
+    def subset(self, row_idx) -> "HistogramStore":
+        return HistogramStore(self.design[row_idx], self.counts[row_idx])
+
+    def batch(self, rng: np.random.Generator, n_cases: int
+              ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Draw ``(x, frequencies, weight)`` for random rows and items.
+
+        ``frequencies`` are each case's normalized counts; ``weight`` is 1, so
+        every sampled cell and item counts equally, as in the historical trainer.
+        """
+        m = rng.integers(0, self.n_rows, n_cases)
+        c = rng.integers(0, 2, n_cases)
+        x = np.where(c[:, None] == 0, self.design[m], self.mirrored[m])
+        counts = self.counts[m, c].astype(np.float32)
+        return x, counts / counts.sum(-1, keepdims=True), np.ones(n_cases, np.float32)
+
+    def all_cases(self) -> Tuple[np.ndarray, np.ndarray]:
+        """Every row and item as ``(x, frequencies)``, both items stacked."""
+        x = np.concatenate([self.design, self.mirrored])
+        counts = np.concatenate([self.counts[:, 0], self.counts[:, 1]]).astype(np.float32)
+        return x, counts / counts.sum(-1, keepdims=True)
+
+
 def split_by_params(store: SampleStore, val_fraction: float = 0.1, seed: int = 0
                     ) -> Tuple[SampleStore, SampleStore]:
     """Split rows by mirror-invariant parameter group, never by simulation.
@@ -160,7 +217,15 @@ def load_source(source: str, corpus_files: Optional[int] = None,
     path = Path(source)
     if path.suffix == '.npz':
         return load_npz(path)
-    if (path/'manifest.json').exists() and json.loads((path/'manifest.json').read_text()).get('storage_format')==simulation_corpus.FORMAT:
+    storage_format = (json.loads((path/'manifest.json').read_text()).get('storage_format')
+                      if (path/'manifest.json').exists() else None)
+    if storage_format == simulation_corpus.HISTOGRAM_FORMAT:
+        with simulation_corpus.Corpus(path) as corpus:
+            meta = dict(corpus.meta, histogram_bins=corpus.layout.bins)
+            if corpus.strata:
+                meta['strata'] = corpus.strata
+            return HistogramStore(np.array(corpus.design), corpus.histograms()), meta
+    if storage_format == simulation_corpus.FORMAT:
         with simulation_corpus.Corpus(path) as corpus:
             meta = dict(corpus.meta)
             if corpus.strata:

@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from shared import surrogate
+from surface_computation import simulation_corpus as storage
 from surrogate_training.wnm import train, package_artifact
 
 
@@ -44,3 +45,40 @@ def test_train_package_load(tmp_path, monkeypatch, n_samples):
     assert packaged["meta"]["supported_domain"] == original["meta"]["supported_domain"]
     assert packaged["meta"]["selected_step"] in (1, 2)
     assert packaged["meta"]["checkpoint_selection"] == "held_out_parameter_groups"
+
+
+def test_histogram_corpus_trains_and_packages(tmp_path, monkeypatch):
+    # Entry-point contract: a histogram corpus selects the per-bin objective,
+    # reaches production loading, and refuses raw-only options before training.
+    import hashlib
+    design = np.array([[10+i, 30+i, 20+i, 5+10*i] for i in range(8)], dtype=np.float32)
+    signature = dict(storage_format=storage.HISTOGRAM_FORMAT, histogram_bins=36, n_rows=8,
+        n_simulations=4, shard_rows=8, simulation_chunk=4, n_samples=20, seed=0,
+        design_sha256=hashlib.sha256(design.tobytes()).hexdigest(),
+        strata_sha256=hashlib.sha256(json.dumps(None).encode()).hexdigest())
+    source = tmp_path / "histograms"
+    histogram = np.zeros((8, 1, 2, 36), np.int32)
+    histogram[..., 18] = 3
+    histogram[..., 20] = 1
+    with storage.writer(source, signature, design, None) as corpus:
+        corpus.write_tile(corpus.coordinates(0, 0), dict(histogram=histogram,
+            counts=np.zeros((8, 1, len(storage.HISTOGRAM_COUNTS)), np.int64),
+            max_iterations=np.ones((8, 1), np.int32)))
+        corpus.finish({"n_samples": 20})
+    checkpoint = tmp_path / "train.pkl"
+    common = ["train", "--source", str(source), "--out", str(checkpoint), "--steps", "2",
+              "--warmup", "0", "--eval-every", "1", "--selection-every", "1", "--eval-batches", "1",
+              "--histogram-batch", "4", "--components", "2", "--hidden", "4"]
+    monkeypatch.setattr(sys, "argv", common + ["--grouped-outcomes", "2"])
+    with pytest.raises(SystemExit):
+        train.main()
+    assert not checkpoint.exists()
+    monkeypatch.setattr(sys, "argv", common)
+    train.main()
+    meta = pickle.loads(checkpoint.read_bytes())["meta"]
+    assert meta["training_objective"] == "histogram_bin_cross_entropy" and meta["histogram_bins"] == 36
+    artifact = tmp_path / "custom.pkl"
+    monkeypatch.setattr(sys, "argv", ["package", "--fit", str(checkpoint), "--out", str(artifact),
+                                      "--n-samples", "20"])
+    package_artifact.main()
+    assert surrogate.load_surrogate(checkpoint_path=artifact, n_samples=20).n_samples == 20
