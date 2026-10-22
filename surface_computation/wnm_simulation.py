@@ -85,18 +85,19 @@ def bias_readout(result, design, n_simulations):
     return (-jnp.sign(true)*difference).reshape((len(design), n_simulations, 2))
 
 
-def repair_failed(fit_keys, x, fitted, failed, backend, max_iter):
+def repair_failed(fit_keys, x, fitted, failed, backend, max_iter, starts='random'):
     """Refit failed selected fits once; return the merged fit and repaired/masked flags.
 
-    CUDA refits use ordinary EM with the complete evaluator and the same starts.
+    CUDA refits use ordinary EM with the complete evaluator, from the starts the
+    original batch fit used (indexed, not recomputed, so they match bit for bit).
     The JAX backend already is ordinary EM, so its failures are masked directly.
     """
     failed = np.flatnonzero(failed)
     repaired = np.zeros(len(x), bool)
     masked = np.zeros(len(x), bool)
     if backend == 'cuda':
-        retry = cuda_em.fit_batch(fit_keys[failed], x[failed], max_iter=max_iter,
-                                  accelerate=False)
+        theta = cuda_em.start_parameters(fit_keys, x, starts=starts)[failed]
+        retry = cuda_em.fit_from_starts(x[failed], theta, max_iter=max_iter, accelerate=False)
         valid = ~np.asarray(em_batch.winner_failed(retry[-1]))
         target, source = jnp.asarray(failed[valid]), jnp.asarray(np.flatnonzero(valid))
         fitted = jax.tree.map(lambda old, new: old.at[target].set(new[source]), fitted, retry)
@@ -112,7 +113,8 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
              block_rows: int = 1, progress: bool = False,
              row_offset: int = 0, simulation_offset: int = 0,
              common_random_groups=None, em_stages=None, continuation_batch=None,
-             return_diagnostics=False, em_max_iter=em.MAX_ITER, em_backend='jax'):
+             return_diagnostics=False, em_max_iter=em.MAX_ITER, em_backend='jax',
+             em_starts='random'):
     """Simulate raw EM bias outcomes for a continuous parameter design.
 
     Args:
@@ -135,6 +137,8 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
         continuation_batch: optional limit on packed continuation starts.
         return_diagnostics: also return per-trial likelihood/convergence arrays.
         em_backend: 'jax' or the optional persistent 'cuda' backend.
+        em_starts: 'random' (225 random starts) or 'structured', the deterministic
+            data-derived bank of :mod:`structured_starts` (CUDA only).
 
     Returns:
         ``(M, n_simulations, 2)`` float32 array of mu_feat_bias in degrees.
@@ -170,7 +174,7 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
             repaired = masked = np.zeros(len(x), bool)
             if block_failed.any():
                 fitted, repaired, masked = repair_failed(
-                    fit_keys, x, fitted, block_failed, em_backend, em_max_iter)
+                    fit_keys, x, fitted, block_failed, em_backend, em_max_iter, em_starts)
                 n_masked += int(masked.sum())
                 if n_masked > allowed:
                     raise em_batch.EMValidationError(
@@ -194,7 +198,7 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
         fitted = em_batch.fit_batch(fit_keys, x, fix_weights=fix_weights,
             wrap_axes=(jfm.jf.wrap_feat, jfm.jf.wrap_idf), stages=em_stages,
             continuation_batch=continuation_batch, max_iter=em_max_iter,
-            backend=em_backend, cuda_single_image=(eligible is not None and
+            backend=em_backend, starts=em_starts, cuda_single_image=(eligible is not None and
                 bool(eligible[start:start + len(block)].all())))
         pending.append((block, fit_keys, x, fitted))
         if len(pending) >= validation_blocks or start + len(block) == n_rows:

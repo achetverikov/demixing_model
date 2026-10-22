@@ -18,7 +18,7 @@ def test_kernel_and_shared_density_changes_invalidate_generation_digest(tmp_path
     root=Path(generator.__file__).resolve().parents[1]
     paths=['surface_computation/'+name for name in ['generate_wnm_training_data.py','wnm_design.py',
         'wnm_simulation.py','simulation_corpus.py','jax_fit_main.py','jax_fit_functions.py','likelihood_em.py','em_batch.py','em_identity.py',
-        'cuda_em.py', *generator.cuda_em.SOURCE_NAMES]]+['shared/wnm.py']
+        'cuda_em.py', 'structured_starts.py', *generator.cuda_em.SOURCE_NAMES]]+['shared/wnm.py']
     for relative in paths:
         dest=tmp_path/relative;dest.parent.mkdir(exist_ok=True,parents=True)
         dest.write_bytes((root/relative).read_bytes())

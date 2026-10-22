@@ -11,7 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from surface_computation import cuda_em, em_batch, likelihood_em as em
+from surface_computation import cuda_em, em_batch, likelihood_em as em, structured_starts
 from surface_computation import wnm_simulation as simulation
 
 pytestmark = pytest.mark.gpu
@@ -178,11 +178,12 @@ def test_cuda_simulation_checks_bounded_groups_before_return(monkeypatch,trials,
     def fitted(keys,x,**options):
         calls.append(len(x))
         return stub_fit(np.full(len(x),len(calls)!=2))
-    def refit(keys,x,**options):
+    def refit(x,theta,**options):
         repairs.append(options['accelerate'])
         return stub_fit(np.zeros(len(x),bool))
     monkeypatch.setattr(em_batch,'fit_batch',fitted)
-    monkeypatch.setattr(cuda_em,'fit_batch',refit)
+    monkeypatch.setattr(cuda_em,'start_parameters',lambda keys,x,**options:jnp.zeros((len(x),1,5,2)))
+    monkeypatch.setattr(cuda_em,'fit_from_starts',refit)
     monkeypatch.setattr(simulation,'bias_readout',
         lambda result,block,count:jnp.zeros((len(block),count,2)))
     design=jnp.array([[10.,20.,30.,60.]]*3)
@@ -194,32 +195,57 @@ def test_cuda_simulation_checks_bounded_groups_before_return(monkeypatch,trials,
 
 def test_cuda_simulation_repairs_then_masks_isolated_failed_winners(monkeypatch):
     # Simulator contract: a failed winner is refitted with ordinary EM on its own
-    # data and starts; a successful refit replaces it, and a failed one becomes a
-    # recorded NaN outcome instead of refusing the whole tile.
+    # data and its batch's own starts (indexed, never recomputed); a successful
+    # refit replaces it, and a failed one becomes a recorded NaN outcome instead
+    # of refusing the whole tile.
     failed = np.array([False, True, True, False])
     def fitted(keys,x,**options):
         result = stub_fit(~failed, np.array([0,0,2,0]))
         return tuple(v+1. for v in result[:6])+result[6:]
-    refits=[]
-    def refit(keys,x,**options):
-        refits.append((np.asarray(jax.random.key_data(keys)),np.asarray(x),options['accelerate']))
+    refits,banks=[],[]
+    def bank(keys,x,**options):
+        banks.append((np.asarray(jax.random.key_data(keys)),options['starts']))
+        return jnp.broadcast_to(jnp.arange(len(x),dtype=jnp.float32)[:,None,None,None],(len(x),1,5,2))
+    def refit(x,theta,**options):
+        refits.append((np.asarray(theta[:,0,0,0]),np.asarray(x),options['accelerate']))
         return stub_fit(np.array([True,False]))
     monkeypatch.setattr(em_batch,'fit_batch',fitted)
-    monkeypatch.setattr(cuda_em,'fit_batch',refit)
+    monkeypatch.setattr(cuda_em,'start_parameters',bank)
+    monkeypatch.setattr(cuda_em,'fit_from_starts',refit)
     monkeypatch.setattr(simulation,'bias_readout',
         lambda result,block,count:jnp.broadcast_to(result[5].reshape(len(block),count,1),(len(block),count,2)))
     key=jax.random.key(31);design=jnp.array([[10.,20.,30.,60.]]*2)
     bias,diagnostic = simulation.simulate(key,design,n_simulations=2,n_samples=4,
-        block_rows=2,em_backend='cuda',return_diagnostics=True)
+        block_rows=2,em_backend='cuda',return_diagnostics=True,em_starts='structured')
     x,fit_keys = simulation.generate_block(simulation.simulation_keys(key,2),design,2,4)
-    (keys,data,accelerate), = refits
-    np.testing.assert_array_equal(keys,np.asarray(jax.random.key_data(fit_keys[1:3])))
+    (rows,data,accelerate), = refits
+    (keys,starts), = banks
+    np.testing.assert_array_equal(keys,np.asarray(jax.random.key_data(fit_keys)))
+    assert starts=='structured'
+    np.testing.assert_array_equal(rows,[1.,2.])
     np.testing.assert_array_equal(data,np.asarray(x[1:3]))
     assert accelerate is False
     np.testing.assert_array_equal(diagnostic['repaired'],[[False,True],[False,False]])
     np.testing.assert_array_equal(diagnostic['masked'],[[False,False],[True,False]])
     np.testing.assert_array_equal(bias[...,0],[[1.,0.],[np.nan,1.]])
     np.testing.assert_array_equal(diagnostic['winner_decreases'],[[0,0],[2,0]])
+
+
+def test_structured_starts_route_through_simulation_and_fit_the_bank():
+    # Routing contract: the simulator must fit the deterministic bank (not random
+    # starts) for every dataset, and the JAX backend must refuse it explicitly.
+    design = jnp.array([[10., 20., 30., 60.], [20., 10., 30., 100.]])
+    key = jax.random.key(31)
+    bias, diagnostic = simulation.simulate(key, design, n_simulations=2, n_samples=20,
+        block_rows=2, em_backend='cuda', return_diagnostics=True, em_starts='structured')
+    x, fit_keys = simulation.generate_block(simulation.simulation_keys(key, 2), design, 2, 20)
+    _, compact = cuda_em._run(x, structured_starts.batch(x), first_cap=em.FIRST_CAP,
+                              max_iter=em.MAX_ITER, occupancy=True)
+    direct = cuda_em.result_from_compact(compact)
+    np.testing.assert_array_equal(bias, simulation.bias_readout(direct, design, 2))
+    assert (np.asarray(compact[:, 26]) < structured_starts.count(20)).all()
+    with pytest.raises(ValueError, match='require the CUDA'):
+        simulation.simulate(key, design, n_simulations=1, n_samples=20, em_starts='structured')
 
 
 def test_cuda_single_image_library_preserves_complete_start_states():

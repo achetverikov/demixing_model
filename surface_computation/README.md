@@ -107,6 +107,13 @@ Initial statistics are calculated once inside the kernel. The observation loop
 stays rolled to limit compiled kernel size, and the worker pool uses occupancy
 sizing at every supported N.
 
+`--em-starts structured` replaces the 225 random starts with a deterministic
+data-derived bank of min(N, 20) + 34 starts (54 at N >= 20), built from hard
+splits and local neighbourhoods of each dataset (`structured_starts.py`). It
+requires the CUDA backend and is recorded in the corpus manifest. The CLI default
+remains `random`; the bank is the selected setting for N=500 production corpora.
+Repairs of failed winners reuse the starts of the original batch fit.
+
 The CUDA kernel shares one EM-update loop body between settling and the two
 SQUAREM maps, storing temporary parameter snapshots across warp lanes to reduce
 register lifetimes. Density
@@ -190,6 +197,14 @@ SQUAREM selection and integration validation are retained under
 These generated artifacts are not shipped. The internal `cuda_em._run` accepts
 `accelerate=False` for ordinary-EM reference checks; public CUDA simulation uses
 SQUAREM and its build identity prevents mixing it with earlier CUDA corpora.
+
+Structured-start selection evidence is retained under
+`$DEMIXING_ARTIFACT_ROOT/density_tolerance_20261022/`,
+`$DEMIXING_ARTIFACT_ROOT/density_trajectory_20261022/` and
+`$DEMIXING_ARTIFACT_ROOT/narrow_interval_check_20261022/`. These generated artifacts
+are not shipped. At N=500 the bank was compared with 225 random starts on identical
+observations, by optimum quality and by matched NN retraining against an
+independent-data control; that evidence does not cover other N.
 
 Counter-guided kernel validation and its independent audit are retained under
 `$DEMIXING_ARTIFACT_ROOT/cuda_counter_round_20261021/`. These generated artifacts

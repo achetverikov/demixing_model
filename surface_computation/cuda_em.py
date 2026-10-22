@@ -19,7 +19,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from surface_computation import likelihood_em as em
+from surface_computation import likelihood_em as em, structured_starts
 
 SAMPLE_COUNTS = (4, 10, 20, 100, 500)
 SOURCE_NAMES = ('cuda/likelihood_em.cu', 'cuda/likelihood_em.cuh')
@@ -109,12 +109,34 @@ def result_from_compact(c):
     return tuple(parameters[:, k] for k in range(5)) + (c[:, 10], diagnostic)
 
 
-def fit_batch(keys, x, *, n_init=em.N_INIT, max_iter=em.MAX_ITER, single_image=False,
-              accelerate=True):
+def start_parameters(keys, x, *, n_init=em.N_INIT, starts='random'):
+    """Start layout ``(datasets, starts, 5, 2)`` for a whole batch.
+
+    ``'random'`` draws ``n_init`` production random starts from ``keys``;
+    ``'structured'`` is the deterministic data-derived bank and ignores both.
+    Starts can differ by float rounding with batch shape, so a refit of some
+    datasets must index these batch starts rather than recompute them.
+    """
+    if n_init < 1:
+        raise ValueError('n_init must be positive')
+    if starts == 'random':
+        return initial_parameters(keys, x, n_init)
+    if starts == 'structured':
+        return structured_starts.batch(x)
+    raise ValueError(f"starts must be 'random' or 'structured', got {starts!r}")
+
+
+def fit_from_starts(x, theta, *, max_iter=em.MAX_ITER, single_image=False, accelerate=True):
     """Keep every start, continue/reselect capped winners, and return EM diagnostics."""
-    if n_init < 1 or not 0 < max_iter <= em.MAX_ITER:
-        raise ValueError('n_init must be positive and max_iter must be in [1,25000]')
-    theta = initial_parameters(keys, x, n_init)
+    if not 0 < max_iter <= em.MAX_ITER:
+        raise ValueError('max_iter must be in [1,25000]')
     _, compact = _run(x, theta, first_cap=min(em.FIRST_CAP, max_iter), max_iter=max_iter,
                       occupancy=True, accelerate=accelerate, single_image=single_image)
     return result_from_compact(compact)
+
+
+def fit_batch(keys, x, *, n_init=em.N_INIT, max_iter=em.MAX_ITER, single_image=False,
+              starts='random'):
+    """Fit every dataset from its :func:`start_parameters`."""
+    return fit_from_starts(x, start_parameters(keys, x, n_init=n_init, starts=starts),
+                           max_iter=max_iter, single_image=single_image)

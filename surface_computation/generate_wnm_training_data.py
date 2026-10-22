@@ -49,6 +49,7 @@ def _code_digest(paths=None) -> str:
         root / 'surface_computation' / 'em_identity.py',
         root / 'surface_computation' / 'simulation_corpus.py',
         root / 'surface_computation' / 'cuda_em.py',
+        root / 'surface_computation' / 'structured_starts.py',
         *(root / 'surface_computation' / name for name in cuda_em.SOURCE_NAMES),
         root / 'shared' / 'wnm.py',
     )
@@ -132,6 +133,9 @@ def main():
                    help='maximum EM runs per device call; bounds GPU memory')
     p.add_argument('--em-backend', choices=['jax', 'cuda'], default='jax',
                    help='persistent CUDA EM requires nvcc and N=4,10,20,100,500; default: jax')
+    p.add_argument('--em-starts', choices=['random', 'structured'], default='random',
+                   help='random: 225 random starts; structured: deterministic data-derived '
+                        'bank of min(N,20)+34 starts (CUDA only)')
     p.add_argument('--em-stages', type=int, nargs='+',
                    help='pool unfinished starts across parameter rows at these cumulative caps; end at 5000')
     p.add_argument('--continuation-batch', type=int,
@@ -173,6 +177,8 @@ def main():
             p.error('CUDA EM uses a persistent work queue; omit --em-stages and --continuation-batch')
         if args.em_max_iter > likelihood_em.MAX_ITER:
             p.error('CUDA EM supports --em-max-iter up to 25000')
+    elif args.em_starts != 'random':
+        p.error('--em-starts structured requires --em-backend cuda')
     if args.em_stages and (args.em_stages[-1] != min(likelihood_em.FIRST_CAP, args.em_max_iter)
             or args.em_stages[0] < 1 or any(a >= b for a,b in zip(args.em_stages,args.em_stages[1:]))):
         p.error('--em-stages must strictly increase and end at min(5000, --em-max-iter)')
@@ -249,6 +255,7 @@ def main():
         'continuation_batch': args.continuation_batch,
         'em_max_iter': args.em_max_iter,
         'em_backend': args.em_backend,
+        'em_starts': args.em_starts,
         'em_backend_build': cuda_em.build_identity() if args.em_backend == 'cuda' else None,
     }
     total_chunks = (len(_chunk_ranges(len(design), args.shard_rows))
@@ -271,7 +278,8 @@ def main():
                         row_offset=row_start, simulation_offset=sim_start,
                         common_random_groups=(None if crn_groups is None else crn_groups[row_start:row_stop]),
                         em_stages=args.em_stages, continuation_batch=args.continuation_batch,
-                        em_max_iter=args.em_max_iter, return_diagnostics=True,em_backend=args.em_backend)
+                        em_max_iter=args.em_max_iter, return_diagnostics=True,em_backend=args.em_backend,
+                        em_starts=args.em_starts)
                     arrays = dict(bias=np.asarray(chunk_bias),
                         **{'em_'+k:np.asarray(v) for k,v in diagnostic.items()})
                     corpus.write_tile(coordinates,arrays)

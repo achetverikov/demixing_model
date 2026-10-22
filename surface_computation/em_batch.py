@@ -75,7 +75,7 @@ def active_indices(state, rtol=em.RTOL, parameter_tol=em.PARAMETER_TOL):
 def fit_batch(keys, x, *, stages=None, continuation_batch=None,
               n_init=em.N_INIT, rtol=em.RTOL, parameter_tol=em.PARAMETER_TOL,
               max_iter=em.MAX_ITER, wrap_axes=(True, False), fix_weights=False,
-              backend='jax', cuda_single_image=False):
+              backend='jax', cuda_single_image=False, starts='random'):
     """Return batched six-value fits and diagnostics; stages are cumulative caps.
 
     ``stages=None`` uses the fully compiled native loop. Staged execution pools
@@ -90,9 +90,11 @@ def fit_batch(keys, x, *, stages=None, continuation_batch=None,
             raise ValueError('CUDA EM requires free weights, wrapped feature, linear IDF and default tolerances')
         from surface_computation import cuda_em
         return cuda_em.fit_batch(keys, x, n_init=n_init, max_iter=max_iter,
-                                 single_image=cuda_single_image)
+                                 single_image=cuda_single_image, starts=starts)
     if backend != 'jax':
         raise ValueError('EM backend must be jax or cuda')
+    if starts != 'random':
+        raise ValueError('Structured starts require the CUDA EM backend')
     options = dict(n_init=n_init, rtol=rtol, parameter_tol=parameter_tol,
                    max_iter=max_iter, wrap_axes=wrap_axes, fix_weights=fix_weights)
     if stages is None:
