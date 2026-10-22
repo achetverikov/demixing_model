@@ -75,6 +75,17 @@ Use `python -m surface_computation.simulation_corpus /path/to/training_data
 checks completion, array schemas and the coverage index; it relies on the
 validated payload remaining immutable rather than rereading all diagnostics.
 
+`--histogram-out DIR` writes a per-cell histogram corpus instead of, or alongside,
+the raw `--out` corpus, from the same fits. For each design row and simulation chunk
+it stores counts of both items' biases in `--histogram-bins` (default 720) half-open
+circular bins from -180 degrees, the number of masked trials, and summed EM
+diagnostics; `Corpus.histograms()` returns per-row totals. Masked trials appear in
+no bin. Histograms are reduced on the GPU, so the per-trial transfer and write are
+skipped. At 148,076 rows with 720 bins a histogram corpus is about 0.86 GB per
+simulation chunk (about 3.4 GB at four chunks per row). Write large corpora to a
+local disk that is not synced (for example under `/home/vscode/.cache`), not to the
+workspace.
+
 `--compress` applies only to NPZ export. The directory corpus retains exact raw
 arrays. At 148,076 rows and 20,000 trials, payload storage is about 275 GB per
 sample-count setting, plus checkpoint metadata. Memory mapping removes the

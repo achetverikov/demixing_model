@@ -1,5 +1,9 @@
-"""Memory-mapped raw outcomes with checksummed, run-bound tile checkpoints.
+"""Memory-mapped simulation corpora with checksummed, run-bound tile checkpoints.
 
+Two layouts share the tile, checksum, resume and completion machinery:
+raw per-trial outcomes and diagnostics (:data:`FORMAT`), or per-cell outcome
+histograms with summed diagnostics (:data:`HISTOGRAM_FORMAT`), stored per
+simulation chunk so every tile stays independently resumable.
 NumPy files are the durable corpus, not an intermediate for full-RAM assembly.
 SQLite transactions publish completed tiles after their array writes flush.
 The completion marker covers the exact, disjoint logical tile index. One writer
@@ -27,6 +31,13 @@ DTYPES = {'bias':'float32', **{'em_'+k:v for k,v in DIAGNOSTIC_DTYPES.items()},
           'em_parameters':'float32', 'em_repaired':'bool', 'em_masked':'bool'}
 
 
+HISTOGRAM_FORMAT = 'demixing-histogram-corpus/1'
+#: Per-chunk sums kept by histogram corpora; the same quantities :func:`summary` totals.
+HISTOGRAM_COUNTS = ('selected_cap_hits', 'capped_losing_starts', 'nonfinite_starts',
+                    'material_decreases', 'continued_winners', 'repaired_fits', 'masked_fits')
+HISTOGRAM_DTYPES = {'histogram': 'int32', 'counts': 'int64', 'max_iterations': 'int32'}
+
+
 def signature_digest(signature):
     return hashlib.sha256(json.dumps(signature,sort_keys=True).encode()).hexdigest()
 
@@ -43,9 +54,10 @@ def array_shape(name, rows, simulations):
     return (rows,simulations)+tail
 
 
-def payload_bytes(rows,simulations):
-    return int(sum(np.prod(array_shape(name,rows,simulations))*np.dtype(dtype).itemsize
-                   for name,dtype in DTYPES.items()))
+def payload_bytes(rows,simulations,layout=None):
+    layout = layout or RawLayout({})
+    return int(sum(np.prod(layout.shape(name,rows,simulations))*np.dtype(dtype).itemsize
+                   for name,dtype in layout.dtypes.items()))
 
 
 def tile_count(signature):
@@ -95,7 +107,7 @@ def summary_totals(summaries):
 
 def tile_digest(signature, coordinates, arrays):
     digest = hashlib.sha256((signature+str(tuple(coordinates))).encode())
-    for name in DTYPES:
+    for name in sorted(arrays):
         digest.update(np.ascontiguousarray(arrays[name]).view(np.uint8))
     return digest.hexdigest()
 
@@ -111,13 +123,93 @@ def summary(arrays):
                 maximum_iterations=int(arrays['em_iterations'].max()))
 
 
+class RawLayout:
+    """Per-trial biases, selected parameters and EM diagnostics."""
+    format, dtypes = FORMAT, DTYPES
+
+    def __init__(self, signature):
+        self.signature = signature
+
+    def shape(self, name, rows, simulations):
+        return array_shape(name, rows, simulations)
+
+    def tile_shape(self, name, coordinates):
+        a, b, c, d = coordinates
+        return array_shape(name, b-a, d-c)
+
+    def index(self, coordinates):
+        a, b, c, d = coordinates
+        return slice(a, b), slice(c, d)
+
+    def validate(self, arrays, coordinates):
+        a, b, c, d = coordinates
+        validate_tile(arrays, b-a, d-c)
+
+    def summary(self, arrays):
+        return summary(arrays)
+
+
+class HistogramLayout:
+    """Per-cell outcome counts for both items plus summed EM diagnostics.
+
+    Bins are half-open on the circle: ``histogram_bins`` equal bins from -180
+    degrees, with +180 wrapping to bin 0. Masked trials are left out of both
+    items' counts and are counted in ``masked_fits``.
+    """
+    format, dtypes = HISTOGRAM_FORMAT, HISTOGRAM_DTYPES
+
+    def __init__(self, signature):
+        self.signature = signature
+        self.bins = int(signature['histogram_bins'])
+        self.chunk = int(signature['simulation_chunk'])
+
+    def shape(self, name, rows, simulations):
+        chunks = (simulations+self.chunk-1)//self.chunk
+        tail = {'histogram': (2, self.bins), 'counts': (len(HISTOGRAM_COUNTS),), 'max_iterations': ()}[name]
+        return (rows, chunks)+tail
+
+    def tile_shape(self, name, coordinates):
+        a, b, c, d = coordinates
+        return (b-a,)+self.shape(name, 1, self.chunk)[1:]
+
+    def index(self, coordinates):
+        a, b, c, d = coordinates
+        return slice(a, b), slice(c//self.chunk, c//self.chunk+1)
+
+    def validate(self, arrays, coordinates):
+        a, b, c, d = coordinates
+        for name, dtype in self.dtypes.items():
+            value = arrays[name]
+            if value.shape!=self.tile_shape(name, coordinates) or value.dtype!=np.dtype(dtype):
+                raise ValueError(f'invalid corpus tile array {name}: {value.shape}, {value.dtype}')
+            if (value < 0).any():
+                raise ValueError(f'negative corpus tile array {name}')
+        masked = arrays['counts'][:, 0, HISTOGRAM_COUNTS.index('masked_fits')]
+        if not (arrays['histogram'][:, 0].sum(-1)+masked[:, None] == d-c).all():
+            raise ValueError('corpus tile histogram counts plus masked trials do not equal its trials')
+
+    def summary(self, arrays):
+        totals = arrays['counts'].sum(axis=(0, 1), dtype=np.int64)
+        return dict({name: int(value) for name, value in zip(HISTOGRAM_COUNTS, totals)},
+                    maximum_iterations=int(arrays['max_iterations'].max()))
+
+
+LAYOUTS = {layout.format: layout for layout in (RawLayout, HistogramLayout)}
+
+
+def layout_for(signature):
+    try:
+        return LAYOUTS[signature.get('storage_format')](signature)
+    except KeyError:
+        raise ValueError('unsupported simulation corpus format') from None
+
+
 class Corpus:
     def __init__(self, root, *, writable=False):
         self.root = Path(root)
         self.signature = json.loads((self.root/'manifest.json').read_text())
         self.identity = signature_digest(self.signature)
-        if self.signature.get('storage_format')!=FORMAT:
-            raise ValueError('unsupported simulation corpus format')
+        self.layout = layout_for(self.signature)
         self.rows = self.signature['n_rows']
         self.simulations = self.signature['n_simulations']
         self.design = np.load(self.root/'design.npy',mmap_mode='r')
@@ -129,9 +221,9 @@ class Corpus:
         if hashlib.sha256(json.dumps(self.strata).encode()).hexdigest()!=self.signature['strata_sha256']:
             raise ValueError('corpus strata differ from manifest')
         self.arrays = {}
-        for name,dtype in DTYPES.items():
+        for name,dtype in self.layout.dtypes.items():
             value = np.load(self.root/(name+'.npy'),mmap_mode='r+' if writable else 'r')
-            if value.shape!=array_shape(name,self.rows,self.simulations) or value.dtype!=np.dtype(dtype):
+            if value.shape!=self.layout.shape(name,self.rows,self.simulations) or value.dtype!=np.dtype(dtype):
                 raise ValueError(f'invalid corpus array {name}')
             self.arrays[name] = value
         uri = (self.root/'tiles.sqlite3').resolve().as_uri()+'?mode='+('rw' if writable else 'ro')
@@ -165,8 +257,14 @@ class Corpus:
                 sim_start,min(sim_start+self.signature['simulation_chunk'],self.simulations))
 
     def tile(self, coordinates):
-        a,b,c,d = coordinates
-        return {name:value[a:b,c:d] for name,value in self.arrays.items()}
+        index = self.layout.index(coordinates)
+        return {name:value[index] for name,value in self.arrays.items()}
+
+    def histograms(self):
+        """Histogram corpora only: per-cell counts ``(rows, 2, bins)`` summed over chunks."""
+        if not isinstance(self.layout, HistogramLayout):
+            raise ValueError('only histogram corpora store histograms')
+        return self.arrays['histogram'].sum(axis=1, dtype=np.int64)
 
     def valid_tile(self, coordinates):
         a,b,c,d = coordinates
@@ -176,7 +274,7 @@ class Corpus:
         try:
             arrays = self.tile(coordinates)
             return (saved[:2]==(b,d) and saved[2]==tile_digest(self.identity,coordinates,arrays)
-                    and json.loads(saved[3])==summary(arrays))
+                    and json.loads(saved[3])==self.layout.summary(arrays))
         finally:
             for array in self.arrays.values():
                 release_pages(array)
@@ -185,20 +283,23 @@ class Corpus:
         a,b,c,d = coordinates
         if coordinates!=self.coordinates(a,c) or a%self.signature['shard_rows'] or c%self.signature['simulation_chunk']:
             raise ValueError('invalid logical tile coordinates')
-        validate_tile(arrays,b-a,d-c)
+        if set(arrays)!=set(self.layout.dtypes):
+            raise ValueError(f'corpus tile arrays {sorted(arrays)} do not match the layout {sorted(self.layout.dtypes)}')
+        self.layout.validate(arrays,coordinates)
         expected = tile_digest(self.identity,coordinates,arrays)
         (self.root/'complete.json').unlink(missing_ok=True)
         with self.db:
             self.db.execute('DELETE FROM tiles WHERE row_start=? AND sim_start=?',(a,c))
+        index = self.layout.index(coordinates)
         for name,value in self.arrays.items():
-            value[a:b,c:d] = arrays[name]
+            value[index] = arrays[name]
             value.flush()
             release_pages(value)
         if tile_digest(self.identity,coordinates,self.tile(coordinates))!=expected:
             raise OSError('corpus tile write failed checksum verification')
         with self.db:
             self.db.execute('INSERT INTO tiles VALUES (?,?,?,?,?,?)',
-                (a,b,c,d,expected,json.dumps(summary(arrays))))
+                (a,b,c,d,expected,json.dumps(self.layout.summary(arrays))))
         for value in self.arrays.values():
             release_pages(value)
 
@@ -229,7 +330,7 @@ class Corpus:
         index = self.index_digest()
         total = self.tile_totals()
         meta = dict(meta,generation_signature=self.signature,em_summary=total,n_masked=total['masked_fits'])
-        atomic_json(self.root/'complete.json',dict(format=FORMAT,signature=self.identity,index_sha256=index,meta=meta))
+        atomic_json(self.root/'complete.json',dict(format=self.layout.format,signature=self.identity,index_sha256=index,meta=meta))
         self.meta = meta
 
 
@@ -245,14 +346,15 @@ def writer(root, signature, design, strata):
         else:
             if any(p.name!='.writer.lock' for p in root.iterdir()):
                 raise ValueError(f'existing shards have no manifest: {root}')
-            require_space(root,payload_bytes(len(design),signature['n_simulations'])+1024*tile_count(signature))
+            layout = layout_for(signature)
+            require_space(root,payload_bytes(len(design),signature['n_simulations'],layout)+1024*tile_count(signature))
             # Publish identity last: an interrupted setup cannot be mistaken for
             # a resumable run with trustworthy arrays and an index.
             np.save(root/'design.npy',design)
             atomic_json(root/'strata.json',strata)
-            for name,dtype in DTYPES.items():
+            for name,dtype in layout.dtypes.items():
                 value = np.lib.format.open_memmap(root/(name+'.npy'),mode='w+',dtype=dtype,
-                    shape=array_shape(name,len(design),signature['n_simulations']))
+                    shape=layout.shape(name,len(design),signature['n_simulations']))
                 del value
             with sqlite3.connect(root/'tiles.sqlite3') as db:
                 db.execute('CREATE TABLE identity (signature TEXT NOT NULL)')

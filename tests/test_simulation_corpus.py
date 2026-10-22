@@ -197,3 +197,46 @@ def test_legacy_nonfinite_samples_keep_weights_without_full_mask():
     assert store.n_observations==23
     _,values,weights = store.grouped_batch(np.random.default_rng(4),100,5)
     assert np.isfinite(values).all() and (weights==0).any()
+
+
+def binned(bias, bins):
+    """Independent NumPy reference for half-open circular bins from -180 deg."""
+    finite = np.isfinite(bias)
+    index = np.floor(np.mod(np.where(finite, bias, 0.)+180., 360.)*bins/360.).astype(int) % bins
+    out = np.zeros(bias.shape[:1]+(2, bins), np.int32)
+    for row in range(bias.shape[0]):
+        for item in (0, 1):
+            np.add.at(out[row, item], index[row, finite[row, :, item], item], 1)
+    return out
+
+
+def test_histogram_corpus_round_trip_summaries_and_validation(tmp_path,example):
+    design,strata,signature,arrays = example
+    signature = dict(signature,storage_format=storage.HISTOGRAM_FORMAT,histogram_bins=8)
+    raw_summary = storage.summary(arrays)
+    root = tmp_path/'histograms'
+    with storage.writer(root,signature,design,strata) as corpus:
+        for a in range(0,corpus.rows,signature['shard_rows']):
+            for c in range(0,corpus.simulations,signature['simulation_chunk']):
+                coordinates = corpus.coordinates(a,c)
+                _,b,_,d = coordinates
+                tile = {k:v[a:b,c:d] for k,v in arrays.items()}
+                counts = np.stack([np.sum(v,axis=1,dtype=np.int64) for v in (
+                    ~tile['em_converged'],tile['em_capped_starts'],tile['em_nonfinite_starts'],
+                    tile['em_material_decreases'],tile['em_continued_winner'],
+                    tile['em_repaired'],tile['em_masked'])],axis=-1)
+                part = dict(histogram=binned(tile['bias'],8)[:,None],counts=counts[:,None],
+                            max_iterations=tile['em_iterations'].max(axis=1)[:,None].astype(np.int32))
+                if (a,c)==(0,0):
+                    bad = dict(part,histogram=part['histogram']+1)
+                    with pytest.raises(ValueError,match='do not equal its trials'):
+                        corpus.write_tile(coordinates,bad)
+                    with pytest.raises(ValueError,match='do not match the layout'):
+                        corpus.write_tile(coordinates,dict(part,bias=tile['bias']))
+                corpus.write_tile(coordinates,part)
+        corpus.finish({})
+    with storage.Corpus(root) as corpus:
+        corpus.verify()
+        np.testing.assert_array_equal(corpus.histograms(),binned(arrays['bias'],8))
+        # Same totals a raw corpus of these trials would record.
+        assert corpus.meta['em_summary']==raw_summary and corpus.meta['n_masked']==1

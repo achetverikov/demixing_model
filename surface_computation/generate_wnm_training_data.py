@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Generate raw EM bias samples on a continuous design.
+"""Generate EM bias outcomes on a continuous design.
 
-Saves parameters and raw per-simulation biases only — never a KDE, histogram or
-surface.
+Writes a raw per-trial corpus (``--out``), a per-cell histogram corpus
+(``--histogram-out``), or both from the same fits. Never a KDE or surface.
+Large corpora belong on a local, unsynced disk.
 
 Usage (from the repo root)::
 
@@ -18,6 +19,7 @@ Usage (from the repo root)::
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import time
@@ -96,8 +98,12 @@ def _load_design_file(path: Path) -> tuple[np.ndarray, list[str] | None]:
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('--out', required=True, type=Path,
-                   help='directory corpus; an explicit .npz also requests a streamed export')
+    p.add_argument('--out', type=Path,
+                   help='raw per-trial directory corpus; an explicit .npz also requests a streamed export')
+    p.add_argument('--histogram-out', type=Path,
+                   help='per-cell histogram directory corpus (counts for both items plus summed diagnostics)')
+    p.add_argument('--histogram-bins', type=int, default=720,
+                   help='equal circular bins over [-180, 180) for --histogram-out')
     p.add_argument('--design-file', type=Path,
                    help='exact .npy/.npz design; overrides generated designs')
     p.add_argument('--n-points', type=int, default=4000,
@@ -154,7 +160,11 @@ def main():
     p.add_argument('--design-seed', type=int, default=None,
                    help='design seed; set identically across independent simulation repeats')
     args = p.parse_args()
-    if args.compress and args.out.suffix!='.npz':
+    if args.out is None and args.histogram_out is None:
+        p.error('provide --out (raw corpus), --histogram-out, or both')
+    if args.histogram_bins < 1:
+        p.error('--histogram-bins must be positive')
+    if args.compress and (args.out is None or args.out.suffix!='.npz'):
         p.error('--compress applies to an explicit .npz export; directory corpora use mapped arrays')
     design_seed = args.seed if args.design_seed is None else args.design_seed
 
@@ -231,14 +241,14 @@ def main():
           f"device chunk <= {args.block_rows} rows x {args.simulation_chunk} simulations)")
     t0 = time.time()
     base_key = jax.random.PRNGKey(args.seed + 1)
-    shard_dir = args.out.with_suffix(args.out.suffix + '.shards') if args.out.suffix=='.npz' else args.out
-    if args.out.suffix=='.npz':
+    shard_dir = None if args.out is None else (
+        args.out.with_suffix(args.out.suffix + '.shards') if args.out.suffix=='.npz' else args.out)
+    if args.out is not None and args.out.suffix=='.npz':
         args.out.parent.mkdir(parents=True,exist_ok=True)
         copies = 1+int(not (shard_dir/'manifest.json').exists())
         storage.require_space(args.out.parent,copies*storage.payload_bytes(len(design),args.n_simulations))
     signature = {
         'format_version': 4,
-        'storage_format': storage.FORMAT,
         'estimator': likelihood_em.ESTIMATOR_ID,
         'simulation_code_sha256': _code_digest(),
         'design_sha256': _design_digest(design),
@@ -261,13 +271,21 @@ def main():
     total_chunks = (len(_chunk_ranges(len(design), args.shard_rows))
                     * len(_chunk_ranges(args.n_simulations, args.simulation_chunk)))
     completed_chunks = 0
-    with storage.writer(shard_dir,signature,design,strata) as corpus:
+    outputs = []
+    if shard_dir is not None:
+        outputs.append(('raw', shard_dir, dict(signature, storage_format=storage.FORMAT)))
+    if args.histogram_out is not None:
+        outputs.append(('histogram', args.histogram_out, dict(signature, storage_format=storage.HISTOGRAM_FORMAT,
+                                                              histogram_bins=args.histogram_bins)))
+    with contextlib.ExitStack() as stack:
+        corpora = {kind: stack.enter_context(storage.writer(root, sig, design, strata))
+                   for kind, root, sig in outputs}
         for row_start, row_stop in _chunk_ranges(len(design), args.shard_rows):
             expected = design[row_start:row_stop]
             for sim_start, sim_stop in _chunk_ranges(args.n_simulations,args.simulation_chunk):
                 coordinates = (row_start,row_stop,sim_start,sim_stop)
                 n_chunk = sim_stop-sim_start
-                if args.resume and corpus.valid_tile(coordinates):
+                if args.resume and all(corpus.valid_tile(coordinates) for corpus in corpora.values()):
                     action = 'reused'
                 else:
                     chunk_bias, diagnostic = wnm_simulation.simulate(
@@ -280,9 +298,14 @@ def main():
                         em_stages=args.em_stages, continuation_batch=args.continuation_batch,
                         em_max_iter=args.em_max_iter, return_diagnostics=True,em_backend=args.em_backend,
                         em_starts=args.em_starts)
-                    arrays = dict(bias=np.asarray(chunk_bias),
-                        **{'em_'+k:np.asarray(v) for k,v in diagnostic.items()})
-                    corpus.write_tile(coordinates,arrays)
+                    if 'raw' in corpora:
+                        corpora['raw'].write_tile(coordinates, dict(bias=np.asarray(chunk_bias),
+                            **{'em_'+k:np.asarray(v) for k,v in diagnostic.items()}))
+                    if 'histogram' in corpora:
+                        reduced = jax.device_get(wnm_simulation.histogram_tile(
+                            chunk_bias, diagnostic, args.histogram_bins))
+                        corpora['histogram'].write_tile(coordinates, {name: np.asarray(reduced[name]).astype(dtype)
+                            for name, dtype in storage.HISTOGRAM_DTYPES.items()})
                     action = 'saved'
                 completed_chunks += 1
                 if args.progress_every and (completed_chunks%args.progress_every==0 or completed_chunks==total_chunks):
@@ -293,11 +316,13 @@ def main():
             'idf_diff':wnm_simulation.IDF_DIFF,'dprime_definition':'idf_diff / sd_idf',
             'param_names':list(design_mod.PARAM_NAMES)})
         meta = {k:str(v) if isinstance(v,Path) else v for k,v in meta.items()}
-        corpus.finish(meta)
-    if args.out.suffix=='.npz':
+        for corpus in corpora.values():
+            corpus.finish(meta)
+    if args.out is not None and args.out.suffix=='.npz':
         storage.export_npz(shard_dir,args.out,compress=args.compress)
     elapsed = time.time()-t0
-    print(f'Done in {elapsed:.1f}s ({elapsed/len(design):.2f}s/point); saved {args.out}')
+    saved = ', '.join(str(root) for _, root, _ in outputs)
+    print(f'Done in {elapsed:.1f}s ({elapsed/len(design):.2f}s/point); saved {saved}')
 
 
 if __name__ == '__main__':

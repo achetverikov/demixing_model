@@ -106,6 +106,35 @@ def test_generator_diagnostics_resume_and_stale_estimator_refusal(tmp_path,monke
 
 
 @pytest.mark.gpu
+def test_generator_writes_matching_raw_and_histogram_corpora_from_one_fit(tmp_path,monkeypatch):
+    # Entry-point contract: histograms must be exactly the binned raw outcomes of
+    # the same fits (structured starts, partial final chunk), with equal summaries,
+    # and a histogram-only run must resume without refitting.
+    from surface_computation import simulation_corpus
+    design=tmp_path/'design.npz'
+    np.savez(design,design=np.array([[10.,40.,20.,60.],[3.,120.,80.,170.]],np.float32),strata=['a','b'])
+    raw,hist=tmp_path/'raw',tmp_path/'histograms'
+    common=['generator','--design-file',str(design),'--n-samples','20','--n-simulations','6',
+            '--simulation-chunk','4','--shard-rows','1','--em-backend','cuda','--em-starts','structured',
+            '--histogram-bins','36','--resume']
+    monkeypatch.setattr(sys,'argv',common+['--out',str(raw),'--histogram-out',str(hist)])
+    generator.main()
+    with simulation_corpus.Corpus(raw) as r, simulation_corpus.Corpus(hist) as h:
+        bias=np.asarray(r.arrays['bias'])
+        index=np.floor(np.mod(bias+180.,360.)*36/360.).astype(int)%36
+        expected=np.stack([[np.bincount(index[row,:,item],minlength=36) for item in (0,1)] for row in range(2)])
+        np.testing.assert_array_equal(h.histograms(),expected)
+        assert h.meta['em_summary']==r.meta['em_summary']
+        assert h.signature['em_starts']=='structured' and h.signature['histogram_bins']==36
+        assert h.arrays['histogram'].shape==(2,2,2,36)
+    def unexpected(*args,**kwargs):
+        raise AssertionError('completed shards must resume without another fit')
+    monkeypatch.setattr(generator.wnm_simulation,'simulate',unexpected)
+    monkeypatch.setattr(sys,'argv',common+['--histogram-out',str(hist)])
+    generator.main()
+
+
+@pytest.mark.gpu
 @pytest.mark.parametrize('full',[False,True])
 def test_raw_grid_preserves_nondivisible_trial_counts_and_checks_diagnostics(tmp_path,monkeypatch,full,request):
     # Routing test: use a small analytic simulator stub, rather than refitting.

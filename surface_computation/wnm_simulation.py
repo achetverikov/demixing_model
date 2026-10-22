@@ -22,6 +22,7 @@ from surface_computation.wnm_design import SIM_IDF_DIFF
 
 from surface_computation import jax_fit_main as jfm
 from surface_computation import em_batch, cuda_em
+from surface_computation.simulation_corpus import HISTOGRAM_COUNTS
 from surface_computation import likelihood_em as em
 
 #: Identifiability separation used by the maintained Demixing Model simulator.
@@ -216,6 +217,34 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
     if return_diagnostics:
         return bias, jax.tree.map(lambda *values: jnp.concatenate(values, axis=0), *diagnostics)
     return bias
+
+
+@partial(jax.jit, static_argnames=['bins'])
+def histogram_tile(bias, diagnostic, bins):
+    """One simulation chunk as histogram-corpus arrays, reduced on device.
+
+    ``bias`` is ``(rows, trials, 2)`` from :func:`simulate`; ``diagnostic`` its
+    per-trial diagnostics. Returns ``histogram (rows, 1, 2, bins)`` counts over
+    half-open circular bins from -180 deg (+180 wraps to bin 0, as in
+    ``shared.mu_feat_axis``), ``counts (rows, 1, len(HISTOGRAM_COUNTS))`` and
+    ``max_iterations (rows, 1)``. Masked (NaN) trials are left out of the counts.
+    """
+    rows = bias.shape[0]
+    finite = jnp.isfinite(bias)
+    index = jnp.floor(jnp.mod(jnp.where(finite, bias, 0.)+180., 360.)*(bins/360.)).astype(jnp.int32)
+    index = jnp.minimum(index, bins-1)
+    cell = (jnp.arange(rows)[:, None, None]*2+jnp.arange(2)[None, None, :])*bins+index
+    histogram = jnp.zeros(rows*2*bins, jnp.int32).at[cell.ravel()].add(finite.ravel().astype(jnp.int32))
+    sums = dict(selected_cap_hits=~diagnostic['converged'],
+                capped_losing_starts=diagnostic['capped_starts'],
+                nonfinite_starts=diagnostic['nonfinite_starts'],
+                material_decreases=diagnostic['material_decreases'],
+                continued_winners=diagnostic['continued_winner'],
+                repaired_fits=diagnostic['repaired'], masked_fits=diagnostic['masked'])
+    counts = jnp.stack([jnp.sum(jnp.asarray(sums[name]).astype(jnp.int32), axis=1)
+                        for name in HISTOGRAM_COUNTS], axis=-1)
+    return dict(histogram=histogram.reshape(rows, 1, 2, bins), counts=counts[:, None],
+                max_iterations=jnp.max(diagnostic['iterations'], axis=1)[:, None].astype(jnp.int32))
 
 
 def flatten_with_mirror(design, bias):
