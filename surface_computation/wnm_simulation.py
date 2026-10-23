@@ -220,9 +220,11 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
     return bias
 
 
-#: int32 device sums: per-trial counts reach at most this many starts, so a call
-#: may reduce at most 2**31 // MAX_COUNT_PER_TRIAL trials per row.
-MAX_COUNT_PER_TRIAL = 1024
+#: Diagnostic counts are summed on the device in blocks of this many trials and
+#: the blocks are added in int64 on the host. Per-trial counts (for example
+#: likelihood-decrease events over all iterations and starts) are checked to stay
+#: below 2**31 // COUNT_BLOCK, so no int32 block sum can overflow.
+COUNT_BLOCK = 256
 
 
 def bin_index(bias, bins):
@@ -242,23 +244,31 @@ def bin_index(bias, bins):
 
 
 def histogram_tile(bias, diagnostic, bins):
-    """One simulation chunk as histogram-corpus arrays, reduced on device.
+    """One simulation chunk as histogram-corpus arrays, binned on device.
 
     ``bias`` is ``(rows, trials, 2)`` from :func:`simulate`; ``diagnostic`` its
-    per-trial diagnostics. Returns ``histogram (rows, 1, 2, bins)`` counts over
-    the bins of :func:`shared.wnm.histogram_edges` (see :func:`bin_index`),
-    ``counts (rows, 1, len(HISTOGRAM_COUNTS))`` and ``max_iterations (rows, 1)``.
-    Masked (NaN) trials are left out of the histogram counts.
+    per-trial diagnostics. Returns host arrays: ``histogram (rows, 1, 2, bins)``
+    counts over the bins of :func:`shared.wnm.histogram_edges` (see
+    :func:`bin_index`), ``counts (rows, 1, len(HISTOGRAM_COUNTS))`` in int64 and
+    ``max_iterations (rows, 1)``. Masked (NaN) trials are left out of the
+    histogram counts.
     """
-    if bias.shape[1] > 2**31 // MAX_COUNT_PER_TRIAL:
-        raise ValueError(f'{bias.shape[1]} trials per row could overflow int32 diagnostic sums; '
-                         f'use at most {2**31 // MAX_COUNT_PER_TRIAL} per call')
-    return _histogram_tile(bias, diagnostic, bins)
+    if bins < 2:
+        raise ValueError('histograms need at least two bins')
+    if bias.shape[1] >= 2**31:
+        raise ValueError('too many trials per row for int32 histogram counts')
+    reduced = jax.device_get(_histogram_tile(bias, diagnostic, bins))
+    if reduced['max_count'] >= 2**31 // COUNT_BLOCK:
+        raise ValueError(f'a per-trial diagnostic count of {reduced["max_count"]} could overflow '
+                         f'int32 block sums of {COUNT_BLOCK} trials')
+    return dict(histogram=reduced['histogram'],
+                counts=reduced['count_blocks'].sum(axis=1, dtype=np.int64)[:, None],
+                max_iterations=reduced['max_iterations'])
 
 
 @partial(jax.jit, static_argnames=['bins'])
 def _histogram_tile(bias, diagnostic, bins):
-    rows = bias.shape[0]
+    rows, trials = bias.shape[:2]
     finite = jnp.isfinite(bias)
     index = bin_index(jnp.where(finite, bias, 0.), bins)
     cell = (jnp.arange(rows)[:, None, None]*2+jnp.arange(2)[None, None, :])*bins+index
@@ -269,9 +279,12 @@ def _histogram_tile(bias, diagnostic, bins):
                 material_decreases=diagnostic['material_decreases'],
                 continued_winners=diagnostic['continued_winner'],
                 repaired_fits=diagnostic['repaired'], masked_fits=diagnostic['masked'])
-    counts = jnp.stack([jnp.sum(jnp.asarray(sums[name]).astype(jnp.int32), axis=1)
-                        for name in HISTOGRAM_COUNTS], axis=-1)
-    return dict(histogram=histogram.reshape(rows, 1, 2, bins), counts=counts[:, None],
+    per_trial = jnp.stack([jnp.asarray(sums[name]).astype(jnp.int32) for name in HISTOGRAM_COUNTS], axis=-1)
+    padded = -(-trials // COUNT_BLOCK) * COUNT_BLOCK
+    per_trial = jnp.pad(per_trial, ((0, 0), (0, padded - trials), (0, 0)))
+    count_blocks = per_trial.reshape(rows, padded // COUNT_BLOCK, COUNT_BLOCK, -1).sum(axis=2)
+    return dict(histogram=histogram.reshape(rows, 1, 2, bins), count_blocks=count_blocks,
+                max_count=jnp.max(per_trial),
                 max_iterations=jnp.max(diagnostic['iterations'], axis=1)[:, None].astype(jnp.int32))
 
 

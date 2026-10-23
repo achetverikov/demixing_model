@@ -79,8 +79,19 @@ def test_histogram_corpus_trains_and_packages(tmp_path, monkeypatch):
                                       "--out", str(checkpoint), "--steps", "1"])
     with pytest.raises(SystemExit):
         train.main()
+    monkeypatch.setattr(sys, "argv", ["train", "--source", str(raw_source), "--selection-reference", str(source),
+                                      "--out", str(checkpoint), "--steps", "1"])
+    with pytest.raises(SystemExit):
+        train.main()
     monkeypatch.setattr(sys, "argv", common + ["--holdout-fraction", "0.25", "--checkpoint-metric", "final"])
     train.main()
+    # A different test set must not be fine-tuned from a model that may have seen it.
+    tuned = tmp_path / "tuned.pkl"
+    monkeypatch.setattr(sys, "argv", [a if a != str(checkpoint) else str(tuned) for a in common]
+                        + ["--holdout-fraction", "0.5", "--init-model", str(checkpoint)])
+    with pytest.raises(SystemExit):
+        train.main()
+    assert not tuned.exists()
     meta = pickle.loads(checkpoint.read_bytes())["meta"]
     assert meta["training_objective"] == "histogram_bin_cross_entropy" and meta["histogram_bins"] == 36
     assert meta["holdout"]["rows"] == 2 and meta["selected_step"] == 2 and meta["checkpoint_selection"] == "final_step"

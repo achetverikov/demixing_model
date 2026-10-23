@@ -274,13 +274,53 @@ def test_device_binning_matches_the_exact_float32_edges(bins):
     values = np.concatenate([edges, np.nextafter(edges, np.float32(-np.inf)), np.nextafter(edges, np.float32(np.inf)),
                              np.float32([179.99998474121094, 0.4999999701976776, 180., -180., 539.5, -540.])]).astype(np.float32)
     # XLA flushes denormals to zero, so the denormal neighbours of 0 are not meaningful here.
-    values = values[(np.abs(values) < 540.) & ((values == 0) | (np.abs(values) >= np.finfo(np.float32).tiny))]
+    values = values[(values >= -540.) & (values < 540.) & ((values == 0) | (np.abs(values) >= np.finfo(np.float32).tiny))]
     np.testing.assert_array_equal(np.asarray(wnm_simulation.bin_index(values, bins)),
                                   reference_bins(values, bins) % bins)
 
 
-def test_histogram_reduction_refuses_calls_that_could_overflow_int32_sums():
+def diagnostic_stub(trials, decreases):
+    zeros = np.zeros((1, trials), np.int32)
+    return dict(converged=np.ones((1, trials), bool), capped_starts=zeros, nonfinite_starts=zeros,
+                material_decreases=np.full((1, trials), decreases, np.int32),
+                continued_winner=np.zeros((1, trials), bool), repaired=np.zeros((1, trials), bool),
+                masked=np.zeros((1, trials), bool), iterations=np.ones((1, trials), np.int32))
+
+
+def test_histogram_diagnostic_sums_are_exact_beyond_int32_and_refuse_unsafe_counts():
+    # Likelihood-decrease events count over iterations and starts, so one chunk's
+    # total can exceed int32 although each trial's count fits.
     from surface_computation import wnm_simulation
-    trials = 2**31 // wnm_simulation.MAX_COUNT_PER_TRIAL + 1
-    with pytest.raises(ValueError, match='overflow int32'):
-        wnm_simulation.histogram_tile(np.zeros((1, trials, 2), np.float32), {}, 720)
+    bias = np.zeros((1, 5000, 2), np.float32)
+    out = wnm_simulation.histogram_tile(bias, diagnostic_stub(5000, 1_000_000), 720)
+    assert out['counts'][0, 0, storage.HISTOGRAM_COUNTS.index('material_decreases')] == 5_000_000_000
+    with pytest.raises(ValueError, match='overflow'):
+        wnm_simulation.histogram_tile(bias, diagnostic_stub(5000, 2**31 // wnm_simulation.COUNT_BLOCK), 720)
+    with pytest.raises(ValueError, match='two bins'):
+        wnm_simulation.histogram_tile(bias, diagnostic_stub(5000, 0), 1)
+
+
+def test_tile_checksums_accept_the_sorted_order_only_for_older_manifests(tmp_path, example):
+    # Corpora written between e8cae26 and 6a96350 hold sorted-order checksums;
+    # new manifests (tile_digest_order 'declared') accept the declared order only.
+    import sqlite3
+    design,strata,signature,arrays = example
+    for order, accepted in ((None, True), ('declared', False)):
+        sig = dict(signature) if order is None else dict(signature, tile_digest_order=order)
+        root = tmp_path/f'corpus_{order}'
+        with storage.writer(root,sig,design,strata) as corpus:
+            coordinates = corpus.coordinates(0,0)
+            corpus.write_tile(coordinates,{k:v[:2,:3] for k,v in arrays.items()})
+            legacy = storage.tile_digest(corpus.identity,coordinates,corpus.tile(coordinates),sorted(storage.DTYPES))
+            with sqlite3.connect(root/'tiles.sqlite3') as db:
+                db.execute('UPDATE tiles SET digest=? WHERE row_start=0 AND sim_start=0',(legacy,))
+            assert corpus.valid_tile(coordinates) == accepted
+
+
+def test_without_groups_removes_exact_parameter_groups(example):
+    design,strata,signature,arrays = example
+    store = data.SampleStore(design,arrays['bias'])
+    # Rows 0/1 and 2/3 are mirror twins sharing a group, so both twins must go.
+    kept, removed = data.without_groups(store, data.group_keys(store.subset([0, 2])))
+    assert removed == 4 and kept.n_rows == 1
+    assert not (data.group_keys(kept) & data.group_keys(store.subset([0, 2])))

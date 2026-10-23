@@ -205,6 +205,21 @@ def split_by_params(store: SampleStore, val_fraction: float = 0.1, seed: int = 0
     return store.subset(~is_val), store.subset(is_val)
 
 
+def group_keys(store) -> set:
+    """Mirror-invariant parameter groups of a store, as exact float tuples."""
+    return set(map(tuple, store.canonical_param_key().tolist()))
+
+
+def without_groups(store, keys):
+    """Rows of ``store`` outside the parameter groups ``keys``, and how many were removed.
+
+    Matching is exact on the canonical SD triple, so it removes the same groups
+    from another corpus on the same design, not merely nearby parameter values.
+    """
+    inside = np.array([key in keys for key in map(tuple, store.canonical_param_key().tolist())], bool)
+    return store.subset(~inside), int(inside.sum())
+
+
 def load_npz(path):
     """Load an NPZ written by :mod:`surface_computation.generate_wnm_training_data`.
 

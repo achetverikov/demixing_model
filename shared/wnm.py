@@ -51,8 +51,11 @@ def histogram_edges(bins: int) -> np.ndarray:
 
     Bin ``j`` holds ``edges[j] <= b < edges[j + 1]``, from -180 to +180 degrees;
     +180 is the same angle as -180 and belongs to bin 0. Histogram corpora and the
-    histogram training objective both use exactly these float32 edges.
+    histogram training objective both use exactly these float32 edges. At least
+    two bins are required: with one, the closed circle has no interior edge.
     """
+    if bins < 2:
+        raise ValueError('histograms need at least two bins')
     return (-180.0 + np.arange(bins + 1) * (PERIOD / bins)).astype(np.float32)
 
 

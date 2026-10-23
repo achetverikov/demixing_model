@@ -76,9 +76,10 @@ def make_histogram_loss(model, bins: int, n_wraps: int):
 
     Scores each bin's probability mass under the predicted mixture, not the
     density at bin centres, so it stays bounded for components narrower than a
-    bin. It is the likelihood of the outcomes' bin labels. Subtracting
-    ``log(bin width)`` gives a piecewise-constant density score, which is close
-    to, but generally not equal to, the raw-outcome NLL of the same outcomes.
+    bin. It is the likelihood of the outcomes' bin labels. Adding
+    ``log(bin width)`` (``-log(p / width) = -log(p) + log(width)``) gives a
+    piecewise-constant density score, which is close to, but generally not equal
+    to, the raw-outcome NLL of the same outcomes.
     """
     @jax.jit
     def loss_fn(variables, x, freq, w):
@@ -279,10 +280,11 @@ def main():
         if args.histogram_batch < 1:
             p.error('--histogram-batch must be positive')
         args.batch_size = args.histogram_batch
-    holdout_meta = None
+    holdout_meta = test_keys = None
     if args.holdout_fraction:
         store, test_store = data_mod.split_by_params(store, args.holdout_fraction, seed=args.holdout_seed)
         holdout_meta = dict(fraction=args.holdout_fraction, seed=args.holdout_seed, rows=test_store.n_rows)
+        test_keys = data_mod.group_keys(test_store)
         print(f"held out {test_store.n_rows} rows by parameter group for testing; "
               f"excluded from training and selection")
     train_store, val_store = data_mod.split_by_params(
@@ -299,6 +301,10 @@ def main():
         augmentation_strata = augmentation_meta.pop('strata', None)
         if augmentation_strata:
             augmentation_meta['n_trajectory_labels'] = len(set(augmentation_strata))
+        if test_keys is not None:
+            augmentation, removed = data_mod.without_groups(augmentation, test_keys)
+            augmentation_meta['holdout_rows_removed'] = removed
+            print(f"augmentation: removed {removed} rows in held-out parameter groups")
         augmentation_train, augmentation_val = data_mod.split_by_params(
             augmentation, args.val_fraction, seed=args.seed)
         data_mod.require_matching_n_samples(
@@ -316,6 +322,8 @@ def main():
         if not selection_labels:
             raise ValueError('--selection-reference must contain trajectory labels')
         selection_meta['n_trajectory_labels'] = len(set(selection_labels))
+        if test_keys is not None and data_mod.group_keys(selection_store) & test_keys:
+            p.error('--selection-reference shares parameter groups with the --holdout-fraction test set')
         data_mod.require_matching_n_samples({'source_meta': source_meta}, selection_meta)
         print(f'selection reference: {selection_store.n_rows} rows x '
               f'{selection_store.bias.shape[1]} simulations')
@@ -326,6 +334,9 @@ def main():
             raise ValueError(f'--components={args.components} does not match initialized '
                              f'model K={model.n_components}')
         data_mod.require_matching_n_samples(init_meta, source_meta)
+        if holdout_meta is not None and init_meta.get('holdout') != holdout_meta:
+            p.error('--init-model was not trained with the same --holdout-fraction/--holdout-seed '
+                    'test set, so it may have seen the held-out groups')
         print(f'Fine-tuning {args.init_model}')
     else:
         model = wm.ConditionalWrappedMixture(
@@ -398,7 +409,7 @@ def main():
             print(f"step {step:6d}  train {float(loss):8.4f}  val {val_nll:8.4f}"
                   f"{detail}  ({time.time() - t0:.0f}s)", flush=True)
 
-    if selected_step is None:
+    if selected_step is None or not np.isfinite(best[0]):
         raise ValueError("No finite checkpoint-selection score; refusing to save unselected weights")
     # Record the actual training design, including mirror augmentation. This is
     # a coverage box, not evidence of held-out predictive accuracy.

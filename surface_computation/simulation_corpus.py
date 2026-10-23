@@ -167,6 +167,8 @@ class HistogramLayout:
     def __init__(self, signature):
         self.signature = signature
         self.bins = int(signature['histogram_bins'])
+        if self.bins < 2:
+            raise ValueError('histogram corpora need at least two bins')
         self.chunk = int(signature['simulation_chunk'])
 
     def shape(self, name, rows, simulations):
@@ -272,6 +274,19 @@ class Corpus:
             raise ValueError('only histogram corpora store histograms')
         return self.arrays['histogram'].sum(axis=1, dtype=np.int64)
 
+    def accepted_digests(self, coordinates, arrays):
+        """Tile checksums this corpus can legitimately hold.
+
+        Corpora whose manifest records ``tile_digest_order: 'declared'`` accept
+        only the layout's declared array order. Older manifests accept that order
+        and also sorted array names, which corpora written between commits
+        e8cae26 and 6a96350 used.
+        """
+        digests = {tile_digest(self.identity,coordinates,arrays,self.layout.dtypes)}
+        if self.signature.get('tile_digest_order')!='declared':
+            digests.add(tile_digest(self.identity,coordinates,arrays,sorted(self.layout.dtypes)))
+        return digests
+
     def valid_tile(self, coordinates):
         a,b,c,d = coordinates
         saved = self.db.execute('SELECT row_stop,sim_stop,digest,summary FROM tiles WHERE row_start=? AND sim_start=?', (a,c)).fetchone()
@@ -279,7 +294,7 @@ class Corpus:
             return False
         try:
             arrays = self.tile(coordinates)
-            return (saved[:2]==(b,d) and saved[2]==tile_digest(self.identity,coordinates,arrays,self.layout.dtypes)
+            return (saved[:2]==(b,d) and saved[2] in self.accepted_digests(coordinates,arrays)
                     and json.loads(saved[3])==self.layout.summary(arrays))
         finally:
             for array in self.arrays.values():

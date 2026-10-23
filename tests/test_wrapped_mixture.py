@@ -391,12 +391,18 @@ def test_bin_masses_match_exact_gaussian_sums_across_the_seam(bins):
             np.testing.assert_allclose(p.sum(), 1., atol=3e-7)
 
 
+def test_histograms_need_at_least_two_bins():
+    with pytest.raises(ValueError, match='two bins'):
+        wm.histogram_edges(1)
+
+
 def test_branch_switch_gradients_are_exact_at_the_switch():
     # jnp.minimum/maximum would halve the derivative at exactly sigma_switch;
     # a float32 central difference resolves the derivative far better than 2x.
     cases = {
         'logpdf': lambda s: wm.wrapped_normal_logpdf(jnp.float32(25.), jnp.float32(10.), s),
-        'bin': lambda s: wm.wrapped_normal_bin_probabilities(np.array([20., 20.5], np.float32), jnp.float32(10.), s)[0],
+        # One real bin, [20, 20.5), of the full-circle edges the function requires.
+        'bin': lambda s: wm.wrapped_normal_bin_probabilities(wm.histogram_edges(720), jnp.float32(10.), s)[400],
         'asymmetry': lambda s: wm.density_asymmetry(
             {'log_pi': jnp.zeros(1), 'mu': jnp.array([10.]), 'sigma': jnp.stack([s])}),
     }

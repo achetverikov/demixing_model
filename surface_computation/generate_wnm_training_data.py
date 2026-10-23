@@ -162,8 +162,8 @@ def main():
     args = p.parse_args()
     if args.out is None and args.histogram_out is None:
         p.error('provide --out (raw corpus), --histogram-out, or both')
-    if args.histogram_bins < 1:
-        p.error('--histogram-bins must be positive')
+    if args.histogram_bins < 2:
+        p.error('--histogram-bins must be at least 2')
     if args.compress and (args.out is None or args.out.suffix!='.npz'):
         p.error('--compress applies to an explicit .npz export; directory corpora use mapped arrays')
     design_seed = args.seed if args.design_seed is None else args.design_seed
@@ -266,6 +266,7 @@ def main():
         'em_max_iter': args.em_max_iter,
         'em_backend': args.em_backend,
         'em_starts': args.em_starts,
+        'tile_digest_order': 'declared',
         'em_backend_build': cuda_em.build_identity() if args.em_backend == 'cuda' else None,
     }
     total_chunks = (len(_chunk_ranges(len(design), args.shard_rows))
