@@ -32,7 +32,7 @@ def test_browser_opens_direct_wnm_view_without_surface_files(monkeypatch):
 
     browser = Path(__file__).resolve().parents[1] / "surface_browser"
     monkeypatch.chdir(browser)
-    app = AppTest.from_file("main_app.py", default_timeout=30).run()
+    app = AppTest.from_file(str(browser / "main_app.py"), default_timeout=30).run()
 
     assert not app.exception
     assert app.title[0].value == "🌊 Demixing-model Prediction Browser"

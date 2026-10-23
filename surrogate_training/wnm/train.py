@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Train the conditional wrapped-normal mixture on simulated EM bias outcomes.
 
-With a raw-outcome source the objective is the negative log likelihood of
-individual simulated biases. With a histogram corpus
-(``generate_wnm_training_data --histogram-out``) it is the cross-entropy of each
-cell's binned outcome frequencies under the predicted mixture's per-bin
-probability mass. Model, schedule, parameter-group split and checkpoint
+With a histogram corpus (``generate_wnm_training_data --out``) the objective is
+the cross-entropy of each cell's binned outcome frequencies under the predicted
+mixture's per-bin probability mass. With a raw-outcome source (``--raw-out``) it
+is the negative log likelihood of individual simulated biases. Model, schedule, parameter-group split and checkpoint
 selection are shared. No KDE or likelihood surface is constructed.
 
 Usage (from the repo root)::

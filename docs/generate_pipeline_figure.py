@@ -93,7 +93,8 @@ def _response_surfaces(predictions):
     bias_grid = mu_feat_grid_np()
     responses = np.asarray(simulate(jax.random.PRNGKey(7), design,
                                     n_simulations=200, n_samples=n_samples,
-                                    block_rows=4))[:, :, 0]
+                                    block_rows=4, em_backend='jax',
+                                    em_starts='random'))[:, :, 0]
     # Masked (failed) simulation trials are NaN; leave them out and record how many.
     counts = np.stack([np.bincount(bin_indices_np(row[np.isfinite(row)]), minlength=len(bias_grid))
                        for row in responses])

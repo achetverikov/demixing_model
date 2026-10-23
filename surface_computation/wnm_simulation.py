@@ -121,8 +121,8 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
              block_rows: int = 1, progress: bool = False,
              row_offset: int = 0, simulation_offset: int = 0,
              common_random_groups=None, em_stages=None, continuation_batch=None,
-             return_diagnostics=False, em_max_iter=em.MAX_ITER, em_backend='jax',
-             em_starts='random'):
+             return_diagnostics=False, em_max_iter=em.MAX_ITER, em_backend='cuda',
+             em_starts='structured'):
     """Simulate raw EM bias outcomes for a continuous parameter design.
 
     Args:
@@ -144,9 +144,10 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
             up to 25000 updates. None uses the native compiled loop.
         continuation_batch: optional limit on packed continuation starts.
         return_diagnostics: also return per-trial likelihood/convergence arrays.
-        em_backend: 'jax' or the optional persistent 'cuda' backend.
-        em_starts: 'random' (225 random starts) or 'structured', the deterministic
-            data-derived bank of :mod:`structured_starts` (CUDA only).
+        em_backend: the persistent 'cuda' backend (default; NVIDIA GPU and nvcc)
+            or the portable 'jax' EM.
+        em_starts: 'structured' (default), the deterministic data-derived bank of
+            :mod:`structured_starts` (CUDA only), or 'random' (225 random starts).
 
     Returns:
         ``(M, n_simulations, 2)`` float32 array of mu_feat_bias in degrees.

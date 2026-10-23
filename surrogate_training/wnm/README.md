@@ -27,12 +27,12 @@ python -m surrogate_training.wnm.train \
   --out /path/to/run_checkpoint.pkl
 ```
 
-With a raw corpus, training minimizes the negative log-likelihood of the raw simulated biases. With a histogram corpus (`--histogram-out` in the generator), it minimizes the cross-entropy of each cell's binned outcome frequencies under the predicted mixture's per-bin probability mass, using the generator's bins; `--histogram-batch` sets the cell-items per step. Model, schedule, held-out parameter-group split and checkpoint selection are shared. `--holdout-fraction` additionally removes a test set of parameter groups from training and selection, and `--checkpoint-metric final` keeps the last step. The checkpoint records the objective, sample count, selected step, architecture, hold-out, timings and training parameter bounds, including the swapped-item examples.
+With a histogram corpus (the generator's default `--out`), training minimizes the cross-entropy of each cell's binned outcome frequencies under the predicted mixture's per-bin probability mass, using the generator's bins; `--histogram-batch` sets the cell-items per step. With a raw corpus (`--raw-out`), it minimizes the negative log-likelihood of the raw simulated biases. Model, schedule, held-out parameter-group split and checkpoint selection are shared. `--holdout-fraction` additionally removes a test set of parameter groups from training and selection, and `--checkpoint-metric final` keeps the last step. The checkpoint records the objective, sample count, selected step, architecture, hold-out, timings and training parameter bounds, including the swapped-item examples.
 
-Completed directory corpora use memory-mapped bias arrays. Minibatches fetch only
-their selected outcomes; parameter-group train/validation splits keep row-index
-views, and trajectory-reference evaluation reads 16 rows at a time. All raw
-diagnostics remain available in the corpus. Existing NPZ and legacy grid sources
+Completed directory corpora use memory-mapped arrays (bin counts, or raw biases).
+Minibatches fetch only their selected outcomes; parameter-group train/validation splits keep row-index
+views, and trajectory-reference evaluation reads 16 rows at a time. Raw corpora keep all per-trial
+diagnostics; histogram corpora keep their per-cell sums. Existing NPZ and legacy grid sources
 are also supported; an NPZ bias member is loaded into RAM because ZIP members
 cannot be memory-mapped directly.
 

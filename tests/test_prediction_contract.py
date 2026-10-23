@@ -305,7 +305,9 @@ def test_surface_asymmetry_matches_the_historical_implementation():
     got = np.asarray(predictor.signed_arc_asymmetry(indices))
     expected = np.stack([np.asarray(compute_single_density_asymmetry(
         surface, indices, grid, apply_smoothing=False)) for surface in surfaces])
-    np.testing.assert_array_equal(got, expected)
+    # Same estimator; float32 reduction order moves the integrated mass differences
+    # (unnormalized here, column masses ~300) by a few ULPs.
+    np.testing.assert_allclose(got, expected, rtol=0, atol=1e-4)
 
 
 def test_surface_smoothed_curve_matches_the_historical_implementation():
@@ -319,7 +321,9 @@ def test_surface_smoothed_curve_matches_the_historical_implementation():
     expected = np.stack([np.asarray(compute_single_density_asymmetry(
         surface, indices, grid, apply_smoothing=True, smoothing_sigma=10.0))
         for surface in surfaces])
-    np.testing.assert_array_equal(got, expected)
+    # Same estimator; float32 reduction order moves the integrated mass differences
+    # (unnormalized here, column masses ~300) by a few ULPs.
+    np.testing.assert_allclose(got, expected, rtol=0, atol=1e-4)
 
 
 def test_surface_predictor_will_not_pretend_to_apply_motor_noise():

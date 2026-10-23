@@ -67,9 +67,9 @@ def test_generator_diagnostics_resume_and_stale_estimator_refusal(tmp_path,monke
     design=tmp_path/'design.npz';out=tmp_path/('generated.npz' if backend=='jax' else 'generated')
     points=np.array([[10.,10.,10.,60.],[20.,10.,10.,100.]],np.float32)
     np.savez(design,design=points,strata=['curve_a','curve_a'])
-    args=['generator','--design-file',str(design),'--out',str(out),'--n-samples','4',
+    args=['generator','--design-file',str(design),'--raw-out',str(out),'--n-samples','4',
           '--n-simulations','2','--simulation-chunk','2','--shard-rows','2','--block-rows','2',
-          '--em-backend',backend,'--resume','--crn-within-trajectories']
+          '--em-backend',backend,'--em-starts','random','--resume','--crn-within-trajectories']
     if backend == 'jax':
         args += ['--em-stages','5','50','5000']
     monkeypatch.setattr(sys,'argv',args)
@@ -118,7 +118,7 @@ def test_generator_writes_matching_raw_and_histogram_corpora_from_one_fit(tmp_pa
     common=['generator','--design-file',str(design),'--n-samples','20','--n-simulations','6',
             '--simulation-chunk','4','--shard-rows','1','--em-backend','cuda','--em-starts','structured',
             '--histogram-bins','36','--resume']
-    monkeypatch.setattr(sys,'argv',common+['--out',str(raw),'--histogram-out',str(hist)])
+    monkeypatch.setattr(sys,'argv',common+['--raw-out',str(raw),'--out',str(hist)])
     generator.main()
     with simulation_corpus.Corpus(raw) as r, simulation_corpus.Corpus(hist) as h:
         bias=np.asarray(r.arrays['bias'])
@@ -132,7 +132,7 @@ def test_generator_writes_matching_raw_and_histogram_corpora_from_one_fit(tmp_pa
     def unexpected(*args,**kwargs):
         raise AssertionError('completed shards must resume without another fit')
     monkeypatch.setattr(generator.wnm_simulation,'simulate',unexpected)
-    monkeypatch.setattr(sys,'argv',common+['--histogram-out',str(hist)])
+    monkeypatch.setattr(sys,'argv',common+['--out',str(hist)])
     generator.main()
 
 
@@ -179,3 +179,12 @@ def test_raw_grid_preserves_nondivisible_trial_counts_and_checks_diagnostics(tmp
     monkeypatch.setattr(grid.config,'samples_folder',tmp_path/grid.build_samples_folder_name(1000,500,'EM',True,False))
     second=grid.run_path(tmp_path/'explicit_surfaces')
     assert first!=second and grid.run_path(second)==second
+
+
+def test_generator_refuses_npz_histogram_output(tmp_path,monkeypatch,capsys):
+    # --out is the histogram directory corpus; an old raw-export command must fail, not write histograms.
+    monkeypatch.setattr(sys,'argv',['generator','--out',str(tmp_path/'data.npz')])
+    with pytest.raises(SystemExit):
+        generator.main()
+    assert 'an .npz export is raw (--raw-out)' in capsys.readouterr().err
+    assert not (tmp_path/'data.npz').exists()

@@ -18,12 +18,16 @@ python -m surface_computation.generate_wnm_training_data \
 - `--n-points` sets the number of parameter combinations in the design.
 - `--n-simulations` sets the repeated simulations per design point.
 
-The directory corpus stores the parameter design, raw feature-bias outcomes for
-both items, all EM diagnostics and generation metadata. The
-[training tools](../surrogate_training/wnm/README.md) read it directly.
+`--out` writes a per-cell histogram corpus (below); `--raw-out DIR` writes the raw
+per-trial corpus instead of, or alongside, it from the same fits. The raw corpus
+stores the parameter design, raw feature-bias outcomes for both items, all EM
+diagnostics and generation metadata. The
+[training tools](../surrogate_training/wnm/README.md) read either directly.
+By default the generator uses the CUDA EM backend with structured starts (below);
+`--em-backend jax --em-starts random` selects the portable JAX EM.
 
 The observer uses likelihood EM with soft component and winding probabilities,
-225 starts, SDs bounded below by 1 and component weights bounded below by 0.1.
+multiple starts (structured by default, or 225 random), SDs bounded below by 1 and component weights bounded below by 0.1.
 Both likelihood and parameter changes must stabilize. All starts receive up to
 5,000 updates; a capped selected winner continues from its cached state up to
 25,000. Capped, nonfinite or likelihood-decreasing losing starts remain counted.
@@ -38,7 +42,7 @@ generator (`simulated_samples_grid.py`) deliberately stays strict and refuses an
 failed selected fit.
 The fit is a multistart local search; it does not certify a global optimum.
 
-Each corpus includes per-trial `em_*` diagnostics and selected
+Each raw corpus includes per-trial `em_*` diagnostics and selected
 `em_parameters` of shape `(rows, trials, 5, 2)`, in raw fit order, with fields
 `(weight, feature mean, identifying mean, feature SD, identifying SD)`.
 These parameters allow inspection of floor-bound spikes and nearly uniform
@@ -61,7 +65,7 @@ logical RNG tiles, even though tiles now occupy slices in shared array files.
 Existing NPZ files remain readable; older NPZ-tile checkpoint directories cannot
 resume as this new storage format. No existing outcomes are silently migrated.
 
-To request an optional consolidated export, use `--out /path/to/data.npz`; the
+To request an optional consolidated raw export, use `--raw-out /path/to/data.npz`; the
 durable directory is then `/path/to/data.npz.shards`. Export streams in bounded
 buffers but needs space for a second copy; initial generation checks capacity.
 You can also export a completed directory later:
@@ -75,8 +79,7 @@ Use `python -m surface_computation.simulation_corpus /path/to/training_data
 checks completion, array schemas and the coverage index; it relies on the
 validated payload remaining immutable rather than rereading all diagnostics.
 
-`--histogram-out DIR` writes a per-cell histogram corpus instead of, or alongside,
-the raw `--out` corpus, from the same fits. For each design row and simulation chunk
+The histogram corpus (`--out DIR`): for each design row and simulation chunk
 it stores counts of both items' biases in `--histogram-bins` (default 720) half-open
 circular bins from -180 degrees, the number of masked trials, and summed EM
 diagnostics; `Corpus.histograms()` returns per-row totals. Masked trials appear in
@@ -111,13 +114,14 @@ preserves random keys; float32 compilation context can change arithmetic by a
 few ULPs and change selection among nearly tied optima. Simulation chunk size
 and row batch size are recorded in the resume fingerprint.
 
-For the maintained free-weight, wrapped-feature/linear-identifying model, add
-`--em-backend cuda` to use persistent SQUAREM-accelerated EM at N=4,10,20,100,500.
-This optional backend requires an NVIDIA GPU and `nvcc` on PATH; it builds its
-packaged CUDA sources once under `/tmp/demixing_cuda_em`. The default remains
-`--em-backend jax`. Unsupported CUDA configurations fail explicitly.
+For the maintained free-weight, wrapped-feature/linear-identifying model, the
+default `--em-backend cuda` uses persistent SQUAREM-accelerated EM at
+N=4,10,20,100,500. It requires an NVIDIA GPU and `nvcc` on PATH; it builds its
+packaged CUDA sources once under `/tmp/demixing_cuda_em`. Use `--em-backend jax`
+(with `--em-starts random`) for other configurations, fixed weights or staged
+continuation, or without a GPU. Unsupported CUDA configurations fail explicitly.
 
-The CUDA backend retains all 225 starts and the same convergence limits. A GPU
+The CUDA backend retains every start of the selected bank (structured or 225 random) and the same convergence limits. A GPU
 work queue schedules independent starts, capped winners continue from cached
 states and are reselected, and GPU reduction preserves all-start diagnostics
 and the first-index tie rule. JAX owns the buffers and execution stream, so
@@ -126,12 +130,11 @@ Initial statistics are calculated once inside the kernel. The observation loop
 stays rolled to limit compiled kernel size, and the worker pool uses occupancy
 sizing at every supported N.
 
-`--em-starts structured` replaces the 225 random starts with a deterministic
+The default `--em-starts structured` replaces the 225 random starts with a deterministic
 data-derived bank of min(N, 20) + 34 starts (54 at N >= 20), built from hard
 splits and local neighbourhoods of each dataset (`structured_starts.py`). It
-requires the CUDA backend and is recorded in the corpus manifest. The CLI default
-remains `random`; the bank is the selected setting for production corpora at all
-supported N.
+requires the CUDA backend and is recorded in the corpus manifest; it is the
+selected setting for production corpora at all supported N.
 Repairs of failed winners reuse the starts of the original batch fit.
 
 The CUDA kernel shares one EM-update loop body between settling and the two
@@ -156,7 +159,7 @@ coordinates with an adaptive spectral-step cap of 256. Each proposal respects
 the existing parameter bounds and receives an ordinary EM stabilization step;
 it is accepted only if its likelihood reaches the second ordinary iterate.
 Rejected proposals retain that iterate and its cached moments. Selected capped
-winners continue with ordinary EM. Convergence thresholds, all 225 starts and
+winners continue with ordinary EM. Convergence thresholds, all starts and
 the requested simulation count are retained. Different optimization paths can
 find different local optima, so regenerated outcomes can differ from ordinary
 EM. The step cap is an optimizer setting, not an upper SD bound.

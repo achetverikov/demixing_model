@@ -134,7 +134,7 @@ def test_cuda_simulation_uses_native_keys_and_item_readout():
     design = jnp.array([[10., 20., 30., 60.], [20., 10., 30., 100.]])
     key = jax.random.key(31)
     bias, diagnostic = simulation.simulate(key, design, n_simulations=2, n_samples=4,
-        block_rows=2, em_backend='cuda', return_diagnostics=True)
+        block_rows=2, em_backend='cuda', em_starts='random', return_diagnostics=True)
     keys = simulation.simulation_keys(key, 2)
     x, fit_keys = simulation.generate_block(keys, design, 2, 4)
     direct = cuda_em.fit_batch(fit_keys, x)
@@ -156,11 +156,11 @@ def test_cuda_simulation_dispatches_complete_n500_evaluators(monkeypatch):
     design = np.array([[10., 100., 30., 60.], [40., 80., 30., 60.],
                        [50., 100., 30., 60.], [10., 100., 30., 60.]])
     simulation.simulate(jax.random.key(31), design, n_simulations=1,
-                        n_samples=500, block_rows=2, em_backend='cuda')
+                        n_samples=500, block_rows=2, em_backend='cuda', em_starts='random')
     assert routes == [True, False]
     routes.clear()
     simulation.simulate(jax.random.key(31), design[:1], n_simulations=1,
-                        n_samples=20, em_backend='cuda')
+                        n_samples=20, em_backend='cuda', em_starts='random')
     assert routes == [False]
 
 
@@ -189,7 +189,7 @@ def test_cuda_simulation_checks_bounded_groups_before_return(monkeypatch,trials,
     design=jnp.array([[10.,20.,30.,60.]]*3)
     with pytest.raises(em_batch.EMValidationError,match=f'{trials} selected fits still failed'):
         simulation.simulate(jax.random.key(31),design,n_simulations=trials,
-                            n_samples=4,em_backend='cuda')
+                            n_samples=4,em_backend='cuda',em_starts='random')
     assert len(calls)==expected_calls and repairs==[False]
 
 
@@ -245,7 +245,8 @@ def test_structured_starts_route_through_simulation_and_fit_the_bank():
     np.testing.assert_array_equal(bias, simulation.bias_readout(direct, design, 2))
     assert (np.asarray(compact[:, 26]) < structured_starts.count(20)).all()
     with pytest.raises(ValueError, match='require the CUDA'):
-        simulation.simulate(key, design, n_simulations=1, n_samples=20, em_starts='structured')
+        simulation.simulate(key, design, n_simulations=1, n_samples=20, em_backend='jax',
+                            em_starts='structured')
 
 
 def test_cuda_single_image_library_preserves_complete_start_states():

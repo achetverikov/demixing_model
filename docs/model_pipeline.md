@@ -41,10 +41,10 @@ EM estimates the component means, diagonal noise parameters, and mixture weights
 
 | Setting | Value |
 |---|---|
-| Initializations | 225 per simulated trial; retain the best final likelihood |
-| Initial means | Randomly selected evidence samples |
-| Initial SDs | Uniformly sampled from 0.3–2 times the empirical SD |
-| Initial weights | 0.5 for each component |
+| Initializations | Structured (default): a deterministic data-derived bank of min(N, 20) + 34 starts from hard splits and local neighbourhoods; random: 225 starts. Retain the best final likelihood |
+| Initial means (random starts) | Randomly selected evidence samples |
+| Initial SDs (random starts) | Uniformly sampled from 0.3–2 times the empirical SD |
+| Initial weights | 0.5 for each component (random starts); structured starts use each split's assignment share |
 | Fitted weights | Constrained to 0.1–0.9 |
 | Convergence | Relative likelihood change ≤ `1e-6` and normalized parameter change ≤ `1e-5` |
 | Iteration limits | 5,000 updates for every start; capped selected winners continue to 25,000 and are reselected |
@@ -53,7 +53,7 @@ Likelihood EM uses soft component and winding probabilities. The feature
 likelihood uses three spatial images below SD 60° and six Fourier harmonics
 above that threshold; its conditional winding moments update feature means and
 SDs. Angular errors are wrapped to the circle. Identifiability calculations use
-linear means and differences. The optional CUDA backend adds safeguarded
+linear means and differences. The default CUDA backend adds safeguarded
 SQUAREM acceleration and an N=500 density shortcut; see the
 [simulation guide](../surface_computation/README.md) for execution settings and
 numerical differences. Every converged start stops immediately. Convergence
@@ -82,7 +82,7 @@ Noise parameters + stimulus difference
 
 ### Training data and symmetry
 
-The training tools sample parameter combinations and store the raw simulated feature-bias outcomes for both items. Swapping `sd_feat1` and `sd_feat2` exchanges the target and competing item, so both components contribute training examples through this symmetry.
+The training tools sample parameter combinations and store per-cell histograms of the simulated feature-bias outcomes for both items (by default) or the raw outcomes. Swapping `sd_feat1` and `sd_feat2` exchanges the target and competing item, so both components contribute training examples through this symmetry.
 
 See [simulation and training-data generation](../surface_computation/README.md) for commands and data formats.
 

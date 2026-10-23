@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate EM bias outcomes on a continuous design.
 
-Writes a raw per-trial corpus (``--out``), a per-cell histogram corpus
-(``--histogram-out``), or both from the same fits. Never a KDE or surface.
+Writes a per-cell histogram corpus (``--out``), a raw per-trial corpus
+(``--raw-out``), or both from the same fits. Never a KDE or surface.
 Large corpora belong on a local, unsynced disk.
 
 Usage (from the repo root)::
@@ -13,7 +13,7 @@ Usage (from the repo root)::
     PYTHONPATH=. python -m surface_computation.generate_wnm_training_data \
         --validation --n-simulations 100000 --simulation-chunk 250 \
         --shard-rows 1 --resume \
-        --out .../validation
+        --raw-out .../validation
 """
 
 from __future__ import annotations
@@ -99,11 +99,11 @@ def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--out', type=Path,
-                   help='raw per-trial directory corpus; an explicit .npz also requests a streamed export')
-    p.add_argument('--histogram-out', type=Path,
                    help='per-cell histogram directory corpus (counts for both items plus summed diagnostics)')
+    p.add_argument('--raw-out', type=Path,
+                   help='raw per-trial directory corpus; an explicit .npz also requests a streamed export')
     p.add_argument('--histogram-bins', type=int, default=720,
-                   help='equal circular bins over [-180, 180) for --histogram-out')
+                   help='equal circular bins over [-180, 180) for --out')
     p.add_argument('--design-file', type=Path,
                    help='exact .npy/.npz design; overrides generated designs')
     p.add_argument('--n-points', type=int, default=4000,
@@ -137,11 +137,11 @@ def main():
                    help='design rows simultaneously processed on device')
     p.add_argument('--simulation-chunk', type=int, default=250,
                    help='maximum EM runs per device call; bounds GPU memory')
-    p.add_argument('--em-backend', choices=['jax', 'cuda'], default='jax',
-                   help='persistent CUDA EM requires nvcc and N=4,10,20,100,500; default: jax')
-    p.add_argument('--em-starts', choices=['random', 'structured'], default='random',
-                   help='random: 225 random starts; structured: deterministic data-derived '
-                        'bank of min(N,20)+34 starts (CUDA only)')
+    p.add_argument('--em-backend', choices=['jax', 'cuda'], default='cuda',
+                   help='persistent CUDA EM requires nvcc and N=4,10,20,100,500; jax: portable EM')
+    p.add_argument('--em-starts', choices=['random', 'structured'], default='structured',
+                   help='structured: deterministic data-derived bank of min(N,20)+34 starts (CUDA only); '
+                        'random: 225 random starts')
     p.add_argument('--em-stages', type=int, nargs='+',
                    help='pool unfinished starts across parameter rows at these cumulative caps; end at 5000')
     p.add_argument('--continuation-batch', type=int,
@@ -160,11 +160,13 @@ def main():
     p.add_argument('--design-seed', type=int, default=None,
                    help='design seed; set identically across independent simulation repeats')
     args = p.parse_args()
-    if args.out is None and args.histogram_out is None:
-        p.error('provide --out (raw corpus), --histogram-out, or both')
+    if args.out is None and args.raw_out is None:
+        p.error('provide --out (histogram corpus), --raw-out, or both')
+    if args.out is not None and args.out.suffix=='.npz':
+        p.error('--out is a histogram directory corpus; an .npz export is raw (--raw-out)')
     if args.histogram_bins < 2:
         p.error('--histogram-bins must be at least 2')
-    if args.compress and (args.out is None or args.out.suffix!='.npz'):
+    if args.compress and (args.raw_out is None or args.raw_out.suffix!='.npz'):
         p.error('--compress applies to an explicit .npz export; directory corpora use mapped arrays')
     design_seed = args.seed if args.design_seed is None else args.design_seed
 
@@ -188,7 +190,7 @@ def main():
         if args.em_max_iter > likelihood_em.MAX_ITER:
             p.error('CUDA EM supports --em-max-iter up to 25000')
     elif args.em_starts != 'random':
-        p.error('--em-starts structured requires --em-backend cuda')
+        p.error('--em-starts structured requires --em-backend cuda; use --em-starts random with jax')
     if args.em_stages and (args.em_stages[-1] != min(likelihood_em.FIRST_CAP, args.em_max_iter)
             or args.em_stages[0] < 1 or any(a >= b for a,b in zip(args.em_stages,args.em_stages[1:]))):
         p.error('--em-stages must strictly increase and end at min(5000, --em-max-iter)')
@@ -241,12 +243,12 @@ def main():
           f"device chunk <= {args.block_rows} rows x {args.simulation_chunk} simulations)")
     t0 = time.time()
     base_key = jax.random.PRNGKey(args.seed + 1)
-    shard_dir = None if args.out is None else (
-        args.out.with_suffix(args.out.suffix + '.shards') if args.out.suffix=='.npz' else args.out)
-    if args.out is not None and args.out.suffix=='.npz':
-        args.out.parent.mkdir(parents=True,exist_ok=True)
+    shard_dir = None if args.raw_out is None else (
+        args.raw_out.with_suffix(args.raw_out.suffix + '.shards') if args.raw_out.suffix=='.npz' else args.raw_out)
+    if args.raw_out is not None and args.raw_out.suffix=='.npz':
+        args.raw_out.parent.mkdir(parents=True,exist_ok=True)
         copies = 1+int(not (shard_dir/'manifest.json').exists())
-        storage.require_space(args.out.parent,copies*storage.payload_bytes(len(design),args.n_simulations))
+        storage.require_space(args.raw_out.parent,copies*storage.payload_bytes(len(design),args.n_simulations))
     signature = {
         'format_version': 4,
         'estimator': likelihood_em.ESTIMATOR_ID,
@@ -275,8 +277,8 @@ def main():
     outputs = []
     if shard_dir is not None:
         outputs.append(('raw', shard_dir, dict(signature, storage_format=storage.FORMAT)))
-    if args.histogram_out is not None:
-        outputs.append(('histogram', args.histogram_out, dict(signature, storage_format=storage.HISTOGRAM_FORMAT,
+    if args.out is not None:
+        outputs.append(('histogram', args.out, dict(signature, storage_format=storage.HISTOGRAM_FORMAT,
                                                               histogram_bins=args.histogram_bins)))
     with contextlib.ExitStack() as stack:
         corpora = {kind: stack.enter_context(storage.writer(root, sig, design, strata))
@@ -319,8 +321,8 @@ def main():
         meta = {k:str(v) if isinstance(v,Path) else v for k,v in meta.items()}
         for corpus in corpora.values():
             corpus.finish(meta)
-    if args.out is not None and args.out.suffix=='.npz':
-        storage.export_npz(shard_dir,args.out,compress=args.compress)
+    if args.raw_out is not None and args.raw_out.suffix=='.npz':
+        storage.export_npz(shard_dir,args.raw_out,compress=args.compress)
     elapsed = time.time()-t0
     saved = ', '.join(str(root) for _, root, _ in outputs)
     print(f'Done in {elapsed:.1f}s ({elapsed/len(design):.2f}s/point); saved {saved}')

@@ -105,7 +105,7 @@ def test_checked_simulation_refuses_systematic_capped_fits_and_unused_options():
     count = sim.MASKED_ALLOWANCE[0]+1
     with pytest.raises(RuntimeError,match=f'{count} selected fits still failed after repair'):
         sim.simulate(jax.random.key(17),jnp.array([[10.,60.,30.,60.]]),
-            n_simulations=count,n_samples=20,em_max_iter=1)
+            n_simulations=count,n_samples=20,em_max_iter=1,em_backend='jax',em_starts='random')
     with pytest.raises(ValueError,match='requires stages'):
         em_batch.fit_batch(None,None,continuation_batch=32)
 
