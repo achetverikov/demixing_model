@@ -222,9 +222,12 @@ def simulate(key, design, n_simulations: int = 200, n_samples: int = 100,
 
 #: Diagnostic counts are summed on the device in blocks of this many trials and
 #: the blocks are added in int64 on the host. Per-trial counts (for example
-#: likelihood-decrease events over all iterations and starts) are checked to stay
-#: below 2**31 // COUNT_BLOCK, so no int32 block sum can overflow.
+#: likelihood-decrease events over all iterations and starts) must be
+#: non-negative and below 2**31 // COUNT_BLOCK, checked before any narrowing to
+#: int32, so no int32 block sum can overflow.
 COUNT_BLOCK = 256
+_COUNT_FIELDS = ('converged', 'capped_starts', 'nonfinite_starts', 'material_decreases',
+                 'continued_winner', 'repaired', 'masked')
 
 
 def bin_index(bias, bins):
@@ -257,8 +260,18 @@ def histogram_tile(bias, diagnostic, bins):
         raise ValueError('histograms need at least two bins')
     if bias.shape[1] >= 2**31:
         raise ValueError('too many trials per row for int32 histogram counts')
+    limit = 2**31 // COUNT_BLOCK
+    for name in _COUNT_FIELDS:
+        value = diagnostic[name]
+        # Host arrays wider than int32 would be narrowed on the way to the device.
+        if isinstance(value, np.ndarray) and value.dtype.kind in 'iu' and value.dtype.itemsize > 4:
+            if value.size and (value.min() < 0 or value.max() >= limit):
+                raise ValueError(f'diagnostic {name} has counts outside [0, {limit}) that could overflow '
+                                 f'int32 block sums of {COUNT_BLOCK} trials')
     reduced = jax.device_get(_histogram_tile(bias, diagnostic, bins))
-    if reduced['max_count'] >= 2**31 // COUNT_BLOCK:
+    if reduced['min_count'] < 0:
+        raise ValueError('negative per-trial diagnostic counts')
+    if reduced['max_count'] >= limit:
         raise ValueError(f'a per-trial diagnostic count of {reduced["max_count"]} could overflow '
                          f'int32 block sums of {COUNT_BLOCK} trials')
     return dict(histogram=reduced['histogram'],
@@ -284,7 +297,7 @@ def _histogram_tile(bias, diagnostic, bins):
     per_trial = jnp.pad(per_trial, ((0, 0), (0, padded - trials), (0, 0)))
     count_blocks = per_trial.reshape(rows, padded // COUNT_BLOCK, COUNT_BLOCK, -1).sum(axis=2)
     return dict(histogram=histogram.reshape(rows, 1, 2, bins), count_blocks=count_blocks,
-                max_count=jnp.max(per_trial),
+                max_count=jnp.max(per_trial), min_count=jnp.min(per_trial),
                 max_iterations=jnp.max(diagnostic['iterations'], axis=1)[:, None].astype(jnp.int32))
 
 

@@ -10,6 +10,7 @@ Raw training designs and production artifacts call the third SD coordinate
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Optional, Tuple
@@ -208,6 +209,20 @@ def split_by_params(store: SampleStore, val_fraction: float = 0.1, seed: int = 0
 def group_keys(store) -> set:
     """Mirror-invariant parameter groups of a store, as exact float tuples."""
     return set(map(tuple, store.canonical_param_key().tolist()))
+
+
+def holdout_split(store, fraction: float, seed: int):
+    """Split off a test set of parameter groups: ``(remaining, test, record)``.
+
+    ``record`` identifies the held-out groups themselves (a digest of their sorted
+    canonical SD triples), not only the fraction, seed and row count, so two
+    designs whose hold-outs differ never share a record.
+    """
+    remaining, test = split_by_params(store, fraction, seed=seed)
+    keys = np.asarray(sorted(group_keys(test)), dtype=np.float32)
+    record = dict(fraction=fraction, seed=seed, rows=test.n_rows,
+                  groups_sha256=hashlib.sha256(keys.tobytes()).hexdigest())
+    return remaining, test, record
 
 
 def without_groups(store, keys):

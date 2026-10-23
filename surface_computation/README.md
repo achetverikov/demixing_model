@@ -86,6 +86,11 @@ simulation chunk (about 3.4 GB at four chunks per row). Write large corpora to a
 local disk that is not synced (for example under `/home/vscode/.cache`), not to the
 workspace.
 
+Resume requires an identical manifest, which includes the generation code digest
+and, since commit 9182c9e, `tile_digest_order`. Corpora written by earlier code
+therefore cannot be resumed by the current generator; they stay readable, and
+`--verify` accepts their tile checksums (declared or sorted array order).
+
 `--compress` applies only to NPZ export. The directory corpus retains exact raw
 arrays. At 148,076 rows and 20,000 trials, payload storage is about 275 GB per
 sample-count setting, plus checkpoint metadata. Memory mapping removes the

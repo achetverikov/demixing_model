@@ -47,7 +47,7 @@ def test_train_package_load(tmp_path, monkeypatch, n_samples):
     assert packaged["meta"]["checkpoint_selection"] == "held_out_parameter_groups"
 
 
-def test_histogram_corpus_trains_and_packages(tmp_path, monkeypatch):
+def test_histogram_corpus_trains_and_packages(tmp_path, monkeypatch, capsys):
     # Entry-point contract: a histogram corpus selects the per-bin objective,
     # reaches production loading, and refuses raw-only options before training.
     import hashlib
@@ -83,6 +83,16 @@ def test_histogram_corpus_trains_and_packages(tmp_path, monkeypatch):
                                       "--out", str(checkpoint), "--steps", "1"])
     with pytest.raises(SystemExit):
         train.main()
+    # A raw selection reference sharing the held-out groups must be refused.
+    reference = tmp_path / "reference.npz"
+    np.savez(reference, design=design, bias=np.zeros((8, 4, 2), dtype=np.float32), strata=["t"] * 8,
+             meta=json.dumps({"n_samples": 20}))
+    monkeypatch.setattr(sys, "argv", ["train", "--source", str(raw_source), "--selection-reference", str(reference),
+                                      "--holdout-fraction", "0.25", "--out", str(checkpoint), "--steps", "1"])
+    with pytest.raises(SystemExit):
+        train.main()
+    assert "shares parameter groups" in capsys.readouterr().err
+    assert not checkpoint.exists()
     monkeypatch.setattr(sys, "argv", common + ["--holdout-fraction", "0.25", "--checkpoint-metric", "final"])
     train.main()
     # A different test set must not be fine-tuned from a model that may have seen it.
@@ -95,6 +105,7 @@ def test_histogram_corpus_trains_and_packages(tmp_path, monkeypatch):
     meta = pickle.loads(checkpoint.read_bytes())["meta"]
     assert meta["training_objective"] == "histogram_bin_cross_entropy" and meta["histogram_bins"] == 36
     assert meta["holdout"]["rows"] == 2 and meta["selected_step"] == 2 and meta["checkpoint_selection"] == "final_step"
+    assert len(meta["holdout"]["groups_sha256"]) == 64
     artifact = tmp_path / "custom.pkl"
     monkeypatch.setattr(sys, "argv", ["package", "--fit", str(checkpoint), "--out", str(artifact),
                                       "--n-samples", "20"])

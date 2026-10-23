@@ -78,8 +78,9 @@ def make_histogram_loss(model, bins: int, n_wraps: int):
     density at bin centres, so it stays bounded for components narrower than a
     bin. It is the likelihood of the outcomes' bin labels. Adding
     ``log(bin width)`` (``-log(p / width) = -log(p) + log(width)``) gives a
-    piecewise-constant density score, which is close to, but generally not equal
-    to, the raw-outcome NLL of the same outcomes.
+    piecewise-constant density score. It approximates the raw-outcome NLL of the
+    same outcomes only where the density varies little within a bin; for
+    components much narrower than a bin the two differ by nats.
     """
     @jax.jit
     def loss_fn(variables, x, freq, w):
@@ -282,8 +283,7 @@ def main():
         args.batch_size = args.histogram_batch
     holdout_meta = test_keys = None
     if args.holdout_fraction:
-        store, test_store = data_mod.split_by_params(store, args.holdout_fraction, seed=args.holdout_seed)
-        holdout_meta = dict(fraction=args.holdout_fraction, seed=args.holdout_seed, rows=test_store.n_rows)
+        store, test_store, holdout_meta = data_mod.holdout_split(store, args.holdout_fraction, args.holdout_seed)
         test_keys = data_mod.group_keys(test_store)
         print(f"held out {test_store.n_rows} rows by parameter group for testing; "
               f"excluded from training and selection")
@@ -335,8 +335,8 @@ def main():
                              f'model K={model.n_components}')
         data_mod.require_matching_n_samples(init_meta, source_meta)
         if holdout_meta is not None and init_meta.get('holdout') != holdout_meta:
-            p.error('--init-model was not trained with the same --holdout-fraction/--holdout-seed '
-                    'test set, so it may have seen the held-out groups')
+            p.error('--init-model was not trained with exactly the same held-out parameter groups '
+                    '(compared by group digest), so it may have seen them')
         print(f'Fine-tuning {args.init_model}')
     else:
         model = wm.ConditionalWrappedMixture(

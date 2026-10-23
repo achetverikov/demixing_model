@@ -298,6 +298,12 @@ def test_histogram_diagnostic_sums_are_exact_beyond_int32_and_refuse_unsafe_coun
         wnm_simulation.histogram_tile(bias, diagnostic_stub(5000, 2**31 // wnm_simulation.COUNT_BLOCK), 720)
     with pytest.raises(ValueError, match='two bins'):
         wnm_simulation.histogram_tile(bias, diagnostic_stub(5000, 0), 1)
+    # Counts too wide for int32 must be refused before narrowing could wrap them.
+    wide = dict(diagnostic_stub(5000, 0), material_decreases=np.full((1, 5000), 2**32 + 7, np.int64))
+    with pytest.raises(ValueError, match='outside'):
+        wnm_simulation.histogram_tile(bias, wide, 720)
+    with pytest.raises(ValueError, match='negative'):
+        wnm_simulation.histogram_tile(bias, diagnostic_stub(5000, -1), 720)
 
 
 def test_tile_checksums_accept_the_sorted_order_only_for_older_manifests(tmp_path, example):
@@ -315,6 +321,16 @@ def test_tile_checksums_accept_the_sorted_order_only_for_older_manifests(tmp_pat
             with sqlite3.connect(root/'tiles.sqlite3') as db:
                 db.execute('UPDATE tiles SET digest=? WHERE row_start=0 AND sim_start=0',(legacy,))
             assert corpus.valid_tile(coordinates) == accepted
+
+
+def test_holdout_records_identify_the_held_out_groups():
+    # Equal fraction, seed and row count must not make different hold-outs look equal.
+    a = data.SampleStore(np.array([[s, s+1, 20., 60.] for s in range(10, 18)], np.float32), np.zeros((8, 2, 2)))
+    b = data.SampleStore(np.array([[s, s+1, 21., 60.] for s in range(10, 18)], np.float32), np.zeros((8, 2, 2)))
+    _, _, ra = data.holdout_split(a, .25, 12345)
+    _, _, rb = data.holdout_split(b, .25, 12345)
+    assert {k: ra[k] for k in ('fraction', 'seed', 'rows')} == {k: rb[k] for k in ('fraction', 'seed', 'rows')}
+    assert ra != rb and ra == data.holdout_split(a, .25, 12345)[2]
 
 
 def test_without_groups_removes_exact_parameter_groups(example):
