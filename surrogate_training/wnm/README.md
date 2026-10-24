@@ -23,9 +23,14 @@ other counts, and validate that predictor independently before fitting data.
 ```bash
 python -m surrogate_training.wnm.train \
   --source /path/to/training_data \
-  --components 12 \
   --out /path/to/run_checkpoint.pkl
 ```
+
+The defaults (K=8 components, hidden layers 128/256/256, 92,560 steps) were selected on held-out
+N=20 and N=100 histogram corpora: against the K=12 architecture of the packaged checkpoints they lose
+2-3e-5 nats per outcome, leave density-asymmetry predictions within training-seed variation, and
+evaluate about 36% faster. Doubling the steps gained only 1-2e-5. The packaged checkpoints themselves
+are unchanged (K=12).
 
 With a histogram corpus (the generator's default `--out`), training minimizes the cross-entropy of each cell's binned outcome frequencies under the predicted mixture's per-bin probability mass, using the generator's bins; `--histogram-batch` sets the cell-items per step. With a raw corpus (`--raw-out`), it minimizes the negative log-likelihood of the raw simulated biases. Model, schedule, held-out parameter-group split and checkpoint selection are shared. `--holdout-fraction` additionally removes a test set of parameter groups from training and selection, and `--checkpoint-metric final` keeps the last step. The checkpoint records the objective, sample count, selected step, architecture, hold-out, timings and training parameter bounds, including the swapped-item examples.
 

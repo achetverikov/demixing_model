@@ -356,7 +356,7 @@ class ConditionalWrappedMixture(nn.Module):
     """
 
     n_components: int = 8
-    hidden_dims: Sequence[int] = (64, 128, 128)
+    hidden_dims: Sequence[int] = (128, 256, 256)
     min_scale: float = 0.25
 
     @nn.compact

@@ -204,7 +204,7 @@ def main():
                    help='fine-tune an existing compatible density checkpoint')
     p.add_argument('--out', required=True, type=Path)
     p.add_argument('--components', type=int, default=8, help='mixture components K')
-    p.add_argument('--hidden', type=int, nargs='+', default=[64, 128, 128])
+    p.add_argument('--hidden', type=int, nargs='+', default=[128, 256, 256])
     p.add_argument('--min-scale', type=float, default=0.25)
     p.add_argument('--n-wraps', type=int, default=4)
     p.add_argument('--grouped-outcomes', type=int, default=1,
@@ -213,7 +213,7 @@ def main():
     p.add_argument('--moment-huber-delta', type=float, default=.1)
     p.add_argument('--cvar-weight', type=float, default=0.)
     p.add_argument('--cvar-fraction', type=float, default=.1)
-    p.add_argument('--steps', type=int, default=20000)
+    p.add_argument('--steps', type=int, default=92560)
     p.add_argument('--batch-size', type=int, default=8192)
     p.add_argument('--histogram-batch', type=int, default=256,
                    help='cells x items per step when --source is a histogram corpus')
