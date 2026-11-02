@@ -4,8 +4,8 @@ The wrapped-normal mixture's density, moments and signed-arc asymmetry are
 closed forms, so the path from parameters to loss has a gradient.
 
 The validated WNM production search uses 64 deterministic
-starts evaluated with the pinned batched JAX L-BFGS-B port as two sequential
-batches of 32.
+starts evaluated with the pinned batched JAX L-BFGS-B port as four sequential
+batches of 16.
 
 Design notes that are not free choices:
 
@@ -51,7 +51,7 @@ from jax_lbfgsb import BatchedLbfgsb, CONVERGED_FTOL, CONVERGED_PGTOL
 
 OPTIMIZER_VERSION = "jax-lbfgsb@0350da1"
 DEFAULT_N_STARTS = 64
-DEFAULT_BATCH_SIZE = 32
+DEFAULT_BATCH_SIZE = 16
 DEFAULT_DTYPE = "float32"
 DEFAULT_MATMUL_PRECISION = "highest"
 
@@ -81,7 +81,7 @@ class ContinuousFit:
         n_starts: how many were run.
         loss_spread: max minus min final loss over the starts that converged. A
             wide spread means the search, not the objective, decided the answer.
-        starts: includes the starts that failed; only converged ones can win.
+        starts: includes failed searches; every finite rescored endpoint is eligible.
         at_bound: which coordinates of the winner sit on a bound.
         names: parameter names, positionally matching ``parameters``.
     """
@@ -170,7 +170,7 @@ def minimize_continuous(objective: Callable, bounds: Sequence[tuple],
         names: parameter names, for boundary reporting.
         n_starts: deterministic multistart count; production uses 64.
         seed: makes the starts reproducible; recorded in the result.
-        batch_size: starts per sequential accelerator batch; production uses 32.
+        batch_size: starts per sequential accelerator batch; production uses 16.
         dtype: optimizer and objective array dtype; production uses float32.
         matmul_precision: JAX matmul precision policy; production uses highest.
         max_iterations: per start.

@@ -384,6 +384,35 @@ def test_likelihood_is_differentiable(predictor, targets, d_circ, trials):
 # Refusals and the fixed grid
 # ---------------------------------------------------------------------------
 
+@pytest.mark.parametrize("fit_motor", [False, True])
+def test_padded_likelihood_reuses_compilation_without_reusing_participant_data(
+        predictor, targets, d_circ, trials, fit_motor):
+    """Scoring contract: masked ragged trials preserve NLL and gradients for new data."""
+    parameters = jnp.asarray(PARAMS + ([12.] if fit_motor else []))
+    score = jax.jit(jax.value_and_grad(lambda p, *data:
+        S.packed_likelihood_loss(predictor, p, *data, fit_motor=fit_motor)))
+    values = []
+    for shift in (0., 17.):
+        observed = [(x[:3 + i], y[:3 + i] + shift) for i, (x, y) in enumerate(trials)]
+        data = S.pack_likelihood_trials(observed)
+        actual, gradient = score(parameters, *data)
+        reference = lambda p: S.score_all_conditions(
+            "likelihood", predictor, targets, p, curve_losses=_compute_curve_losses,
+            energy_score=bwcrps_energy_score, d_circ_matrix=d_circ,
+            feat_diff_grid=config.create_grid('feat_diff'), emp_density_weights_sd=20.,
+            condition_trials=observed, fit_motor=fit_motor)
+        expected, expected_gradient = jax.value_and_grad(reference)(parameters)
+        np.testing.assert_allclose(actual, expected, rtol=2e-6, atol=2e-5)
+        np.testing.assert_allclose(gradient, expected_gradient, rtol=2e-5, atol=2e-5)
+        alternate_biases = jnp.where(data[2], data[1], 73.)
+        alternate = score(parameters, data[0], alternate_biases, data[2])
+        np.testing.assert_array_equal(alternate[0], actual)
+        np.testing.assert_array_equal(alternate[1], gradient)
+        values.append(float(actual))
+    assert values[0] != values[1]
+    assert score._cache_size() == 1
+
+
 def test_a_degenerate_density_target_is_refused_but_only_for_density(predictor, d_circ):
     """A flat density target says nothing about whether the condition can be fit
     by likelihood or CRPS, so the refusal must not reach those."""

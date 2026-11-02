@@ -132,7 +132,11 @@ Motor noise is fixed at zero by default. The internal sample count is chosen bef
 
 ### Continuous optimization
 
-Fitting minimizes the sum of the condition losses using bounded L-BFGS-B in log-transformed noise parameters. The default search uses 64 deterministic starting points in two sequential batches of 32. It retains the best converged solution and records all starting-point outcomes, the spread of converged losses, and parameters at their bounds.
+Fitting minimizes the sum of the condition losses using bounded L-BFGS-B in log-transformed noise parameters. The default search uses 64 deterministic starting points in four sequential batches of 16. It retains the minimum finite rescored loss, with convergence recorded as a diagnostic, and records all starting-point outcomes, the spread of converged losses, and parameters at their bounds. Batch size is part of the run fingerprint; changing it requires a separate run rather than mixing searches in one result file.
+
+Distributional scores integrate reporting cells in chunks of five, sharing adjacent Gaussian CDF boundaries. Differences are taken before summing wrap images to preserve float32 precision for small cell masses.
+
+Likelihood fits pass participant data dynamically to the optimizer and pad each condition's trial arrays to a shared multiple-of-64 capacity. A mask excludes padding from the loss and gradient, preserving every observed stimulus difference and response while allowing groups to reuse a compiled solver.
 
 Feature and identifiability bounds come from the selected predictor. When motor noise is estimated, its upper bound is the smallest condition error SD times 1.1, capped at 50 model degrees, with a lower bound of 0.1°.
 

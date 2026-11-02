@@ -225,10 +225,11 @@ def test_cell_probabilities_are_jittable_and_differentiable(predictor):
 
 
 @needs_artifact
-def test_cell_chunks_preserve_rows_custom_edges_and_gradients(predictor):
+@pytest.mark.parametrize("n_cells", [2, 11])
+def test_cell_chunks_preserve_rows_custom_edges_and_gradients(predictor, n_cells):
     """Prediction contract: chunking must preserve cell order and motor gradients."""
-    # Eleven unequal cells exercise both a full chunk and its remainder.
-    edges = jnp.asarray([-180., -90., -35., -12., -2., 0., 1., 9., 30., 75., 120., 180.])
+    # Exercise a short chunk and multiple chunks with a padded remainder.
+    edges = jnp.asarray([-180., -90., -35., -12., -2., 0., 1., 9., 30., 75., 120., 180.])[:n_cells + 1]
     weights = jnp.linspace(-1., 1., len(PARAMS) * (len(edges) - 1)).reshape(len(PARAMS), -1)
 
     def reference(rows, motor):

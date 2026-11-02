@@ -139,7 +139,7 @@ def test_the_extra_fields_a_lattice_search_cannot_report_are_present(setup, dens
     assert result["search_settings"]["parameterisation"] == "log"
     assert result["search_settings"]["method"] == "BatchedLbfgsb"
     assert result["search_settings"]["optimizer_version"] == "jax-lbfgsb@0350da1"
-    assert result["search_settings"]["batch_size"] == 32
+    assert result["search_settings"]["batch_size"] == 16
     assert result["search_settings"]["dtype"] == "float32"
     assert result["search_settings"]["matmul_precision"] == "highest"
 
@@ -171,6 +171,28 @@ def test_a_condition_order_mismatch_is_refused(setup):
             energy_score=bwcrps_energy_score, d_circ_matrix=setup["d_circ"],
             feat_diff_grid=setup["feat_diff_grid"], emp_density_weights_sd=20.0,
             n_starts=2, seed=0, verbosity=0)
+
+
+def test_likelihood_routes_participant_arrays_through_the_solver_cache(setup, monkeypatch):
+    """Fit integration: likelihood must not capture participant data in a new solver."""
+    import continuous_fit
+    trials = [(values[:4, 0], values[:4, 1]) for values in setup["datasets"].values()]
+    cache = {}
+
+    class Routed(Exception):
+        pass
+
+    def intercept(objective, bounds, names, **kwargs):
+        assert kwargs["solver_cache"] is cache
+        assert kwargs["solver_key"][0] == "likelihood"
+        coordinates, biases, mask = kwargs["objective_args"]
+        assert coordinates.shape == biases.shape == mask.shape == (len(trials), 64)
+        assert int(mask.sum()) == 4 * len(trials)
+        raise Routed
+
+    monkeypatch.setattr(continuous_fit, "minimize_continuous", intercept)
+    with pytest.raises(Routed):
+        _fit(setup, objective="likelihood", condition_trials=trials, solver_cache=cache)
 
 
 def test_an_unknown_objective_is_refused(setup):

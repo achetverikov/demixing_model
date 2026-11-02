@@ -497,19 +497,26 @@ class WrappedMixturePredictor(BiasPredictor):
         edges = self._default_edges() if edges is None else jnp.asarray(edges)
         dist = self.distribution(params, validate, sd_motor)
         weights = jnp.exp(dist['log_pi'])
+        n_cells = len(edges) - 1
+        indices = jnp.arange(0, n_cells, 5)[:, None] + jnp.arange(6)
+        chunks = edges[jnp.minimum(indices, n_cells)]
+        shifts = jnp.arange(-self.arc_wraps, self.arc_wraps + 1,
+                            dtype=dist['mu'].dtype) * self._wm.PERIOD
 
-        def cell_mass(pair):
-            per_component = self._wm.wrapped_normal_interval_probability(
-                dist['mu'], dist['sigma'], pair[0], pair[1], self.arc_wraps)
-            return jnp.sum(weights * per_component, axis=-1)
+        def chunk_mass(boundaries):
+            z = (boundaries[:, None, None, None] + shifts
+                 - dist['mu'][None, ..., None]) / dist['sigma'][None, ..., None]
+            cdf = jax.scipy.special.ndtr(z)
+            # Share adjacent boundaries, but subtract before reducing wraps to
+            # retain the small masses in the spatial interval-probability sum.
+            component_mass = jnp.sum(cdf[1:] - cdf[:-1], axis=-1)
+            return jnp.sum(weights[None, ...] * component_mass, axis=-1)
 
         # A full vmap fuses cells × wraps × components × optimizer starts into
         # enormous GPU kernels. Bound that work and recompute chunk intermediates
         # during differentiation instead of retaining them for every cell.
-        masses = jax.lax.map(
-            jax.checkpoint(cell_mass), jnp.stack((edges[:-1], edges[1:]), axis=-1),
-            batch_size=10)
-        return jnp.moveaxis(masses, 0, -1)
+        masses = jax.lax.map(jax.checkpoint(chunk_mass), chunks)
+        return masses.reshape(-1, dist['mu'].shape[0])[:n_cells].T
 
     def mean_and_resultant(self, params, validate: bool = True, sd_motor=None):
         return self._wm.mean_and_resultant(self.distribution(params, validate, sd_motor))

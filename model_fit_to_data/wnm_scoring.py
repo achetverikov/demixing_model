@@ -257,6 +257,35 @@ def trial_log_density(predictor, sd_feat1, sd_feat2, sd_idf, feat_diff, bias,
                                  sd_motor=sd_motor)
 
 
+def pack_likelihood_trials(condition_trials):
+    """Pad trial arrays to shared 64-trial shapes; retain every observed coordinate."""
+    counts = np.array([len(x) for x, _ in condition_trials])
+    capacity = ((counts.max() + 63) // 64) * 64
+    coordinates = np.ones((len(counts), capacity), dtype=np.float32)
+    biases = np.zeros_like(coordinates)
+    for index, (x, y) in enumerate(condition_trials):
+        coordinates[index, :counts[index]] = x
+        biases[index, :counts[index]] = y
+    return tuple(jnp.asarray(x) for x in (
+        coordinates, biases, np.arange(capacity)[None, :] < counts[:, None]))
+
+
+def packed_likelihood_loss(predictor, parameters, coordinates, biases, mask, *,
+                           fit_motor=False):
+    """Trial-summed NLL with dynamic participant data and masked finite padding."""
+    n_conditions = coordinates.shape[0]
+    sd_idf = parameters[2 * n_conditions]
+    sd_motor = parameters[2 * n_conditions + 1] if fit_motor else None
+
+    def condition(index):
+        log_density = trial_log_density(
+            predictor, parameters[2 * index], parameters[2 * index + 1], sd_idf,
+            coordinates[index], biases[index], sd_motor=sd_motor)
+        return -jnp.sum(jnp.where(mask[index], log_density, 0.0))
+
+    return jnp.sum(jax.vmap(condition)(jnp.arange(n_conditions)))
+
+
 def score_condition(method, predictor, targets, condition_index, sd_feat1, sd_feat2,
                     sd_idf, *, curve_losses, ccc_or_combined_kwargs, energy_score,
                     d_circ_matrix, feat_diff_grid, emp_density_weights_sd,

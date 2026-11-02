@@ -73,7 +73,7 @@ Both criteria pool predictions at the observed stimulus differences using the sa
 | `--continuous-seed` | `0` | Set the seed used to generate starting points |
 | `--checkpoint-path` | Selected by `--n-samples` | Load a custom trained model |
 
-The optimizer uses bounded L-BFGS-B from 64 deterministic starting points, evaluated in two sequential batches of 32. It jointly estimates condition-specific and shared parameters and records the outcome of each start. Bounds come from the selected model's supported domain.
+The optimizer uses bounded L-BFGS-B from 64 deterministic starting points, evaluated in four sequential batches of 16. It jointly estimates condition-specific and shared parameters and records the outcome of each start. Bounds come from the selected model's supported domain.
 
 Motor noise broadens the response distribution through a circular Gaussian convolution. When enabled, its upper bound is based on the smallest condition error SD, with a 10% margin and a maximum of 50 model degrees. Mean-bias fitting is skipped in motor-noise runs because symmetric motor noise leaves the circular mean unchanged.
 

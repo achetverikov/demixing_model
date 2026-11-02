@@ -4,6 +4,15 @@ This log records completed decisions and superseded work. `TODO.md` is the only
 live work plan. Detailed numerical evidence is archived with generated results;
 see Notes for developers below.
 
+## 2026-10-24 — fitting throughput
+
+- Retained 64 deterministic starts and the existing objectives, precision, and
+  stopping settings, using four sequential optimizer batches of 16.
+- Shared adjacent CDF boundaries within five-cell integration chunks. Likelihood
+  fits pass masked trial arrays dynamically so equal shapes reuse compilation.
+- Kept batch size in the run fingerprint; completed runs retain their original
+  search metadata rather than being relabeled with the new settings.
+
 ## 2026-09 — WNM production transition
 
 - Established and executed the pre-refactor test baseline: fixed the stale CCC test import, restricted default pytest collection to maintained tests, isolated CDB checks as integration coverage, kept transition experiments off the production suite, marked historical surface coverage as opt-in legacy coverage, removed obvious dead imports, and corrected misleading post-cutover documentation.
@@ -183,3 +192,7 @@ Transition findings and pre-cleanup documentation are archived under
 `$DEMIXING_ARTIFACT_ROOT/surface_nn_archive/cleanup_20260927/` with checksums and
 source commits. These records are not shipped and are not expected in a normal
 checkout.
+
+Fitting performance checks are archived under
+`$DEMIXING_ARTIFACT_ROOT/wrapped_em_refits_20261024/performance_tests_2/`.
+These generated benchmarks are not shipped with the repository.

@@ -235,7 +235,7 @@ def test_the_selected_production_configuration_is_recorded():
 
     defaults = inspect.signature(co.minimize_continuous).parameters
     assert defaults["n_starts"].default == co.DEFAULT_N_STARTS == 64
-    assert defaults["batch_size"].default == co.DEFAULT_BATCH_SIZE == 32
+    assert defaults["batch_size"].default == co.DEFAULT_BATCH_SIZE == 16
     assert defaults["dtype"].default == co.DEFAULT_DTYPE == "float32"
     assert defaults["matmul_precision"].default == co.DEFAULT_MATMUL_PRECISION == "highest"
     assert co.OPTIMIZER_VERSION == "jax-lbfgsb@0350da1"

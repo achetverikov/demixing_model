@@ -10,8 +10,8 @@ A lattice search has no analogue of the first two, and a benchmark that compared
 backends without them would be comparing a single number from each.
 
 The validated production policy for all retained WNM objectives is 64
-deterministic starts through the batched JAX L-BFGS-B port, evaluated as two
-sequential batches of 32 in float32 with ``highest`` matmul precision. The
+deterministic starts through the batched JAX L-BFGS-B port, evaluated as four
+sequential batches of 16 in float32 with ``highest`` matmul precision. The
 evidence behind this choice is archived with generated results (see HISTORY.md).
 """
 from __future__ import annotations
@@ -31,6 +31,7 @@ from model_fit_to_data.continuous_optimizer import (
 from shared import surrogate as surrogate_module
 from model_fit_to_data.wnm_scoring import (
     MEAN_ONLY_METHODS, SUPPORTED_METHODS, packed_curve_loss,
+    pack_likelihood_trials, packed_likelihood_loss,
     score_all_conditions, validate_feature_grid,
 )
 
@@ -132,6 +133,17 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
             objective, n_conditions, targets.prediction_capacity, fit_motor,
             float(sd_motor), tuple(map(tuple, bounds)), n_starts,
         )
+    elif objective == "likelihood" and condition_trials is not None:
+        objective_args = pack_likelihood_trials(condition_trials)
+
+        def objective_fn(parameters, *data):
+            return packed_likelihood_loss(predictor, parameters, *data,
+                                          fit_motor=fit_motor)
+
+        solver_key = (
+            objective, n_conditions, objective_args[0].shape[1], fit_motor,
+            float(sd_motor), tuple(map(tuple, bounds)), n_starts,
+        )
     else:
         objective_args = ()
         solver_key = None
@@ -165,6 +177,8 @@ def fit_continuous(predictor, targets, condition_names: Sequence[str], *,
         "sub_support_trial_count": int(sub_support_summary.get("trial_count", 0)),
         "sub_support_minimum": sub_support_summary.get("minimum"),
     })
+    if objective == "likelihood":
+        fit.settings["likelihood_trial_capacity"] = int(objective_args[0].shape[1])
     total_time = time.time() - started
 
     parameters = np.asarray(fit.parameters)

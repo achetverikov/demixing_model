@@ -1006,7 +1006,7 @@ if __name__ == '__main__':
                         help='WNM continuous multistart optimization.')
     parser.add_argument('--continuous-starts', type=int, default=DEFAULT_N_STARTS,
                         help='Multistart count for --search continuous (production: 64, run as '
-                             'two sequential batches of 32).')
+                             'four sequential batches of 16).')
     parser.add_argument('--continuous-seed', type=int, default=0,
                         help='Seed for --search continuous starting points. Recorded in the run '
                              'fingerprint, since the same seed must give the same starts for two '
