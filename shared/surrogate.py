@@ -41,7 +41,7 @@ WNM_DEFAULTS = {
     100: PRETRAINED_DIR / "current_wnm_k12_100samples.pkl",
 }
 
-SUPPORTED_SAMPLE_COUNTS = (20, 100)
+SUPPORTED_SAMPLE_COUNTS = (4, 20, 100, 500)
 
 def production_family() -> str:
     """The family the production artifacts come from.
@@ -74,6 +74,8 @@ def production_checkpoint(n_samples: int) -> Path:
             f"n_samples={n_samples!r} is not one of {SUPPORTED_SAMPLE_COUNTS}. These are two "
             "different observer models, not a resolution setting, so there is nothing "
             "sensible between or beyond them.")
+    if n_samples not in WNM_DEFAULTS:
+        raise ValueError(f"n_samples={n_samples} requires an explicit checkpoint_path; no production default is installed")
     family = production_family()
     path = WNM_DEFAULTS[n_samples]
     if not path.exists():
@@ -217,7 +219,7 @@ class LoadedSurrogate:
 
     Attributes:
         family: one of :data:`FAMILIES`.
-        n_samples: observer evidence samples per trial (20 or 100).  This is a
+        n_samples: observer evidence samples per trial (4, 20, 100 or 500).  This is a
             property of the simulated observer the checkpoint was trained on,
             not a precision knob, and results from two sample counts are not
             interchangeable.
@@ -298,6 +300,8 @@ def resolve_checkpoint(family: Optional[str] = None,
     if n_samples not in SUPPORTED_SAMPLE_COUNTS:
         raise ValueError(f"n_samples={n_samples} is not one of {SUPPORTED_SAMPLE_COUNTS}")
 
+    if n_samples not in WNM_DEFAULTS:
+        raise ValueError(f"n_samples={n_samples} requires an explicit checkpoint_path; no default is installed")
     path = WNM_DEFAULTS[n_samples]
     if not path.exists():
         raise FileNotFoundError(

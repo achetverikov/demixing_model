@@ -232,7 +232,7 @@ def test_exactly_two_checkpoints_are_production_at_a_time():
     """One per observer model, and one switch that says which family they come
     from. A caller asks by n_samples; nothing downstream should name a file."""
     paths = {n: surrogate.production_checkpoint(n)
-             for n in surrogate.SUPPORTED_SAMPLE_COUNTS}
+             for n in surrogate.WNM_DEFAULTS}
     assert len(paths) == 2
     assert len(set(paths.values())) == 2, "the two observer models share an artifact"
     for n_samples, path in paths.items():
@@ -246,3 +246,19 @@ def test_an_unsupported_sample_count_is_refused():
     nothing sensible between or beyond them."""
     with pytest.raises(ValueError, match="two different observer models"):
         surrogate.production_checkpoint(50)
+
+
+@pytest.mark.parametrize("n_samples", [4, 500])
+def test_additional_observer_requires_explicit_checkpoint(n_samples, tmp_path):
+    # Resolver contract: accepting a CLI count must not silently select N20.
+    assert n_samples in surrogate.SUPPORTED_SAMPLE_COUNTS
+    with pytest.raises(ValueError, match="explicit checkpoint_path"):
+        surrogate.resolve_checkpoint(n_samples=n_samples)
+    with pytest.raises(ValueError, match="explicit checkpoint_path"):
+        surrogate.production_checkpoint(n_samples)
+    path = _write(tmp_path, "observer.pkl", {"model_config": {"n_components": 8},
+        "variables": {}, "meta": {"n_samples": n_samples, "artifact_schema": "wnm/2"}})
+    loaded = surrogate.load_surrogate(n_samples=n_samples, checkpoint_path=path)
+    assert loaded.n_samples == n_samples
+    with pytest.raises(ValueError, match="different observer models"):
+        surrogate.load_surrogate(n_samples=20, checkpoint_path=path)

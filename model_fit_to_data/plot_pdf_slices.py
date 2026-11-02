@@ -41,7 +41,7 @@ def main():
     )
     parser.add_argument("--results-path", required=True,
                         help="Path to extended_fit_results.pkl.")
-    parser.add_argument("--n-samples", type=int, default=20, choices=[20, 100],
+    parser.add_argument("--n-samples", type=int, default=20, choices=surrogate.SUPPORTED_SAMPLE_COUNTS,
                         help="Observer evidence samples per trial. Used to validate a checkpoint "
                              "when no fingerprint identity is available.")
     parser.add_argument("--checkpoint-path", default=None,

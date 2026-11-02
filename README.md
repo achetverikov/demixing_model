@@ -187,3 +187,6 @@ The code and documentation are provided as-is without warranty. Some project doc
 
 Planned work is in `TODO.md`; completed work is recorded in `HISTORY.md`.
 Generated simulation corpora, averaged surfaces, and experiment records belong under `$DEMIXING_ARTIFACT_ROOT`. These artifacts are not shipped and are not expected in a normal checkout.
+
+
+N4 and N500 can be fitted with a validated packaged checkpoint supplied through `--checkpoint-path`; their sample count is checked against artifact metadata. Installed defaults remain N20/N100, and N10 is unavailable.
