@@ -15,8 +15,8 @@ Consumers of the output:
 
 Example:
     python cloud/bundle_local_surfaces.py \\
-        --input-dir results/averaged_surfaces_10k_100samples_circular \\
-        --output-dir results/averaged_surfaces_10k_100samples_circular_bundles \\
+        --input-dir /local/surfaces \\
+        --output-dir /local/surfaces_bundles \\
         --n-simulations 10000 --n-samples 100 --random-seed 42
 """
 

@@ -27,7 +27,8 @@
 `generate_pipeline_figure.py` creates a standalone model-pipeline illustration. Its construction panels are explanatory; the response-density panel uses a small run of the observer simulator, the network tile uses the included 20-sample predictor, and the prediction and fitting panels use the outputs described below. After preparing those outputs, run:
 
 ```bash
-python docs/generate_pipeline_figure.py
+fit_curves="$DEMIXING_ARTIFACT_ROOT/fits/demixing/fischer/filtered/independent/20samples/csv_exports/fitted_curves.csv"
+python docs/generate_pipeline_figure.py --fit-curves="$fit_curves"
 ```
 
 Use `--predictions`, `--trials`, and `--fit-curves` to select other prediction and fitting outputs.
@@ -42,10 +43,10 @@ python surface_simulator_for_predictions/surface_simulator.py \
   --skip-motor-noise
 ```
 
-The fitting figure reads the prepared <a href="https://doi.org/10.1038/nn.3689" title="Fischer, J., &amp; Whitney, D. (2014). Serial dependence in visual perception. Nature Neuroscience, 17(5), 738–743. https://doi.org/10.1038/nn.3689">Fischer and Whitney (2014)</a> trials and fitted curves written by `export_wnm_fit_curves.py` under `csv_exports/fitted_curves.csv`. It excludes the pooled `combined` pseudo-subject from both the observations and fitted curve, then averages the four real subjects. The generator defaults to the `smoothed_exp` mean-bias objective. Use `--fit-objective` to select another mean-bias fit. After running `demo_fischer_whitney.py`, regenerate both assets with:
+The fitting figure reads the prepared <a href="https://doi.org/10.1038/nn.3689" title="Fischer, J., &amp; Whitney, D. (2014). Serial dependence in visual perception. Nature Neuroscience, 17(5), 738–743. https://doi.org/10.1038/nn.3689">Fischer and Whitney (2014)</a> trials and fitted curves written by `export_wnm_fit_curves.py` under `csv_exports/fitted_curves.csv`. It excludes the pooled `combined` pseudo-subject from both the observations and fitted curve, then averages the four real subjects. Select a retained compiled fit with `--fit-curves`. The generator defaults to `likelihood`; `--fit-objective` selects another objective present in that export. With the fit path above, regenerate both assets with:
 
 ```bash
-python docs/generate_readme_figures.py
+python docs/generate_readme_figures.py --fit-curves="$fit_curves"
 ```
 
 Alternative or isolated fit outputs can be selected with `--fit-curves`; use `--predictions` for an alternative prediction export. Commit the rendered PNG files together with any generator change so GitHub does not need to run the model to display the README.

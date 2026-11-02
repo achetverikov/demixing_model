@@ -41,9 +41,9 @@ def prepare_fitting_data(trials_path: Path, curves_path: Path, objective: str):
                     & (curves["subject"] != "combined")]
     if curves.empty:
         raise ValueError(f"No {objective!r} curves found in {curves_path}")
-    fitted = curves.groupby("feat_diff", as_index=False).agg(
-        bias=("mu_bias", "mean"),
-        sem=("mu_bias", "sem"),
+    fitted = curves.groupby("x_deg", as_index=False).agg(
+        bias=("bias_deg", "mean"),
+        sem=("bias_deg", "sem"),
     )
     return empirical, fitted
 
@@ -53,10 +53,10 @@ def plot_fitting_example(trials_path: Path, curves_path: Path, objective: str, o
 
     fig, ax = plt.subplots(figsize=(8.7, 5.2))
     ax.axhline(0, color="#7b8794", linewidth=1, zorder=0)
-    ax.fill_between(fitted["feat_diff"], fitted["bias"] - fitted["sem"],
+    ax.fill_between(fitted["x_deg"], fitted["bias"] - fitted["sem"],
                     fitted["bias"] + fitted["sem"], color=BLUE, alpha=0.17, linewidth=0)
-    ax.plot(fitted["feat_diff"], fitted["bias"], color=BLUE, linewidth=2.8,
-            label="Model prediction (mean-bias fit)")
+    ax.plot(fitted["x_deg"], fitted["bias"], color=BLUE, linewidth=2.8,
+            label=f"Model prediction ({objective} fit)")
     ax.errorbar(empirical["x"], empirical["bias"], yerr=empirical["sem"],
                 fmt="o", markersize=5.2, color=INK, ecolor="#657180", capsize=2.5,
                 label="Behavioral data (5° bins)")
@@ -108,8 +108,8 @@ def main():
     parser.add_argument("--trials", type=Path,
                         default=Path("example_data/fischer_whitney_prepared.csv"))
     parser.add_argument("--fit-curves", type=Path,
-                        default=Path("results/fischer_whitney_20samples_circular/csv_exports/fitted_curves.csv"))
-    parser.add_argument("--fit-objective", default="smoothed_exp")
+                        required=True, help="Compiled fitted_curves.csv from the retained Fischer run")
+    parser.add_argument("--fit-objective", default="likelihood")
     parser.add_argument("--predictions", type=Path,
                         default=Path("results/prediction_example.parquet"))
     parser.add_argument("--output-dir", type=Path, default=Path("docs/images"))

@@ -224,9 +224,9 @@ def _plot_predictions(ax, predictions):
 def _plot_fit(ax, trials_path, curves_path, objective):
     empirical, fitted = prepare_fitting_data(trials_path, curves_path, objective)
     ax.axhline(0, color="#7b8794", linewidth=0.8, linestyle=(0, (4, 3)))
-    ax.fill_between(fitted["feat_diff"], fitted["bias"] - fitted["sem"],
+    ax.fill_between(fitted["x_deg"], fitted["bias"] - fitted["sem"],
                     fitted["bias"] + fitted["sem"], color=BLUE, alpha=0.16, linewidth=0)
-    model_line, = ax.plot(fitted["feat_diff"], fitted["bias"], color=BLUE,
+    model_line, = ax.plot(fitted["x_deg"], fitted["bias"], color=BLUE,
                           linewidth=1.8, label="Model fit")
     data_points = ax.errorbar(
         empirical["x"], empirical["bias"], yerr=empirical["sem"], fmt="o",
@@ -355,9 +355,9 @@ def parse_args():
     parser.add_argument("--trials", type=Path, default=Path("example_data/fischer_whitney_prepared.csv"))
     parser.add_argument(
         "--fit-curves", type=Path,
-        default=Path("results/fischer_whitney_20samples_circular/csv_exports/fitted_curves.csv"),
+        required=True, help="Compiled fitted_curves.csv from the retained Fischer run",
     )
-    parser.add_argument("--fit-objective", default="smoothed_exp")
+    parser.add_argument("--fit-objective", default="likelihood")
     parser.add_argument("--output", type=Path, default=Path("docs/images/model_pipeline.png"))
     parser.add_argument("--dpi", type=int, default=180)
     return parser.parse_args()
