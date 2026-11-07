@@ -8,7 +8,7 @@ Run from the repository root:
 streamlit run surface_browser/main_app.py
 ```
 
-Open the **WNM on demand** tab, choose the 20- or 100-sample observer model, and select the noise parameters. The browser evaluates the included trained model at those values.
+Open the **WNM on demand** tab, choose the 4-, 20-, 100-, or 500-sample observer model, and select the noise parameters. The browser evaluates the included trained model at those values.
 
 For batch predictions and the R interface, see the [prediction guide](../surface_simulator_for_predictions/README.md).
 

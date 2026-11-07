@@ -303,7 +303,7 @@ n_samples = 100
 The mu_feat bias grid is periodic and half-open: `[-180, 180)` at 2° spacing,
 giving 180 distinct cells. Feature difference and mu_idf bias are bounded,
 inclusive grids. `n_samples` is a runtime observer assumption; production
-artifacts exist for 20 and 100, and it is not the Monte Carlo iteration count.
+artifacts exist for 4, 20, 100, and 500, and it is not the Monte Carlo iteration count.
 
 ---
 

@@ -27,7 +27,7 @@ python surface_simulator_for_predictions/surface_simulator.py \
   --skip-motor-noise
 ```
 
-`--n-samples` selects the 20- or 100-sample observer model. This is the amount of internal evidence available in a simulated trial. Use `--checkpoint-path` to select a custom trained model.
+`--n-samples` selects the 4-, 20-, 100-, or 500-sample observer model. This is the amount of internal evidence available in a simulated trial. Use `--checkpoint-path` to select a custom trained model.
 
 The output contains one row per input combination:
 

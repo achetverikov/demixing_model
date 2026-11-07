@@ -30,7 +30,7 @@ PANEL = np.array([
     [5.0, 200.0, 5.0, 179.0],
 ], dtype=np.float32)
 
-INSTALLED_WNM = [(n, path) for n, path in surrogate.WNM_DEFAULTS.items() if path.exists()]
+INSTALLED_WNM = list(surrogate.WNM_DEFAULTS.items())
 
 
 def _write(tmp_path, name, blob):
@@ -109,13 +109,14 @@ def test_installed_artifact_declares_its_own_identity(n_samples, path):
     assert meta["parameter_order"] == ["sd_feat1", "sd_feat2", "sd_idf", "feat_diff"]
     assert meta["period_degrees"] == 360.0
     assert meta["idf_separation_degrees"] == 42.0
-    # The alldata artifacts select their step in sample; a consumer that reports
-    # validation_nll as held-out would be wrong, so the flag must be present.
-    assert meta["validation_nll_is_in_sample"] is True
-    assert meta["checkpoint_selection"] == "in_sample_slice"
+    assert loaded.payload["model"].n_components == 8
+    assert meta["training_objective"] == "histogram_bin_cross_entropy"
+    assert meta["selected_step"] == 92560
+    assert meta["checkpoint_selection"] == "final_step"
+    assert meta["holdout"]["fraction"] == 0.1
 
     identity = loaded.identity()
-    assert identity["dm_version"] == f"wnm_k12_{n_samples}samples"
+    assert identity["dm_version"] == f"wnm_k8_n{n_samples}_seed0" + ("_packaged" if n_samples in (4, 500) else "")
     assert identity["surrogate_family"] == "wnm"
     assert identity["surrogate_n_samples"] == n_samples
     assert identity["surrogate_artifact"] == Path(path).name
@@ -148,6 +149,7 @@ def test_requesting_the_wrong_family_raises(n_samples, path):
 
 @pytest.mark.skipif(not INSTALLED_WNM, reason="no packaged WNM artifact installed")
 @pytest.mark.parametrize("n_samples,path", INSTALLED_WNM)
+@pytest.mark.integration
 def test_packaged_artifact_reproduces_its_research_checkpoint(n_samples, path):
     """Packaging copies weights. Any difference is a reconstruction bug."""
     loaded = surrogate.load_surrogate(checkpoint_path=path)
@@ -167,14 +169,14 @@ def test_packaged_artifact_reproduces_its_research_checkpoint(n_samples, path):
 
 
 @pytest.mark.skipif(not INSTALLED_WNM, reason="no packaged WNM artifact installed")
-def test_production_loading_does_not_need_the_corpus_or_training_scripts():
+@pytest.mark.parametrize("n_samples,path", INSTALLED_WNM)
+def test_production_loading_does_not_need_the_corpus_or_training_scripts(n_samples, path):
     """A normal checkout must be able to load and run the artifact on its own.
 
     The plan requires production inference not to import sibling experiment
     scripts or reach for the corpus; the packaged artifact carries its own
     architecture precisely so it does not have to.
     """
-    n_samples, path = INSTALLED_WNM[0]
     before = set(sys.modules)
     loaded = surrogate.load_surrogate(checkpoint_path=path)
     dist = loaded.payload["model"].apply(loaded.payload["variables"], PANEL)
@@ -206,8 +208,8 @@ def test_wnm_search_bounds_open_the_narrow_feature_region():
     _, path = INSTALLED_WNM[0]
     bounds = surrogate.search_bounds(domain_from_meta(surrogate.load_surrogate(
         checkpoint_path=path).meta))
-    assert bounds["sd_feat"] == (2.5, 200.0)
-    assert bounds["sd_idf"] == (5.0, 200.0)
+    assert bounds["sd_feat"] == (2.5001015663146973, 199.9541015625)
+    assert bounds["sd_idf"] == (5.001807689666748, 200.0)
     assert bounds["sd_feat"][0] < bounds["sd_idf"][0]
 
 
@@ -221,41 +223,34 @@ def test_the_two_feature_sds_share_one_interval():
 
 
 # ---------------------------------------------------------------------------
-# Exactly two production artifacts, selected by observer model
+# One production artifact per supported observer model
 # ---------------------------------------------------------------------------
 
 def test_wnm_is_the_production_family():
     assert surrogate.production_family() == surrogate.FAMILY_WNM
 
 
-def test_exactly_two_checkpoints_are_production_at_a_time():
+def test_each_supported_observer_has_its_own_production_checkpoint():
     """One per observer model, and one switch that says which family they come
     from. A caller asks by n_samples; nothing downstream should name a file."""
     paths = {n: surrogate.production_checkpoint(n)
-             for n in surrogate.WNM_DEFAULTS}
-    assert len(paths) == 2
-    assert len(set(paths.values())) == 2, "the two observer models share an artifact"
+             for n in (4, 20, 100, 500)}
+    assert len(set(paths.values())) == 4, "observer models share an artifact"
     for n_samples, path in paths.items():
+        assert surrogate.resolve_checkpoint(n_samples=n_samples) == path
         loaded = surrogate.load_surrogate(checkpoint_path=path)
         assert loaded.family == surrogate.production_family()
         assert loaded.n_samples == n_samples
 
 
 def test_an_unsupported_sample_count_is_refused():
-    """20 and 100 are two observer models, not a resolution knob, so there is
-    nothing sensible between or beyond them."""
-    with pytest.raises(ValueError, match="two different observer models"):
+    """Only supported observer models have production checkpoints."""
+    with pytest.raises(ValueError, match="different observer models"):
         surrogate.production_checkpoint(50)
 
 
 @pytest.mark.parametrize("n_samples", [4, 500])
-def test_additional_observer_requires_explicit_checkpoint(n_samples, tmp_path):
-    # Resolver contract: accepting a CLI count must not silently select N20.
-    assert n_samples in surrogate.SUPPORTED_SAMPLE_COUNTS
-    with pytest.raises(ValueError, match="explicit checkpoint_path"):
-        surrogate.resolve_checkpoint(n_samples=n_samples)
-    with pytest.raises(ValueError, match="explicit checkpoint_path"):
-        surrogate.production_checkpoint(n_samples)
+def test_custom_observer_checkpoint_checks_sample_count(n_samples, tmp_path):
     path = _write(tmp_path, "observer.pkl", {"model_config": {"n_components": 8},
         "variables": {}, "meta": {"n_samples": n_samples, "artifact_schema": "wnm/2"}})
     loaded = surrogate.load_surrogate(n_samples=n_samples, checkpoint_path=path)

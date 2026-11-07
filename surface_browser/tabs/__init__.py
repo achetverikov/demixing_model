@@ -9,6 +9,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from abc import ABC, abstractmethod
+from shared.surrogate import SUPPORTED_SAMPLE_COUNTS
 
 from core.plotting import plot_surface, plot_3d, compare_surfaces, compare_expectations
 from core.plotting import plot_wnm_curves, plot_wnm_density
@@ -52,7 +53,7 @@ class WNMTab(BaseTab):
             "Evaluate the packaged WNM directly at continuous noise parameters. "
             "A stored averaged surface can be selected as an empirical reference; "
             "it is not used to construct the WNM prediction.")
-        n_samples = st.selectbox("Observer samples", (20, 100), key="wnm_n_samples")
+        n_samples = st.selectbox("Observer samples", SUPPORTED_SAMPLE_COUNTS, index=SUPPORTED_SAMPLE_COUNTS.index(20), key="wnm_n_samples")
         predictor = _cached_wnm_predictor(n_samples)
         modes = (["Continuous input", "Stored-surface reference"]
                  if len(self.filtered_df) else ["Continuous input"])

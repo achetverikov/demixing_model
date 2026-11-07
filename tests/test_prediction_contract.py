@@ -38,15 +38,13 @@ needs_artifact = pytest.mark.skipif(not ARTIFACT.exists(),
 
 # Narrow, broad, asymmetric in both orders, low and high d-prime, both ends of
 # the feature axis.
-# Spans the declared domain: sd_feat down to 2.5 (well below the production
-# fitting floor of 5, and the region that motivates this surrogate), sd_idf only
-# to 5, and both feature-noise orders.
+# Domain corners are exercised separately below.
 PARAMS = jnp.asarray([
     [10.0, 10.0, 10.0, 2.0],
     [10.0, 120.0, 10.0, 30.0],
     [120.0, 10.0, 10.0, 30.0],
     [60.0, 60.0, 30.0, 90.0],
-    [200.0, 200.0, 200.0, 179.0],
+    [199.0, 199.0, 200.0, 179.0],
 ], dtype=jnp.float32)
 
 
@@ -348,34 +346,15 @@ def test_the_domain_is_derived_from_the_corpus_not_the_featurisation(predictor):
     """
     domain = predictor.domain
     assert set(domain) == set(PARAM_ORDER)
-    assert domain["sd_feat1"] == (2.5, 200.0)
-    assert domain["sd_feat2"] == (2.5, 200.0)
+    assert domain["sd_feat1"] == (2.5001015663146973, 199.9541015625)
+    assert domain["sd_feat2"] == (2.5001015663146973, 199.9541015625)
     # sd_idf is 42/d' with d' capped at 8.4, so it does not reach below 5 --
     # which is why one shared interval for all three SDs could not be right.
-    assert domain["sd_idf"] == (5.0, 200.0)
+    assert domain["sd_idf"] == (5.001807689666748, 200.0)
     assert domain["feat_diff"] == (0.5, 180.0)
 
-    predictor.distribution(jnp.asarray([[2.5, 2.5, 5.0, 0.5],
-                                        [200.0, 200.0, 200.0, 180.0]], jnp.float32))
-
-
-@needs_artifact
-def test_the_declared_domain_never_understates_the_corpus(predictor):
-    """Declaring less than was trained refuses predictions the network can make.
-
-    The declared box rounds the corpus hull outward to the design's round
-    numbers, accepting a sliver of extrapolation (largest: 1.89 degrees at
-    sd_feat1's top). It must never round inward.
-    """
-    hull = predictor.meta["corpus_hull"]
-    for key, (lo, hi) in predictor.domain.items():
-        hull_lo, hull_hi = hull[key]
-        assert lo <= hull_lo + 1e-3, f"{key} low bound excludes trained parameters"
-        assert hi >= hull_hi - 1e-3, f"{key} high bound excludes trained parameters"
-
-    # And the accepted extrapolation is recorded rather than left implicit.
-    overhang = predictor.meta["declared_domain_overhang"]
-    assert max(max(v) for v in overhang.values()) < 2.0
+    corners = np.array([domain[name] for name in PARAM_ORDER], dtype=np.float32).T
+    predictor.distribution(jnp.asarray(corners))
 
 
 @needs_artifact

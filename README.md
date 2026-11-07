@@ -2,7 +2,7 @@
 
 The Demixing Model explains why a remembered, perceived, or evaluated item can be biased toward or away from another item. The central idea is that the brain must separate two noisy, overlapping representations. Depending on how similar the items are and where the noise occurs, this separation produces attraction or repulsion.
 
-Use the model to **generate theoretical predictions** or **fit behavioral data**. Two trained models, representing 20 and 100 internal evidence samples, are included in `pretrained/` and ready to use.
+Use the model to **generate theoretical predictions** or **fit behavioral data**. Four K8 trained models, representing 4, 20, 100, and 500 internal evidence samples, are included in `pretrained/` and ready to use.
 
 ## Install
 
@@ -32,7 +32,7 @@ python surface_simulator_for_predictions/surface_simulator.py \
   --skip-motor-noise
 ```
 
-`--n-samples` selects the 20- or 100-sample observer model. The output contains curves for mean bias, density asymmetry, and response variability across stimulus dissimilarity. Parquet preserves each curve as a numeric array; CSV is also supported.
+`--n-samples` selects the 4-, 20-, 100-, or 500-sample observer model. The output contains curves for mean bias, density asymmetry, and response variability across stimulus dissimilarity. Parquet preserves each curve as a numeric array; CSV is also supported.
 
 ![Prediction curves for three identifiability-noise parameter values](docs/images/prediction_generation_example.png)
 
@@ -133,11 +133,11 @@ results/my_study/
 | Non-target feature noise (`sd_feat2`) | Uncertainty in the other item's feature |
 | Identifiability noise (`sd_idf`) | Uncertainty along the dimension that distinguishes the items, such as location or timing; shared across conditions during fitting |
 | Motor noise (`sd_motor`) | Variability added at the response stage; fixed at zero by default and fitted with `--no-skip-motor-noise` |
-| Internal sample count (`--n-samples`) | Amount of internal evidence available for separating the two representations; choose 20 or 100 |
+| Internal sample count (`--n-samples`) | Amount of internal evidence available for separating the two representations; choose 4, 20, 100, or 500 |
 
 The sample count is a theoretical assumption about evidence within a simulated trial. Experimental trial counts determine how much behavioral data you have for fitting.
 
-The model uses a 360° internal scale. Feature-noise parameters span 2.5–200° and identifiability noise spans 5–200° on that scale. The fitter converts 180° data into model units, and exports provide explicitly labelled model and study-scale units. See the [pretrained model reference](pretrained/README.md) for supported domains.
+The model uses a 360° internal scale. Feature-noise parameters span 2.5001016–199.9541016° and identifiability noise spans 5.0018077–200° on that scale. The fitter converts 180° data into model units, and exports provide explicitly labelled model and study-scale units. See the [pretrained model reference](pretrained/README.md) for supported domains.
 
 Interpret predictions as curves across stimulus dissimilarity: their sign, size, and shape describe when attraction or repulsion occurs.
 
@@ -189,4 +189,4 @@ Planned work is in `TODO.md`; completed work is recorded in `HISTORY.md`.
 Generated simulation corpora, averaged surfaces, and experiment records belong under `$DEMIXING_ARTIFACT_ROOT`. These artifacts are not shipped and are not expected in a normal checkout.
 
 
-N4 and N500 can be fitted with a validated packaged checkpoint supplied through `--checkpoint-path`; their sample count is checked against artifact metadata. Installed defaults remain N20/N100, and N10 is unavailable.
+Packaged K8 defaults are available for N4, N20, N100, and N500. A custom `--checkpoint-path` is checked against the requested sample count; N10 is unavailable.

@@ -152,7 +152,7 @@ def test_the_winning_loss_is_the_best_of_the_starts(setup, density_fit):
 def test_bounds_come_from_the_surrogate_so_the_narrow_region_is_reachable(setup, density_fit):
     """The WNM box reaches 2.5 even when this fixture's optimum does not."""
     result = density_fit
-    assert result["search_settings"]["bounds"][0] == [2.5, 200.0]
+    assert result["search_settings"]["bounds"][0] == [2.5001015663146973, 199.9541015625]
 
 
 def test_a_mean_only_objective_at_non_zero_motor_noise_is_refused(setup):
@@ -243,5 +243,5 @@ def test_the_search_box_is_recorded_with_the_result(setup, density_fit):
     settings = density_fit["search_settings"]
     assert "bounds" in settings and "bound_names" in settings
     assert len(settings["bounds"]) == len(settings["bound_names"])
-    assert settings["bounds"][0] == [2.5, 200.0]     # sd_feat, from the WNM domain
-    assert settings["bounds"][-1] == [5.0, 200.0]    # sd_idf
+    assert settings["bounds"][0] == [2.5001015663146973, 199.9541015625]     # sd_feat, from the WNM domain
+    assert settings["bounds"][-1] == [5.001807689666748, 200.0]    # sd_idf

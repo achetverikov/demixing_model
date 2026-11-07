@@ -37,8 +37,10 @@ DEFAULT_FAMILY = FAMILY_WNM
 #: Same, for the WNM artifacts.  Populated by the packaging step; a missing file
 #: is reported as "not installed yet" rather than as a bad request.
 WNM_DEFAULTS = {
-    20: PRETRAINED_DIR / "current_wnm_k12_20samples.pkl",
-    100: PRETRAINED_DIR / "current_wnm_k12_100samples.pkl",
+    4: PRETRAINED_DIR / "wnm_k8_n4_seed0_packaged.pkl",
+    20: PRETRAINED_DIR / "wnm_k8_n20_seed0.pkl",
+    100: PRETRAINED_DIR / "wnm_k8_n100_seed0.pkl",
+    500: PRETRAINED_DIR / "wnm_k8_n500_seed0_packaged.pkl",
 }
 
 SUPPORTED_SAMPLE_COUNTS = (4, 20, 100, 500)
@@ -46,10 +48,8 @@ SUPPORTED_SAMPLE_COUNTS = (4, 20, 100, 500)
 def production_family() -> str:
     """The family the production artifacts come from.
 
-    Exactly two checkpoints are production at any moment, one per observer sample
-    count, and :data:`DEFAULT_FAMILY` is the one switch that says which pair.
-    (There was briefly a second constant named ``PRODUCTION_FAMILY``; it is gone,
-    and a test asserts it has not come back.)
+    One checkpoint is production per supported observer sample count, and
+    :data:`DEFAULT_FAMILY` selects the production family.
     A function rather than a second constant, so that reading it cannot pick up a
     stale copy and so there is nowhere for a second switch to appear.
 
@@ -65,13 +65,13 @@ def production_family() -> str:
 def production_checkpoint(n_samples: int) -> Path:
     """The production artifact for one observer model.
 
-    ``n_samples`` is the parameter: 20 and 100 are two different observer models,
+    ``n_samples`` selects distinct observer models (4, 20, 100, or 500),
     and everything else about which file to load follows from
     :func:`production_family`.
     """
     if n_samples not in SUPPORTED_SAMPLE_COUNTS:
         raise ValueError(
-            f"n_samples={n_samples!r} is not one of {SUPPORTED_SAMPLE_COUNTS}. These are two "
+            f"n_samples={n_samples!r} is not one of {SUPPORTED_SAMPLE_COUNTS}. These are "
             "different observer models, not a resolution setting, so there is nothing "
             "sensible between or beyond them.")
     if n_samples not in WNM_DEFAULTS:
@@ -180,7 +180,7 @@ def file_digest(path) -> str:
 
 def installed_checkpoints() -> list:
     """Every artifact a run could have used, for digest lookup."""
-    candidates = list(WNM_DEFAULTS.values())
+    candidates = [*WNM_DEFAULTS.values(), *sorted(PRETRAINED_DIR.glob("*.pkl"))]
     seen, unique = set(), []
     for candidate in candidates:
         if candidate.is_file() and candidate not in seen:
@@ -295,7 +295,7 @@ def resolve_checkpoint(family: Optional[str] = None,
         raise ValueError(f"unknown surrogate family {family!r}; expected one of {FAMILIES}")
     if n_samples is None:
         raise ValueError(
-            "n_samples is required to resolve a default checkpoint: 20 and 100 are two "
+            "n_samples is required to resolve a default checkpoint: sample counts select "
             "different observer models, so there is no sensible default between them.")
     if n_samples not in SUPPORTED_SAMPLE_COUNTS:
         raise ValueError(f"n_samples={n_samples} is not one of {SUPPORTED_SAMPLE_COUNTS}")
@@ -365,5 +365,5 @@ def add_surrogate_arguments(parser) -> None:
                              f"{DEFAULT_FAMILY}.")
     parser.add_argument("--surrogate-n-samples", type=int,
                         choices=list(SUPPORTED_SAMPLE_COUNTS), default=None,
-                        help="Observer evidence samples per trial (20 or 100). Two different "
+                        help="Observer evidence samples per trial (4, 20, 100 or 500). Distinct "
                              "observer models, not a precision setting.")

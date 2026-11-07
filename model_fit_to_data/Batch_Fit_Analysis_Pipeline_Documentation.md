@@ -64,7 +64,7 @@ Both criteria pool predictions at the observed stimulus differences using the sa
 
 | Option | Default | Use |
 |---|---|---|
-| `--n-samples` | `20` | Choose the 20- or 100-sample observer model |
+| `--n-samples` | `20` | Choose the 4-, 20-, 100-, or 500-sample observer model |
 | `--circ-space` | `360` | Set the angular period of the behavioral data to 180 or 360 |
 | `--min-trials` | `30` | Set the minimum usable trials per condition |
 | `--include-outliers` | Off | Include trials flagged as outliers |

@@ -131,3 +131,13 @@ def test_wnm_fit_rows_export_both_likelihood_conventions(monkeypatch):
     np.testing.assert_array_equal(out["loglik_cell_probability"], [-0.8, -1.8])
     assert check["rescored_nll_density_model_deg"] == pytest.approx(3.0)
     assert check["n_floor_trials"] == 0
+
+
+def test_historical_fit_keeps_its_checkpoint_after_a_default_change(tmp_path):
+    """Digest resolution must retain non-default installed artifacts."""
+    old = surrogate.PRETRAINED_DIR / "current_wnm_k12_20samples.pkl"
+    fits = _run_dir(tmp_path, old)
+    assert P.infer_checkpoint_path(fits, None) == old
+    assert old != surrogate.production_checkpoint(20)
+    with pytest.raises(ValueError, match="not the checkpoint this run was fitted with"):
+        P.infer_checkpoint_path(fits, str(surrogate.production_checkpoint(20)))

@@ -229,7 +229,7 @@ def test_payload_records_the_live_mu_feat_grid_size(run_files):
 def _common(**overrides):
     base = dict(
         data_path=ROOT / "tests" / "data" / "bw_sj_reference.tsv",
-        checkpoint_path=ROOT / "pretrained" / "current_wnm_k12_20samples.pkl",
+        checkpoint_path=ROOT / "pretrained" / "wnm_k8_n20_seed0.pkl",
         circ_space=360, evaluation_methods=["density", "likelihood", "crps"],
         skip_motor_noise=True, exp_col="e", subject_col="s",
         condition_col="c", x_col="x", y_col="y", outlier_col=None,

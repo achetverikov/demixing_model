@@ -117,7 +117,7 @@ def test_the_fingerprint_describes_the_search_that_ran(baseline_run):
     assert payload["search_backend"] == "continuous"
     assert payload["surrogate_family"] == "wnm"
     assert payload["continuous_spec"]["n_starts"] == 2
-    assert payload["continuous_spec"]["sd_feat_bounds"] == [2.5, 200.0]
+    assert payload["continuous_spec"]["sd_feat_bounds"] == [2.5001015663146973, 199.9541015625]
     for absent in ("grid_spec", "feat_step_schedule", "param_bounds"):
         assert absent not in payload, f"{absent} describes a lattice this run never walked"
     # The distributional objectives are versioned for this family.

@@ -1,6 +1,6 @@
 # Train a custom predictor
 
-This pipeline trains a conditional wrapped-normal mixture (WNM) on simulated response errors and packages it for fitting and prediction. The [included models](../../pretrained/README.md) provide ready-to-use 20- and 100-sample predictors.
+This pipeline trains a conditional wrapped-normal mixture (WNM) on simulated response errors and packages it for fitting and prediction. The [included models](../../pretrained/README.md) provide ready-to-use 4-, 20-, 100-, and 500-sample K8 predictors.
 
 Run commands from the repository root.
 
@@ -15,8 +15,8 @@ python -m surface_computation.generate_wnm_training_data \
 Choose the internal sample count for the observer you want to model. See the [simulation guide](../../surface_computation/README.md) for design size, repetitions, and output details.
 
 Custom training and packaging accept any positive integer sample count, including
-500. Packaged defaults remain 20 and 100; use an explicit checkpoint path for
-other counts, and validate that predictor independently before fitting data.
+500. The fitting and prediction CLIs support 4, 20, 100, and 500, with packaged
+K8 defaults for each. Validate custom predictors independently before fitting data.
 
 ## 2. Train the mixture
 
@@ -26,11 +26,9 @@ python -m surrogate_training.wnm.train \
   --out /path/to/run_checkpoint.pkl
 ```
 
-The defaults (K=8 components, hidden layers 128/256/256, 92,560 steps) were selected on held-out
-N=20 and N=100 histogram corpora: against the K=12 architecture of the packaged checkpoints they lose
-2-3e-5 nats per outcome, leave density-asymmetry predictions within training-seed variation, and
-evaluate about 36% faster. Doubling the steps gained only 1-2e-5. The packaged checkpoints themselves
-are unchanged (K=12).
+The trainer and packaged production models use K=8 components, hidden layers
+128/256/256, and 92,560 training steps. The shipped seed-0 checkpoints use
+histogram-bin cross-entropy and final-step selection.
 
 With a histogram corpus (the generator's default `--out`), training minimizes the cross-entropy of each cell's binned outcome frequencies under the predicted mixture's per-bin probability mass, using the generator's bins; `--histogram-batch` sets the cell-items per step. With a raw corpus (`--raw-out`), it minimizes the negative log-likelihood of the raw simulated biases. Model, schedule, held-out parameter-group split and checkpoint selection are shared. `--holdout-fraction` additionally removes a test set of parameter groups from training and selection, and `--checkpoint-metric final` keeps the last step. The checkpoint records the objective, sample count, selected step, architecture, hold-out, timings and training parameter bounds, including the swapped-item examples.
 

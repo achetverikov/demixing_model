@@ -20,10 +20,9 @@ with them.  It changes no weights and retrains nothing.
 Usage (from the repo root)::
 
     python -m surrogate_training.wnm.package_artifact \\
-        --fit /path/to/wnm_k12_full_n20_alldata-<digest>-best.pkl \\
-        --corpus-stage /path/to/results/wnm_4.1p \\
+        --fit /path/to/run_checkpoint.pkl \\
         --n-samples 20 \\
-        --out pretrained/current_wnm_k12_20samples.pkl
+        --out /path/to/custom_wnm_20samples.pkl
 
 The packaged file is verified before it reaches its destination: it is written to
 a temporary path, loaded back through the production loader, and evaluated on a

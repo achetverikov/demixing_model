@@ -234,7 +234,8 @@ def test_pooled_sd_reduces_to_the_unpooled_curve_on_delta_weights(predictor, fea
 def test_the_narrow_corner_is_representable(predictor, feat_grid):
     """The region the surrogate exists for: components far below the 2-degree
     reporting cell, where a grid route would mis-mass them."""
-    narrow = np.array([[2.5, 2.5, 5.0]])
+    narrow = np.array([[predictor.domain[name][0]
+                        for name in ("sd_feat1", "sd_feat2", "sd_idf")]])
     bundle = mixture_plot_curves(predictor, narrow, feat_grid)
     for name in ("bias", "asymmetry", "sd"):
         assert np.all(np.isfinite(bundle[name])), name
@@ -267,7 +268,7 @@ def test_standard_subject_pipeline_uses_direct_matched_wnm_curves(predictor, fea
     assert prepared["S"]["experiments"]["exp"]["surrogate_identity"][
         "surrogate_family"] == "wnm"
     assert prepared["S"]["experiments"]["exp"]["surrogate_identity"][
-        "dm_version"] == "wnm_k12_20samples"
+        "dm_version"] == "wnm_k8_n20_seed0"
 
 
 def _observed_design_result(feat_grid, params, coordinates):

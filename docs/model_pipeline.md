@@ -33,7 +33,7 @@ True feature means lie at `−feat_diff/2` and `+feat_diff/2`. The identifiabili
 
 Errors are signed relative to the other item: **positive means attraction; negative means repulsion**. Repeating the simulation gives a distribution of response errors for each combination of noise parameters and feature difference.
 
-The packaged observer models use 20 or 100 internal evidence samples per simulated trial. This choice sets the amount of evidence available to the observer. The separate `n_simulations` setting determines how many repetitions are used to estimate the response distribution during training-data generation.
+The packaged observer models use 4, 20, 100, or 500 internal evidence samples per simulated trial. This choice sets the amount of evidence available to the observer. The separate `n_simulations` setting determines how many repetitions are used to estimate the response distribution during training-data generation.
 
 ### Inference within a simulated trial
 
@@ -92,16 +92,16 @@ The predictor takes `[sd_feat1, sd_feat2, sd_idf, feat_diff]` and outputs mixtur
 
 `p(bias | parameters, feat_diff) = Σₖ weightₖ × WrappedNormal(bias; meanₖ, scaleₖ)`.
 
-Both included models have 12 mixture components, hidden layers of widths 128, 256, and 256, and a minimum component scale of 0.25 model degrees. Training minimizes the negative log-likelihood of simulated biases. The resulting mixture supports direct evaluation of density, circular moments, and attraction–repulsion asymmetry.
+All included models have 8 mixture components, hidden layers of widths 128, 256, and 256, and a minimum component scale of 0.25 model degrees. Training minimizes cross-entropy against simulated response histograms. The resulting mixture supports direct evaluation of density, circular moments, and attraction–repulsion asymmetry.
 
-The predictor's 12 components describe the shape of the response-error distribution. The observer simulation uses two components to represent the two items.
+The predictor's 8 components describe the shape of the response-error distribution. The observer simulation uses two components to represent the two items.
 
 The declared parameter domain is:
 
 | Input | Range in model degrees |
 |---|---|
-| `sd_feat1`, `sd_feat2` | 2.5–200 |
-| `sd_idf` | 5–200 |
+| `sd_feat1`, `sd_feat2` | 2.5001016–199.9541016 |
+| `sd_idf` | 5.0018077–200 |
 | `feat_diff` | 0.5–180 |
 
 The [pretrained model reference](../pretrained/README.md) records checkpoint identity, training configuration, and domain details. A custom predictor should be validated against independent simulations, comparing response distributions and bias curves across dissimilarity.
@@ -128,7 +128,7 @@ For each participant and experiment, the fitter estimates all conditions jointly
 | Shared across conditions | `sd_idf` |
 | Shared when motor noise is enabled | `sd_motor` |
 
-Motor noise is fixed at zero by default. The internal sample count is chosen before fitting by selecting the 20- or 100-sample model.
+Motor noise is fixed at zero by default. The internal sample count is chosen before fitting by selecting the 4-, 20-, 100-, or 500-sample model.
 
 ### Continuous optimization
 

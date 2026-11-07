@@ -421,7 +421,7 @@ def main():
     parser.add_argument('input_path', nargs='?',
                         help='Path to CSV or Arrow file with parameters')
     parser.add_argument('n_samples', nargs='?', type=int,
-                        help='Internal evidence samples per simulated trial (20 or 100)')
+                        help='Internal evidence samples per simulated trial (4, 20, 100 or 500)')
     parser.add_argument('output_path', nargs='?',
                         help='Path to save results (Arrow/CSV file)')
     parser.add_argument('--input-path', dest='input_path_named',

@@ -1,48 +1,42 @@
 # Included trained models
 
-Choose a model with `--n-samples 20` or `--n-samples 100` when fitting or generating predictions. The corresponding checkpoint loads automatically.
+Choose `--n-samples 4`, `20`, `100`, or `500` when fitting or generating predictions. The corresponding K8 checkpoint loads automatically.
 
 | Internal evidence samples | Checkpoint |
 |---:|---|
-| 20 | `current_wnm_k12_20samples.pkl` |
-| 100 | `current_wnm_k12_100samples.pkl` |
+| 4 | `wnm_k8_n4_seed0_packaged.pkl` |
+| 20 | `wnm_k8_n20_seed0.pkl` |
+| 100 | `wnm_k8_n100_seed0.pkl` |
+| 500 | `wnm_k8_n500_seed0_packaged.pkl` |
 
-The sample count sets how much internal evidence the observer has in each simulated trial. Each sample is drawn from the two-item mixture, with equal probability of coming from either item. More samples provide more evidence for separating the representations.
+The sample count sets how much internal evidence the observer has in each simulated trial. These are distinct observer models, not numerical precision settings.
 
 ## Parameters and units
 
-The predictor takes `[sd_feat1, sd_feat2, sd_idf, feat_diff]` in 360° model units. It predicts the target item's circular response-error distribution; swap `sd_feat1` and `sd_feat2` to obtain the other item's prediction. Positive bias means attraction toward the competing item, and density is measured per model degree.
+The predictor takes `[sd_feat1, sd_feat2, sd_idf, feat_diff]` in 360° model units. It predicts the target item's circular response-error distribution; swap `sd_feat1` and `sd_feat2` for the other item. Positive bias means attraction, and density is per model degree.
 
-| Input | Supported range in model degrees |
+| Input | Supported range in model degrees (rounded for display) |
 |---|---|
-| Target feature noise, `sd_feat1` | 2.5–200 |
-| Non-target feature noise, `sd_feat2` | 2.5–200 |
-| Identifiability noise, `sd_idf` | 5–200 |
-| Stimulus difference, `feat_diff` | 0.5–180 |
+| Target and non-target feature noise | 2.5001016–199.9541016 |
+| Identifiability noise | 5.0018077–200 |
+| Stimulus difference | 0.5–180 |
 
-The fitter reads parameter bounds from the checkpoint. For 180° data, it converts behavioral angles into model units; exports include columns in both model and study-scale degrees.
+The fitter reads exact bounds from each checkpoint's `supported_domain`, measured from training parameters including swapped-item rows. These bounds describe coverage, not an accuracy guarantee. For 180° data, behavioral angles are converted to model units; exports retain both model and study-scale degrees.
 
-## Model architecture and training
+## Architecture and training
 
-Each checkpoint contains a conditional wrapped-normal mixture (WNM) with 12 components, hidden layers `(128, 256, 256)`, and a minimum component scale of 0.25 model degrees. Training minimizes negative log-likelihood (NLL) on simulated response errors. See the [pipeline explanation](../docs/model_pipeline.md) and [training guide](../surrogate_training/wnm/README.md).
+All four predictors use 8 wrapped-normal mixture components, hidden layers `(128, 256, 256)`, and minimum component scale 0.25 model degrees. The seed-0 models minimize histogram-bin cross-entropy and select the final step, 92,560. They retain a 10% held-out parameter-group test split separately from training and checkpoint selection.
 
-| Internal samples | Selected training step | In-sample NLL |
-|---:|---:|---:|
-| 20 | 90,000 | 3.9785 |
-| 100 | 89,000 | 3.1657 |
+See the [pipeline explanation](../docs/model_pipeline.md) and [training guide](../surrogate_training/wnm/README.md). Validate custom predictors against independent simulations across stimulus dissimilarity.
 
-Both checkpoints use all training trajectories. The stopping step is selected using a 10% in-sample diagnostic slice; the table reports that training diagnostic. Generalization is evaluated separately on independent simulation trajectories.
+## Checkpoint identity
 
-## Use a custom checkpoint
+Use `--checkpoint-path path/to/model.pkl` for a custom packaged model. Training checkpoints must first pass through `python -m surrogate_training.wnm.package_artifact`.
 
-Pass `--checkpoint-path path/to/model.pkl` to fitting or prediction commands. Package a training checkpoint with `python -m surrogate_training.wnm.package_artifact`; the [training guide](../surrogate_training/wnm/README.md) gives a complete example.
-
-Fitted runs record the checkpoint's SHA-256 digest. Exporters and plotters resolve that recorded model and verify any explicit checkpoint override against it. Fresh predictions select by `--n-samples`, check the requested sample count, and label outputs with the loaded model's identity.
+Saved fits record the checkpoint SHA-256. Exporters and plotters resolve that exact model and reject mismatched overrides. The previous K12 files remain installed solely to reproduce historical fits; fresh fits and predictions select K8. Reusing old fit parameters with a new network requires a refit, not a relabelled export.
 
 ## Notes for developers
 
-Load checkpoints through `shared.surrogate.load_surrogate`. Use `production_checkpoint` for fresh predictions and `checkpoint_for_run` for saved fits. Architecture, sample count, units, and supported-domain metadata are stored in each artifact.
+Use `shared.surrogate.production_checkpoint` for fresh runs and `checkpoint_for_run` for saved fits. The shipped K8 files are byte-for-byte copies of the checkpoints used by the current comparison fits, preserving hashes and version labels.
 
-The declared domain rounds the measured training hull outward to the design limits. `meta["corpus_hull"]` records the sampled bounds and `meta["declared_domain_overhang"]` records extrapolation at each edge. The packager allows up to 5° of outward rounding and checks predictions after reloading the packaged file.
-
-The corpus labels are `continuous_density_4.1p` for 20 samples and `continuous_density_4.1o` for 100 samples; independent validation uses `continuous_density_4.1q`. These generated corpora and results live under `$DEMIXING_ARTIFACT_ROOT`. They are not shipped and are not expected in a normal checkout.
+Source checkpoints are under `$DEMIXING_ARTIFACT_ROOT/fits/networks/`; N20/N100 selection evidence is under `$DEMIXING_ARTIFACT_ROOT/wrapped_em_refits_20261024/`. These external experiment artifacts are not required in a normal checkout. Each shipped artifact records source digest, architecture, objective, training step, sample count, and parameter domain. Previous packaging documentation and promotion verification are under `$DEMIXING_ARTIFACT_ROOT/investigations/k8_defaults_20261107/`.
