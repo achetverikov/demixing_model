@@ -180,6 +180,33 @@ trials, amortizing host counter downloads. Larger blocks are checked
 individually. All failures are checked before returning outcomes or publishing
 a shard; each fit retains its own convergence check after every EM update.
 
+## Profile response means for one dataset
+
+`response_profile.fit(x, response_means, identifying_sd, sd_bounds)` evaluates a
+pair of fixed response means for a two-component Gaussian mixture. Columns of
+`x` are response and identifying feature. It fits the identifying means, mixing
+weight, and separate response SDs within `sd_bounds`, with a known common
+identifying SD and identifying means ordered left <= right. All quantities use
+the input units; this entry point uses linear Gaussian coordinates on both axes.
+
+Use `jax.vmap` over response-mean pairs and `jax.jit` to batch a profile grid on
+the GPU. Float64 is recommended for accurate likelihood comparisons. The result
+has the same parameter, log-likelihood, and diagnostic layout as `likelihood_em.fit`.
+The 45 deterministic starts span identifying separation, weights, and SDs;
+selected unconverged starts continue up to `max_iter`. Check the returned
+`converged` diagnostic. The profile mode shares the existing likelihood and EM
+loop and supplies a constrained M-step through `advance`/`finish`'s `update_fn`.
+It uses the JAX backend and supports arbitrary sample counts, independently of
+the specialized wrapped-response CUDA kernel's supported sizes.
+
+`response_profile.fit_mle(key, x, identifying_sd, sd_bounds)` also estimates
+both response means. It uses the shared random starts plus one narrow-component
+start at each observed point, with the same SD bounds and identifying SD. Returned
+components are ordered by estimated identifying mean; generating labels are not
+inputs. Batch independent datasets with `jax.vmap` to obtain the distribution of
+fitted response pairs. These are maximum-likelihood solutions found by multistart
+EM, rather than a proof of the global optimum.
+
 ## Generate averaged surfaces
 
 For direct inspection of simulated distributions or identifiability-dimension (`mu_idf`) predictions, use `simulated_samples_grid.py`. It generates samples on a parameter grid; averaging tools then turn them into density surfaces.

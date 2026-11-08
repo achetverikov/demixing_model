@@ -144,9 +144,9 @@ def unfinished(state, limit, rtol=RTOL, parameter_tol=PARAMETER_TOL):
 
 
 def advance(x, initial, basis, max_iter, rtol=RTOL, parameter_tol=PARAMETER_TOL,
-            wrap_axes=(True, False), fix_weights=False):
+            wrap_axes=(True, False), fix_weights=False, update_fn=update):
     def iteration(s):
-        theta = update(s.theta, s.count, s.moments, len(x), wrap_axes, fix_weights)
+        theta = update_fn(s.theta, s.count, s.moments, len(x), wrap_axes, fix_weights)
         ll, count, moments = stats(x, theta, basis, wrap_axes)
         delta = ll-s.ll
         return State(s.iteration+1, theta, ll, count, moments,
@@ -162,10 +162,10 @@ def select(state):
 
 
 def finish(x, basis, state, max_iter=MAX_ITER, rtol=RTOL,
-           parameter_tol=PARAMETER_TOL, wrap_axes=(True, False), fix_weights=False):
+           parameter_tol=PARAMETER_TOL, wrap_axes=(True, False), fix_weights=False, update_fn=update):
     def extend(states):
         best, selected = select(states)
-        selected = advance(x, selected, basis, max_iter, rtol, parameter_tol, wrap_axes, fix_weights)
+        selected = advance(x, selected, basis, max_iter, rtol, parameter_tol, wrap_axes, fix_weights, update_fn)
         return jax.tree.map(lambda old, new: old.at[best].set(new), states, selected)
     # Usually at most one extension. Re-select if floating-point changes make
     # another capped start the winner; never replace it with a worse converged fit.
