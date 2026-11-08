@@ -27,7 +27,7 @@ def test_fixed_mean_variance_and_cue_pooling():
 
 def test_profile_matches_independent_constrained_optimization():
     # Small deterministic overlapping fixture catches fixed-mean drift and label swaps.
-    with jax.experimental.enable_x64():
+    with jax.enable_x64():
         x = jnp.array([[-1.2, -.8], [.5, -.6], [1.7, -.4], [-.7, .2], [.2, .5], [1., 1.1]])
         grid = jnp.array([[-.5, .5], [.5, -.5]])
         bounds = jnp.array([.2, 3.])
@@ -57,7 +57,7 @@ def test_profile_matches_independent_constrained_optimization():
 
 
 def test_free_response_fit_labels_by_identifying_means():
-    with jax.experimental.enable_x64():
+    with jax.enable_x64():
         x = jnp.array([[1.8, -2.], [2., -2.], [2.2, -1.8],
                        [-2., 2.], [-1.8, 2.], [-2.2, 1.8]])
         fitted = profile.fit_mle(jax.random.key(32), x, .4, jnp.array([.1, 3.]), n_init=8)

@@ -48,7 +48,8 @@ jobs:
         run: python -c "from shared.surrogate import production_checkpoint; assert all(production_checkpoint(n).is_file() for n in (20, 100))"
 
       - name: Run maintained tests
-        run: python -m pytest --durations=30
+        # Hosted Ubuntu runners have no CUDA device; GPU contracts run separately.
+        run: python -m pytest -m "not integration and not gpu" --durations=30
 
   wnm-smoke:
     name: WNM public-path smoke
